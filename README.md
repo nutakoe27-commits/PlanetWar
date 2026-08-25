@@ -29,7 +29,16 @@
 | [06 — Журнал решений](docs/06-DECISIONS.md) | ADR: что решили и почему |
 | [07 — Ассетный пайплайн](docs/07-ASSET-PIPELINE.md) | Blender → спрайтовые атласы |
 
-## Сборка
+## Проверить, что всё работает
+
+```
+./tools/verify.sh
+```
+
+Собирает ядро, гоняет тесты и сверяет хеш детерминизма симуляции. Пресет
+выбирается по системе — Linux, macOS на Apple Silicon и macOS на Intel.
+
+## Сборка вручную
 
 ```
 cmake --preset linux-x64-release
@@ -45,11 +54,13 @@ ctest --preset linux-x64-release
 ### Ассеты
 
 ```
-pip install bpy
-python3 tools/blender/build_assets.py --quality preview
+python3.13 -m venv .venv && .venv/bin/pip install bpy
+.venv/bin/python tools/blender/build_assets.py --quality preview
 ```
 
-Blender подключается как модуль, отдельный бинарь и GPU не нужны. На выходе —
+Blender подключается как модуль, отдельный бинарь и GPU не нужны. Версия
+Python важна: колёса `bpy` собраны под одну конкретную (5.2.x — Python 3.13,
+4.5 LTS — Python 3.11), поэтому нужно отдельное окружение. На выходе —
 спрайтовые атласы в `assets/build/`. Подробности в
 [07-ASSET-PIPELINE.md](docs/07-ASSET-PIPELINE.md).
 
