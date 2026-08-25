@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Сборка и тесты на всех десктопных платформах.
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Linux gcc",     os: ubuntu-latest,  preset: linux-x64-debug,     cc: gcc,   cxx: g++ }
+          - { name: "Linux clang",   os: ubuntu-latest,  preset: linux-x64-release,   cc: clang, cxx: clang++ }
+          - { name: "Windows msvc",  os: windows-latest, preset: windows-x64-release, cc: "",    cxx: "" }
+          - { name: "macOS arm64",   os: macos-latest,   preset: macos-arm64-release, cc: clang, cxx: clang++ }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Настроить MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Конфигурация
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Сборка
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Тесты
+        run: ctest --preset ${{ matrix.preset }}
+
+  # ---------------------------------------------------------------------------
+  # Детерминизм. Каждая платформа сверяется с эталоном, зафиксированным
+  # в determinism_main.cpp. Расхождение хотя бы в одном разряде означает, что
+  # симуляция разъехалась между x86 и ARM — красный билд, а не предупреждение.
+  # ---------------------------------------------------------------------------
+  determinism:
+    name: Детерминизм ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "x86-64",       os: ubuntu-latest, extra: "" }
+          - { name: "arm64",        os: macos-latest,  extra: "" }
+          # Программный путь 128-битной арифметики — тот, по которому пойдёт
+          # MSVC. Он обязан давать тот же результат, что и аппаратный __int128.
+          - { name: "soft-int128",  os: ubuntu-latest, extra: "-U__SIZEOF_INT128__" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Сборка проверки
+        run: |
+          c++ -std=c++20 -O2 -ffp-contract=off -fno-fast-math ${{ matrix.extra }} \
+              -Iengine/core/include \
+              engine/core/tests/determinism_main.cpp \
+              engine/core/src/log.cpp engine/core/src/jobs.cpp \
+              -o pw_determinism_check -pthread
+      - name: Сверка с эталоном
+        run: ./pw_determinism_check
+
+  # ---------------------------------------------------------------------------
+  # Сгенерированные файлы обязаны совпадать со своим генератором.
+  # Правка trig_tables.inc руками молча изменила бы всю математику игры.
+  # ---------------------------------------------------------------------------
+  generated:
+    name: Сгенерированные файлы актуальны
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Перегенерировать таблицы
+        run: python3 tools/gen_trig_tables.py
+      - name: Проверить отсутствие расхождений
+        run: |
+          if ! git diff --exit-code -- engine/core/include/pw/core/trig_tables.inc; then
+            echo "::error::trig_tables.inc не совпадает с выводом tools/gen_trig_tables.py"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Ассетный пайплайн: Blender строит модели и печёт спрайтовые атласы.
+  # Запускается headless через модуль bpy — GPU не нужен.
+  # ---------------------------------------------------------------------------
+  assets:
+    name: Ассеты из Blender
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Установить Blender (модуль bpy)
+        run: python3 -m pip install bpy
+      - name: Собрать атласы
+        run: python3 tools/blender/build_assets.py --quality ci
+      - name: Выгрузить атласы
+        uses: actions/upload-artifact@v4
+        with:
+          name: sprite-atlases
+          path: assets/build/
+          retention-days: 7

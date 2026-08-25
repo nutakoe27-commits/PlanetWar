@@ -1,0 +1,32 @@
+# Сборка
+build/
+out/
+dist/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.pdb
+
+# Сгенерированные ассеты. В git лежат ИСХОДНИКИ (.blend и генераторы),
+# а атласы пересобираются пайплайном — иначе репозиторий распухнет
+# от бинарных файлов, которые всё равно нельзя осмысленно смёржить.
+assets/build/
+assets/cache/
+
+# Blender
+*.blend1
+*.blend2
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Редакторы и ОС
+.vscode/
+.idea/
+.DS_Store
+compile_commands.json
