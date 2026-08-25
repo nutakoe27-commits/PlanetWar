@@ -30,6 +30,7 @@ include(PwVulkan)
 
 add_subdirectory(third_party)
 add_subdirectory(engine/core)
+add_subdirectory(engine/sim)
 
 if(PW_BUILD_CLIENT)
     add_subdirectory(engine/platform)

@@ -51,8 +51,10 @@ fi
 # Зачем: именно это даёт headless-сервер, общий код правил у клиента
 # и сервера, реплеи и прогон симуляции в CI без видеокарты.
 if [ -d engine/sim ]; then
-    BAD_SIM=$(includes engine/sim 2>/dev/null | grep -oE '[<"]pw/[^>"]+[>"]' \
-        | tr -d '<>"' | grep -v '^pw/core/' || true)
+    # Свои заголовки, разумеется, разрешены — запрещены чужие модули движка.
+    BAD_SIM=$(includes engine/sim/include engine/sim/src 2>/dev/null \
+        | grep -oE '[<"]pw/[^>"]+[>"]' \
+        | tr -d '<>"' | grep -vE '^pw/(core|sim)/' || true)
     if [ -n "$BAD_SIM" ]; then
         break_ "pw_sim зависит не только от pw_core:"; echo "$BAD_SIM" | sort -u | sed 's/^/       /'
     else
@@ -62,7 +64,10 @@ if [ -d engine/sim ]; then
     # --- 5. Внутри pw_sim нет плавающей точки ---
     # Зачем: float разъезжается между x86 и ARM, и вместе с ним разъезжается
     # весь мир. Вся математика симуляции обязана идти через fixed-point.
-    FLOATS=$(grep -rnE '^[^/]*\b(float|double)\b' engine/sim --include=*.h --include=*.cpp 2>/dev/null \
+    # Только сам модуль, без тестов. В тестах float появляется намеренно —
+    # там проверяется, что статический контроль его отвергает.
+    FLOATS=$(grep -rnE '^[^/]*\b(float|double)\b' \
+        engine/sim/include engine/sim/src --include=*.h --include=*.cpp 2>/dev/null \
         | grep -vE '//|/\*' || true)
     if [ -n "$FLOATS" ]; then
         break_ "в pw_sim найдена плавающая точка:"; echo "$FLOATS" | head -10 | sed 's/^/       /'
