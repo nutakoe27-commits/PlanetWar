@@ -1,20 +1,12 @@
-// pw_rhi — запись PNG без внешних зависимостей.
-//
-// Нужна ровно для одного: сохранить кадр, отрисованный в безголовом режиме,
-// чтобы его можно было посмотреть или сравнить с эталоном в CI.
-//
-// Тянуть ради этого библиотеку сжатия незачем. PNG допускает поток deflate
-// из «сохранённых» блоков — то есть вообще без сжатия. Файл выходит крупнее,
-// но это отладочный артефакт, а не игровой ресурс: игровые текстуры пекутся
-// Blender'ом и сжимаются им же.
+// pw_core — реализация записи PNG. Пояснения — в pw/core/png.h.
 
-#include "pw/rhi/rhi.h"
+#include "pw/core/png.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
-namespace pw::rhi {
+namespace pw {
 namespace {
 
 uint32_t crc32Of(const uint8_t* data, size_t length, uint32_t crc = 0xFFFFFFFFu) {
@@ -114,4 +106,4 @@ bool writePng(const std::string& path, const std::vector<Rgba8>& pixels, int wid
     return written == file.size();
 }
 
-}  // namespace pw::rhi
+}  // namespace pw

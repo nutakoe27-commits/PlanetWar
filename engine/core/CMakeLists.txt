@@ -6,7 +6,8 @@
 
 add_library(pw_core STATIC
     src/log.cpp
-    src/jobs.cpp)
+    src/jobs.cpp
+    src/png.cpp)
 
 target_include_directories(pw_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

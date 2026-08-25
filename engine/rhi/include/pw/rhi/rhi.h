@@ -20,15 +20,18 @@
 #include <string>
 #include <vector>
 
+#include "pw/core/png.h"
+
 namespace pw {
 class Window;
 }
 
 namespace pw::rhi {
 
-struct Rgba8 {
-    uint8_t r = 0, g = 0, b = 0, a = 255;
-};
+// Тип пикселя и запись PNG живут в ядре: они не зависят от графического
+// API и нужны в том числе симуляции — посмотреть на процедурную галактику.
+using pw::Rgba8;
+using pw::writePng;
 
 struct DeviceDesc {
     /// Слои проверки Vulkan. Ловят неверное использование API там, где оно
@@ -90,10 +93,5 @@ private:
     struct Impl;
     Impl* impl_ = nullptr;
 };
-
-/// Сохранить кадр в PNG. Без сторонних библиотек: пишем несжатый поток
-/// в формате deflate «store», это полтора десятка строк и ноль зависимостей.
-bool writePng(const std::string& path, const std::vector<Rgba8>& pixels,
-              int width, int height);
 
 }  // namespace pw::rhi
