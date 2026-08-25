@@ -1,0 +1,127 @@
+#pragma once
+
+// Сервер: авторитетная симуляция плюс приём игроков.
+//
+// АВТОРИТЕТ ЗДЕСЬ И ТОЛЬКО ЗДЕСЬ. Клиент не применяет игровых правил
+// вообще — он рисует то, что прислали, и отправляет намерения. Это стоит
+// немного отзывчивости и покупает полную невозможность клиентских читов
+// (docs/03): подделать пакет можно, но сервер всё равно проверит, ваш ли
+// это флот, есть ли путь и хватает ли ресурсов.
+//
+// СЕРВЕР НЕ ЗНАЕТ ПРО СОКЕТЫ. Он принимает пришедшие датаграммы и отдаёт
+// готовые к отправке — кто их носит, дело вызывающего. Поэтому весь
+// сервер целиком, вместе с рукопожатием, приказами и снапшотами,
+// проверяется в памяти на симуляторе плохой сети, без единого системного
+// вызова и без единой настоящей паузы.
+
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
+#include "pw/game/protocol.h"
+#include "pw/game/snapshot.h"
+#include "pw/net/connection.h"
+#include "pw/sim/commands.h"
+#include "pw/sim/control.h"
+#include "pw/sim/economy.h"
+#include "pw/sim/galaxy.h"
+#include "pw/sim/production.h"
+#include "pw/sim/schedule.h"
+#include "pw/sim/world.h"
+
+namespace pw::game {
+
+/// Настройки запуска сезона.
+struct ServerConfig {
+    sim::GalaxyParams galaxy;
+    /// Сколько игроков сервер согласен принять.
+    uint32_t maxPlayers = 16;
+    /// Стартовые ресурсы каждой империи.
+    int64_t startingEnergy = 200;
+    int64_t startingMinerals = 300;
+    int64_t startingAlloys = 500;
+    /// Стартовый флот.
+    sim::Fleet startingFleet{8, 2, 0, 0};
+};
+
+/// Пакет, который сервер просит отправить.
+struct OutgoingPacket {
+    net::Address to;
+    std::vector<uint8_t> data;
+};
+
+/// Один подключённый игрок.
+struct Player {
+    net::Connection connection;
+    SnapshotWriter snapshots;
+    sim::Entity empireEntity;
+    uint32_t empire = 0;
+    uint32_t home = 0;
+    std::string name;
+    bool joined = false;
+    /// Номер снапшота, который игрок подтвердил последним.
+    uint16_t acknowledged = 0;
+};
+
+class Server {
+public:
+    /// Поднять сезон. Галактика генерируется здесь и живёт до конца.
+    void start(const ServerConfig& config);
+
+    /// Принять датаграмму. `now` — время в миллисекундах, приходит снаружи.
+    void receive(const net::Address& from, const uint8_t* data, size_t size, int64_t now);
+
+    /// Прокрутить симуляцию и собрать исходящие пакеты.
+    ///
+    /// Симуляция тикает ровно kTicksPerSecond раз в секунду по СВОИМ часам,
+    /// а не по числу вызовов: иначе сервер на медленной машине играл бы
+    /// в замедленную игру, а на быстрой — в ускоренную.
+    void update(int64_t now, std::vector<OutgoingPacket>& outgoing);
+
+    /// Разорвать всех: сервер выключается.
+    void shutdown(std::vector<OutgoingPacket>& outgoing);
+
+    // --- наблюдение ---
+
+    uint64_t tick() const { return tick_; }
+    uint32_t playerCount() const;
+    const sim::Galaxy& galaxy() const { return galaxy_; }
+    sim::World& world() { return world_; }
+    const std::map<net::Address, Player>& players() const { return players_; }
+    /// Сколько приказов сервер отверг: не ваш флот, нет пути, нет ресурсов.
+    uint64_t rejectedOrders() const { return rejectedOrders_; }
+
+private:
+    ServerConfig config_;
+    sim::World world_;
+    sim::Galaxy galaxy_;
+    sim::Ledger ledger_;
+    sim::Commands commands_;
+    sim::Presence presence_;
+
+    std::map<net::Address, Player> players_;
+    std::vector<bool> homeTaken_;
+
+    uint64_t tick_ = 0;
+    int64_t startedAt_ = 0;
+    bool running_ = false;
+    uint64_t rejectedOrders_ = 0;
+
+    WorldView view_;
+    /// Отказы, собранные в receive: отправлять оттуда некуда, поэтому
+    /// они ждут ближайшего update.
+    std::vector<OutgoingPacket> pendingRejects_;
+
+    void step();
+    void handleMessage(Player& player, const uint8_t* data, size_t size,
+                       std::vector<OutgoingPacket>& outgoing);
+    void applyMove(Player& player, const MoveFleetMessage& message);
+    void applyBuildShip(Player& player, const BuildShipMessage& message);
+    void applyBuildBuilding(Player& player, const BuildBuildingMessage& message);
+    void sendWelcome(Player& player);
+    /// Выбрать стартовую систему подальше от уже занятых.
+    uint32_t pickHome();
+};
+
+}  // namespace pw::game

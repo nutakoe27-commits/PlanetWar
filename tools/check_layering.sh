@@ -108,6 +108,30 @@ if [ -d engine/net ]; then
     fi
 fi
 
+# --- 8. pw_game стоит между симуляцией и транспортом, и только там ---
+# Зачем: протокол по определению знает и правила, и провод. Но обратной
+# зависимости быть не должно — она уже запрещена правилами 4 и 6, здесь
+# проверяется, что сам pw_game не потянул ничего лишнего (например, рендер).
+if [ -d engine/game ]; then
+    BAD_GAME=$(includes engine/game/include engine/game/src 2>/dev/null \
+        | grep -oE '[<"]pw/[^>"]+[>"]' \
+        | tr -d '<>"' | grep -vE '^pw/(core|sim|net|game)/' || true)
+    if [ -n "$BAD_GAME" ]; then
+        break_ "pw_game тянет постороннее:"; echo "$BAD_GAME" | sort -u | sed 's/^/       /'
+    else
+        check "pw_game зависит только от pw_core, pw_sim и pw_net"
+    fi
+
+    GAME_FLOATS=$(grep -rnE '^[^/]*\b(float|double)\b' \
+        engine/game/include engine/game/src --include=*.h --include=*.cpp 2>/dev/null \
+        | grep -vE '//|/\*' || true)
+    if [ -n "$GAME_FLOATS" ]; then
+        break_ "в pw_game найдена плавающая точка:"; echo "$GAME_FLOATS" | head -10 | sed 's/^/       /'
+    else
+        check "в pw_game нет плавающей точки"
+    fi
+fi
+
 # --- 6. Сгенерированные файлы никто не правил руками ---
 if command -v python3 >/dev/null 2>&1; then
     python3 tools/gen_trig_tables.py >/dev/null 2>&1
