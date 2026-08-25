@@ -5,7 +5,8 @@
 # из pw_platform, и то через непрозрачный дескриптор поверхности.
 
 add_library(pw_rhi STATIC
-    src/vulkan_backend.cpp)
+    src/vulkan_backend.cpp
+    src/vulkan_sprites.cpp)
 
 target_include_directories(pw_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

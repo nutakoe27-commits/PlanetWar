@@ -274,6 +274,26 @@ int main(int argc, char** argv) {
                         static_cast<long long>(client.view().empire.alloys.floorToInt()),
                         static_cast<long long>(client.view().empire.minerals.floorToInt()),
                         static_cast<long long>(client.roundTrip()), client.lossPercent());
+
+            // Где именно стоят флоты. Без этого «систем 1» шесть минут
+            // подряд не отличить от «приказ не дошёл» — а это разные беды.
+            for (const auto& [id, fleet] : client.view().fleets) {
+                if (fleet.empire != uint8_t(client.empire())) continue;
+                const uint32_t owner = fleet.system < client.view().systems.size()
+                                           ? client.view().systems[fleet.system].owner
+                                           : 0xFFu;
+                if (fleet.system == fleet.nextSystem) {
+                    std::printf("      флот %u стоит в системе %u (владелец %s)\n", id,
+                                fleet.system,
+                                owner == 0xFF ? "ничья" : (owner == client.empire() ? "своя"
+                                                                                    : "чужая"));
+                } else {
+                    std::printf("      флот %u идёт %u -> %u, пройдено %lld%%\n", id,
+                                fleet.system, fleet.nextSystem,
+                                static_cast<long long>(
+                                    (fleet.progress * fx::fromInt(100)).floorToInt()));
+                }
+            }
             std::fflush(stdout);
         }
 

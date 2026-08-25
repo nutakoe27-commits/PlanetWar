@@ -177,6 +177,24 @@ public:
     uint64_t seed() const { return seed_; }
     Entity systemEntity(uint32_t index) const { return systems_[index]; }
 
+    /// Положение системы на карте.
+    ///
+    /// Отдельно от компонента StarSystem намеренно: рисование карты и
+    /// выбор мышью работают с ГЕОМЕТРИЕЙ, а не с состоянием мира, и
+    /// заставлять их ради двух чисел ходить в ECS значило бы связать
+    /// интерфейс с симуляцией на ровном месте.
+    fx positionX(uint32_t index) const { return points_[index].x; }
+    fx positionY(uint32_t index) const { return points_[index].y; }
+    /// Кольцо: 0 — ядро, последнее — фронтир.
+    uint8_t ring(uint32_t index) const { return points_[index].ring; }
+    /// Сколько планет в системе. Задаёт её ценность, а значит и то,
+    /// насколько заметной она должна быть на карте.
+    uint8_t planetCount(uint32_t index) const { return points_[index].planets; }
+
+    /// Габарит галактики: половина стороны квадрата, накрывающего все
+    /// системы. Нужен, чтобы камера при запуске показала карту целиком.
+    fx extent() const;
+
     /// Соседи системы по гиперлиниям.
     const uint32_t* neighbors(uint32_t index) const {
         return adjacency_.data() + offsets_[index];
@@ -224,6 +242,7 @@ private:
     struct Point {
         fx x, y;
         uint8_t ring;
+        uint8_t planets = 0;
     };
 
     std::vector<Point> points_;

@@ -1,151 +1,19 @@
-// pw_rhi — реализация на Vulkan.
+// pw_rhi — реализация на Vulkan: устройство, цель отрисовки, кадр.
 //
 // Один бэкенд на пять платформ. На Apple он работает поверх Metal через
 // MoltenVK, что требует расширений переносимости — они запрашиваются ниже
 // по факту наличия, а не по #ifdef: так же ведут себя и другие реализации
 // поверх чужих API, и жёсткая привязка к платформе тут только мешает.
+//
+// Рисование (спрайты, линии, текстуры) живёт в vulkan_sprites.cpp: оба
+// файла делят состояние через внутренний заголовок vulkan_impl.h.
 
-#include "pw/rhi/rhi.h"
-
-#include <vulkan/vulkan.h>
-
-#include <algorithm>
-#include <cstring>
-
-#include "pw/core/log.h"
-#include "pw/platform/window.h"
+#include "vulkan_impl.h"
 
 namespace pw::rhi {
-namespace {
-
-constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
-
-/// Формат цели. RGBA8 выбран ради считывания: байты ложатся в память в том
-/// же порядке, что ждёт PNG, и не нужно менять местами каналы.
-constexpr VkFormat kOffscreenFormat = VK_FORMAT_R8G8B8A8_UNORM;
-
-VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-    VkDebugUtilsMessageTypeFlagsEXT,
-    const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
-    if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-        PW_LOG_ERROR("rhi", "валидация: %s", data->pMessage);
-    } else if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        PW_LOG_WARN("rhi", "валидация: %s", data->pMessage);
-    }
-    return VK_FALSE;
-}
-
-bool hasInstanceExtension(const char* name) {
-    uint32_t count = 0;
-    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
-    std::vector<VkExtensionProperties> props(count);
-    vkEnumerateInstanceExtensionProperties(nullptr, &count, props.data());
-    for (const auto& p : props) {
-        if (std::strcmp(p.extensionName, name) == 0) return true;
-    }
-    return false;
-}
-
-bool hasInstanceLayer(const char* name) {
-    uint32_t count = 0;
-    vkEnumerateInstanceLayerProperties(&count, nullptr);
-    std::vector<VkLayerProperties> props(count);
-    vkEnumerateInstanceLayerProperties(&count, props.data());
-    for (const auto& p : props) {
-        if (std::strcmp(p.layerName, name) == 0) return true;
-    }
-    return false;
-}
-
-bool hasDeviceExtension(VkPhysicalDevice device, const char* name) {
-    uint32_t count = 0;
-    vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
-    std::vector<VkExtensionProperties> props(count);
-    vkEnumerateDeviceExtensionProperties(device, nullptr, &count, props.data());
-    for (const auto& p : props) {
-        if (std::strcmp(p.extensionName, name) == 0) return true;
-    }
-    return false;
-}
-
-uint32_t findMemoryType(VkPhysicalDevice physical, uint32_t typeBits,
-                        VkMemoryPropertyFlags wanted) {
-    VkPhysicalDeviceMemoryProperties props{};
-    vkGetPhysicalDeviceMemoryProperties(physical, &props);
-    for (uint32_t i = 0; i < props.memoryTypeCount; ++i) {
-        if ((typeBits & (1u << i)) &&
-            (props.memoryTypes[i].propertyFlags & wanted) == wanted) {
-            return i;
-        }
-    }
-    return UINT32_MAX;
-}
-
-}  // namespace
 
 // ---------------------------------------------------------------------------
 
-struct Device::Impl {
-    VkInstance instance = VK_NULL_HANDLE;
-    VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
-    VkPhysicalDevice physical = VK_NULL_HANDLE;
-    VkDevice device = VK_NULL_HANDLE;
-    uint32_t graphicsFamily = UINT32_MAX;
-    VkQueue queue = VK_NULL_HANDLE;
-
-    bool headless = true;
-    int width = 0;
-    int height = 0;
-    VkFormat format = kOffscreenFormat;
-
-    // Оконный путь.
-    VkSurfaceKHR surface = VK_NULL_HANDLE;
-    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
-    std::vector<VkImage> swapImages;
-    std::vector<VkImageView> swapViews;
-    VkSemaphore acquired = VK_NULL_HANDLE;
-    VkSemaphore rendered = VK_NULL_HANDLE;
-
-    // Безголовый путь.
-    VkImage offImage = VK_NULL_HANDLE;
-    VkDeviceMemory offMemory = VK_NULL_HANDLE;
-    VkImageView offView = VK_NULL_HANDLE;
-    VkBuffer readBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory readMemory = VK_NULL_HANDLE;
-
-    VkRenderPass renderPass = VK_NULL_HANDLE;
-    std::vector<VkFramebuffer> framebuffers;
-
-    VkPipelineLayout layout = VK_NULL_HANDLE;
-    VkPipeline pipeline = VK_NULL_HANDLE;
-
-    VkCommandPool pool = VK_NULL_HANDLE;
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    VkFence fence = VK_NULL_HANDLE;
-
-    uint32_t imageIndex = 0;
-    bool frameOpen = false;
-    std::string adapter;
-    std::string error;
-
-    bool fail(const char* what, VkResult result = VK_SUCCESS) {
-        error = what;
-        if (result != VK_SUCCESS) error += " (VkResult " + std::to_string(int(result)) + ")";
-        PW_LOG_ERROR("rhi", "%s", error.c_str());
-        return false;
-    }
-
-    bool createInstance(const DeviceDesc& desc);
-    bool pickPhysical();
-    bool createLogicalDevice();
-    bool createSwapchainTarget(const DeviceDesc& desc);
-    bool createOffscreenTarget();
-    bool createRenderPass();
-    bool createFramebuffers(const std::vector<VkImageView>& views);
-    bool createCommandResources();
-    void destroy();
-};
 
 // --- экземпляр -------------------------------------------------------------
 
@@ -534,6 +402,8 @@ bool Device::Impl::createCommandResources() {
 void Device::Impl::destroy() {
     if (device != VK_NULL_HANDLE) vkDeviceWaitIdle(device);
 
+    destroyDrawing();
+
     if (pipeline) vkDestroyPipeline(device, pipeline, nullptr);
     if (layout) vkDestroyPipelineLayout(device, layout, nullptr);
     for (VkFramebuffer fb : framebuffers) vkDestroyFramebuffer(device, fb, nullptr);
@@ -756,6 +626,8 @@ bool Device::beginFrame(const ClearColor& clear) {
     pass.pClearValues = &clearValue;
     vkCmdBeginRenderPass(d.cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
 
+    d.spriteUsed = 0;
+    d.lineUsed = 0;
     d.frameOpen = true;
     return true;
 }

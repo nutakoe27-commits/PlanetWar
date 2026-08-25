@@ -6,7 +6,8 @@ add_executable(pw_core_tests
     test_trig.cpp
     test_rng_hash.cpp
     test_memory.cpp
-    test_jobs.cpp)
+    test_jobs.cpp
+    test_png.cpp)
 
 target_link_libraries(pw_core_tests PRIVATE pw_core doctest)
 pw_configure_target(pw_core_tests)

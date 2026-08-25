@@ -364,6 +364,9 @@ void Galaxy::spawnPlanets(World& world, const GalaxyParams& params) {
             planets = uint32_t(rng.range(1, star->ring == 0 ? 6 : 4));
         }
         star->planetCount = uint8_t(planets);
+        // Дублируем в points_: карта рисуется по геометрии, без обращения
+        // к миру, и число планет задаёт размер звезды на экране.
+        points_[index].planets = uint8_t(planets);
 
         for (uint32_t orbit = 0; orbit < planets; ++orbit) {
             const uint32_t classRoll = rng.below(uint32_t(PlanetClass::Count));
@@ -455,6 +458,17 @@ int32_t Galaxy::hopDistance(uint32_t from, uint32_t to) const {
         }
     }
     return -1;
+}
+
+fx Galaxy::extent() const {
+    fx maximum = fx::zero();
+    for (const Point& point : points_) {
+        maximum = max(maximum, abs(point.x));
+        maximum = max(maximum, abs(point.y));
+    }
+    // Небольшой запас: карта, впритык упирающаяся в края экрана,
+    // читается хуже, чем с полями.
+    return maximum + maximum / fx::fromInt(12);
 }
 
 uint64_t Galaxy::hash() const {
