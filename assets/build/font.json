@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "note": "Сгенерировано tools/blender/build_assets.py. Не редактировать руками.",
+  "generator": "blender 5.2.1 LTS",
+  "charset": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя·×—…°",
+  "columns": 16,
+  "rows": 11,
+  "cell": 48,
+  "width": 768,
+  "height": 528,
+  "texture": "font.png"
+}

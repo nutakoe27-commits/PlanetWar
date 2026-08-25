@@ -153,18 +153,9 @@ jobs:
             libwayland-dev libdrm-dev libgbm-dev libudev-dev libasound2-dev \
             libpulse-dev libdbus-1-dev libibus-1.0-dev libdecor-0-dev
 
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.13" }
-
-      # Атласы и шрифт — артефакты сборки, в репозитории их нет. Без них
-      # клиент не запустится: игра без надписей работает, но играть в неё
-      # нельзя, поэтому клиент отказывается стартовать, а не молчит.
-      - name: Собрать ассеты
-        run: |
-          python3 -m venv .venv
-          .venv/bin/pip install --quiet bpy
-          .venv/bin/python tools/blender/build_assets.py --quality ci
-
+      # Ассеты печь не нужно: испечённые атласы и шрифт лежат
+      # в репозитории. Что они не разошлись с моделями, проверяет
+      # отдельная работа «Ассеты из Blender».
       - name: Сборка клиента
         run: |
           cmake -S . -B build/render -G Ninja \
@@ -277,6 +268,48 @@ jobs:
         run: python3 -m pip install bpy
       - name: Собрать атласы
         run: python3 tools/blender/build_assets.py --quality ci
+      # Ассеты закоммичены, но источник истины — модели. Если кто-то
+      # правит корпус и забывает перепечь, игра поедет со старой графикой,
+      # и заметить это будет неоткуда.
+      #
+      # Сверяем РАСКЛАДКУ, а не пиксели: Cycles не обязан давать байт
+      # в байт одинаковую картинку между версиями, и побайтовое сравнение
+      # было бы ломким тестом. А вот число кадров, их имена и размер
+      # атласа обязаны совпадать — это и ловит забытую перепечку.
+      - name: Раскладка совпадает с закоммиченной
+        run: |
+          python3 - <<'PYEOF'
+          import json, subprocess, sys
+
+          def layout(text):
+              data = json.loads(text)
+              return {
+                  "atlas_size": data["atlas_size"],
+                  "rotation_steps": data["rotation_steps"],
+                  "frames": sorted((f["hull"], f["rotation"], f["w"], f["h"])
+                                   for f in data["frames"]),
+              }
+
+          fresh = layout(open("assets/build/ships.json", encoding="utf-8").read())
+          committed = layout(subprocess.run(
+              ["git", "show", "HEAD:assets/build/ships.json"],
+              capture_output=True, text=True, check=True).stdout)
+
+          if fresh == committed:
+              print("раскладка совпадает: кадров", len(fresh["frames"]))
+              sys.exit(0)
+
+          print("::error::закоммиченные ассеты разошлись с моделями —"
+                " перепеките: tools/blender/build_assets.py --quality ci")
+          only_fresh = set(fresh["frames"]) - set(committed["frames"])
+          only_committed = set(committed["frames"]) - set(fresh["frames"])
+          for item in sorted(only_fresh):
+              print("  только после перепечки:", item)
+          for item in sorted(only_committed):
+              print("  только в репозитории:  ", item)
+          sys.exit(1)
+          PYEOF
+
       - name: Выгрузить атласы
         uses: actions/upload-artifact@v4
         with:

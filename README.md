@@ -61,6 +61,9 @@ Silicon и macOS на Intel. Пропущенная проверка не счи
 
 ### Зависимости для графики
 
+Blender для запуска игры НЕ нужен: испечённые атласы и шрифт лежат
+в репозитории. Он нужен, только если вы правите модели.
+
 ```
 # macOS
 brew install cmake ninja vulkan-headers vulkan-loader molten-vk glslang
@@ -96,6 +99,21 @@ sudo apt install cmake ninja-build libvulkan-dev glslang-tools mesa-vulkan-drive
 и на среднюю степень вершины — то есть на темп войны и на число горлышек.
 
 ## Сыграть
+
+Сначала собрать. Одной командой, она же всё проверит:
+
+```
+./tools/verify.sh
+```
+
+Клиент окажется в `build/client/bin/`. Если нужен только он, без остальных
+проверок:
+
+```
+cmake -S . -B build/client -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DPW_BUILD_CLIENT=ON -DPW_BUILD_TESTS=ON
+cmake --build build/client -j
+```
 
 Сервер и клиент — два отдельных исполняемых файла. Сервер собирается
 **без графических зависимостей**: ни SDL, ни Vulkan ему не нужны.
