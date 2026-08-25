@@ -465,4 +465,95 @@ uint64_t Galaxy::hash() const {
     return hasher.value();
 }
 
+// ---------------------------------------------------------------------------
+// Поиск пути
+// ---------------------------------------------------------------------------
+
+fx Galaxy::straightDistance(uint32_t a, uint32_t b) const {
+    if (a >= points_.size() || b >= points_.size()) return fx::zero();
+    return sqrt(distanceSquared(points_[a].x, points_[a].y, points_[b].x, points_[b].y));
+}
+
+fx Galaxy::laneLength(uint32_t a, uint32_t b) const {
+    if (a >= systemCount()) return fx::zero();
+    for (uint32_t k = offsets_[a]; k < offsets_[a + 1]; ++k) {
+        if (adjacency_[k] == b) return straightDistance(a, b);
+    }
+    return fx::zero();
+}
+
+int32_t Galaxy::findPath(uint32_t from, uint32_t to, std::vector<uint32_t>& out) const {
+    out.clear();
+    const uint32_t count = systemCount();
+    if (from >= count || to >= count) return -1;
+    if (from == to) {
+        out.push_back(from);
+        return 0;
+    }
+
+    // A* с оценкой по прямой. Оценка не завышает: путь по гиперлиниям не
+    // бывает короче отрезка между системами, поэтому найденный маршрут
+    // гарантированно кратчайший, а не просто похожий на кратчайший.
+    std::vector<fx> best(count, fx::max());
+    std::vector<uint32_t> cameFrom(count, UINT32_MAX);
+    std::vector<bool> closed(count, false);
+
+    struct Node {
+        fx estimate;   // пройдено плюс оценка остатка
+        fx travelled;
+        uint32_t index;
+    };
+    // Куча по возрастанию оценки. Индекс в ключе сравнения обязателен:
+    // без него две равные оценки могли бы разложиться в любом порядке,
+    // и маршрут перестал бы воспроизводиться.
+    const auto worse = [](const Node& a, const Node& b) {
+        if (a.estimate != b.estimate) return a.estimate > b.estimate;
+        if (a.travelled != b.travelled) return a.travelled > b.travelled;
+        return a.index > b.index;
+    };
+
+    std::vector<Node> open;
+    open.push_back(Node{straightDistance(from, to), fx::zero(), from});
+    best[from] = fx::zero();
+
+    while (!open.empty()) {
+        std::pop_heap(open.begin(), open.end(), worse);
+        const Node current = open.back();
+        open.pop_back();
+
+        if (current.index == to) break;
+        if (closed[current.index]) continue;
+        closed[current.index] = true;
+
+        for (uint32_t k = offsets_[current.index]; k < offsets_[current.index + 1]; ++k) {
+            const uint32_t neighbour = adjacency_[k];
+            if (closed[neighbour]) continue;
+
+            const fx travelled = current.travelled + straightDistance(current.index, neighbour);
+            if (travelled >= best[neighbour]) continue;
+
+            best[neighbour] = travelled;
+            cameFrom[neighbour] = current.index;
+            open.push_back(Node{travelled + straightDistance(neighbour, to), travelled, neighbour});
+            std::push_heap(open.begin(), open.end(), worse);
+        }
+    }
+
+    if (cameFrom[to] == UINT32_MAX) return -1;
+
+    for (uint32_t node = to; node != UINT32_MAX; node = cameFrom[node]) {
+        out.push_back(node);
+        if (node == from) break;
+    }
+    std::reverse(out.begin(), out.end());
+    return int32_t(out.size()) - 1;
+}
+
+int32_t Galaxy::nextHop(uint32_t from, uint32_t to) const {
+    if (from == to) return int32_t(from);
+    std::vector<uint32_t> path;
+    if (findPath(from, to, path) < 1) return -1;
+    return int32_t(path[1]);
+}
+
 }  // namespace pw::sim

@@ -58,6 +58,24 @@ struct ComponentSlot {
     static inline ComponentId id = kInvalidComponent;
 };
 
+/// Идентификатор типа ресурса.
+///
+/// Здесь автоматический счётчик ДОПУСТИМ, в отличие от компонентов.
+/// Разница принципиальная: идентификаторы компонентов входят в хеш мира,
+/// поэтому обязаны быть одинаковыми во всех сборках. Ресурсы же только
+/// ищутся по типу — они не хешируются, не обходятся и на состояние мира
+/// не влияют, поэтому порядок их нумерации значения не имеет.
+inline uint32_t nextResourceId() {
+    static uint32_t next = 0;
+    return next++;
+}
+
+template <typename T>
+inline uint32_t resourceIdOf() {
+    static const uint32_t id = nextResourceId();
+    return id;
+}
+
 }  // namespace detail
 
 template <typename T>

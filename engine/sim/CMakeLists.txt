@@ -8,7 +8,8 @@
 add_library(pw_sim STATIC
     src/world.cpp
     src/schedule.cpp
-    src/galaxy.cpp)
+    src/galaxy.cpp
+    src/fleet.cpp)
 
 target_include_directories(pw_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pw_sim PUBLIC pw_core)

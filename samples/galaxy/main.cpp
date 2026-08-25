@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "pw/core/png.h"
+#include "pw/sim/fleet.h"
 #include "pw/sim/galaxy.h"
 
 using namespace pw;
@@ -108,6 +109,7 @@ int main(int argc, char** argv) {
     std::string outPath = "galaxy.png";
     int imageSize = 1400;
     bool quiet = false;  // только сводная строка: удобно для развёрток
+    uint32_t routeFrom = UINT32_MAX, routeTo = UINT32_MAX;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -132,6 +134,9 @@ int main(int argc, char** argv) {
             params.radialJitter = fx::fromFraction(1, std::atoi(argv[++i]));
         } else if (arg == "--quiet") {
             quiet = true;
+        } else if (arg == "--route" && i + 2 < argc) {
+            routeFrom = uint32_t(std::atoi(argv[++i]));
+            routeTo = uint32_t(std::atoi(argv[++i]));
         } else {
             std::printf(
                 "pw_galaxy — предпросмотр процедурной галактики\n\n"
@@ -143,6 +148,7 @@ int main(int argc, char** argv) {
                 "  --spread <n>    разброс поперёк рукава, 1/n оборота\n"
                 "  --jitter <n>    разброс по радиусу, 1/n\n"
                 "  --quiet         только сводная строка\n"
+                "  --route <a> <b> подсветить маршрут флота между системами\n"
                 "  --size <n>      сторона картинки в пикселях\n"
                 "  --out <файл>    куда сохранить\n");
             return arg == "--help" || arg == "-h" ? 0 : 2;
@@ -231,6 +237,35 @@ int main(int argc, char** argv) {
             const StarSystem* b = world.get<StarSystem>(galaxy.systemEntity(j));
             canvas.line(toPixel(a->x), toPixel(a->y), toPixel(b->x), toPixel(b->y),
                         kLane, 0.55f);
+        }
+    }
+
+    // Маршрут поверх обычных линий, но под звёздами.
+    if (routeFrom < count && routeTo < count) {
+        std::vector<uint32_t> path;
+        const int32_t hops = galaxy.findPath(routeFrom, routeTo, path);
+        if (hops < 0) {
+            std::printf("\nмаршрут %u -> %u: пути нет\n", routeFrom, routeTo);
+        } else {
+            fx length = fx::zero();
+            for (size_t k = 0; k + 1 < path.size(); ++k) {
+                length += galaxy.straightDistance(path[k], path[k + 1]);
+                const StarSystem* a = world.get<StarSystem>(galaxy.systemEntity(path[k]));
+                const StarSystem* b = world.get<StarSystem>(galaxy.systemEntity(path[k + 1]));
+                // Янтарь — акцент палитры проекта.
+                canvas.line(toPixel(a->x), toPixel(a->y), toPixel(b->x), toPixel(b->y),
+                            Rgba8{232, 163, 61, 255}, 0.95f);
+            }
+            // Время пролёта считаем для линкора: он задаёт темп линейного флота.
+            const fx speed = kSpeedBattleship;
+            const int64_t seconds = (length / speed).floorToInt();
+            std::printf("\nмаршрут %u -> %u: %d прыжков, %lld единиц пути\n",
+                        routeFrom, routeTo, hops,
+                        static_cast<long long>(length.floorToInt()));
+            std::printf("  линейный флот идёт %lld мин %lld с, рейдовый на корветах %lld мин\n",
+                        static_cast<long long>(seconds / 60),
+                        static_cast<long long>(seconds % 60),
+                        static_cast<long long>((length / kSpeedCorvette).floorToInt() / 60));
         }
     }
 
