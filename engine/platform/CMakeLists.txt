@@ -12,13 +12,13 @@ add_library(pw_platform STATIC
     src/file.cpp)
 
 target_include_directories(pw_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-find_package(Vulkan REQUIRED)
+pw_find_vulkan()
 
 # Vulkan и SDL — PRIVATE: наружу не видны ни тот, ни другой. Именно это
 # и делает слой заменяемым.
 target_link_libraries(pw_platform
     PUBLIC  pw_core
-    PRIVATE SDL3::SDL3-static Vulkan::Vulkan)
+    PRIVATE SDL3::SDL3-static pw::vulkan)
 
 pw_configure_target(pw_platform)
 add_library(pw::platform ALIAS pw_platform)

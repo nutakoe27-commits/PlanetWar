@@ -10,10 +10,10 @@ add_library(pw_rhi STATIC
 
 target_include_directories(pw_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-find_package(Vulkan REQUIRED)
+pw_find_vulkan()
 target_link_libraries(pw_rhi
     PUBLIC  pw_core pw_platform
-    PRIVATE Vulkan::Vulkan)
+    PRIVATE pw::vulkan)
 
 pw_configure_target(pw_rhi)
 

@@ -49,12 +49,33 @@
 ./tools/verify.sh
 ```
 
-Собирает ядро, гоняет тесты, сверяет хеш детерминизма симуляции, собирает
-клиент и отрисовывает кадр. Пресет выбирается по системе — Linux, macOS на
-Apple Silicon и macOS на Intel.
+Собирает ядро и клиент, гоняет тесты, сверяет хеш детерминизма симуляции
+и отрисовывает кадр. Пресет выбирается по системе — Linux, macOS на Apple
+Silicon и macOS на Intel. Пропущенная проверка не считается пройденной:
+пропуски перечисляются отдельным списком.
 
-Если репозиторий уже склонирован без подмодулей:
+Если репозиторий склонирован без подмодулей:
 `git submodule update --init --recursive`.
+
+### Зависимости для графики
+
+```
+# macOS
+brew install cmake ninja vulkan-headers vulkan-loader molten-vk glslang
+brew install vulkan-validationlayers      # необязательно, но полезно
+
+# Ubuntu/Debian
+sudo apt install cmake ninja-build libvulkan-dev glslang-tools mesa-vulkan-drivers
+# полный список пакетов SDL — в .github/workflows/ci.yml
+```
+
+**`vulkan-loader` на маке обязателен.** Apple не поставляет Vulkan вовсе:
+`vulkan-headers` даёт заголовки, `molten-vk` — реализацию поверх Metal,
+а `vulkan-loader` связывает их вместе и позволяет подключать слои проверки.
+Без загрузчика `find_package(Vulkan)` не находит `libvulkan` и сборка клиента
+не настраивается.
+
+Ядро и сервер собираются **без всего этого** — им не нужны ни SDL, ни Vulkan.
 
 ## Посмотреть на первый кадр
 

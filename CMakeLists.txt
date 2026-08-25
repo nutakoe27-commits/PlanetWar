@@ -26,6 +26,7 @@ option(PW_BUILD_EDITOR       "Собирать редактор (нужен ImGu
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(PwTarget)
+include(PwVulkan)
 
 add_subdirectory(third_party)
 add_subdirectory(engine/core)
