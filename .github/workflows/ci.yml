@@ -153,6 +153,18 @@ jobs:
             libwayland-dev libdrm-dev libgbm-dev libudev-dev libasound2-dev \
             libpulse-dev libdbus-1-dev libibus-1.0-dev libdecor-0-dev
 
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+
+      # Атласы и шрифт — артефакты сборки, в репозитории их нет. Без них
+      # клиент не запустится: игра без надписей работает, но играть в неё
+      # нельзя, поэтому клиент отказывается стартовать, а не молчит.
+      - name: Собрать ассеты
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet bpy
+          .venv/bin/python tools/blender/build_assets.py --quality ci
+
       - name: Сборка клиента
         run: |
           cmake -S . -B build/render -G Ninja \

@@ -1,6 +1,7 @@
 #include "doctest.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -12,7 +13,22 @@ using namespace pw;
 
 namespace {
 
-std::string tempPath(const char* name) { return std::string("/tmp/pw_test_") + name; }
+/// Путь под временный файл.
+///
+/// Не «/tmp»: на Windows такого каталога нет, и все проверки записи
+/// падали именно там — на машине разработчика они при этом проходили.
+/// Берём то, что назвала система, иначе текущий каталог.
+std::string tempPath(const char* name) {
+    const char* candidates[] = {"TMPDIR", "TEMP", "TMP"};
+    for (const char* variable : candidates) {
+        const char* value = std::getenv(variable);
+        if (value == nullptr || *value == '\0') continue;
+        std::string directory = value;
+        if (directory.back() != '/' && directory.back() != '\\') directory += '/';
+        return directory + "pw_test_" + name;
+    }
+    return std::string("pw_test_") + name;
+}
 
 std::vector<Rgba8> gradient(int width, int height) {
     std::vector<Rgba8> pixels(size_t(width) * size_t(height));
