@@ -4,7 +4,8 @@ add_executable(pw_sim_tests
     test_schedule.cpp
     test_galaxy.cpp
     test_fleet.cpp
-    test_control.cpp)
+    test_control.cpp
+    test_economy.cpp)
 
 target_link_libraries(pw_sim_tests PRIVATE pw_sim doctest)
 pw_configure_target(pw_sim_tests)

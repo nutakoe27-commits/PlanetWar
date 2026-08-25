@@ -27,6 +27,11 @@ uint32_t fleetTonnage(const Fleet& fleet) {
            fleet.cruisers * 8u + fleet.battleships * 20u;
 }
 
+uint32_t fleetCost(const Fleet& fleet) {
+    return fleet.corvettes * kCostCorvette + fleet.destroyers * kCostDestroyer +
+           fleet.cruisers * kCostCruiser + fleet.battleships * kCostBattleship;
+}
+
 void systemFleetMovement(World& world, const TickContext& context) {
     const Galaxy* galaxy = world.resource<Galaxy>();
     if (galaxy == nullptr) return;
