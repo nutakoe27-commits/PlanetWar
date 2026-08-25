@@ -175,3 +175,150 @@ TEST_CASE("рендер: треугольник занимает разумну�
     CHECK(share > 0.14);
     CHECK(share < 0.26);
 }
+
+// ---------------------------------------------------------------------------
+// Спрайты
+//
+// Эти проверки существуют из-за настоящего дефекта: координаты текстуры
+// были перевёрнуты по вертикали, и КАЖДЫЙ спрайт рисовался зеркально.
+// Заметить это было почти нельзя — звёзды симметричны, корабли на общем
+// плане мелкие, — и дефект дожил до появления текста, где зеркало видно
+// сразу. Такое обязана ловить машина.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Кадр с одним спрайтом, у которого верх и низ разного цвета.
+///
+/// Асимметричная текстура — единственный способ увидеть переворот. Ровно
+/// поэтому и берётся: симметричная картинка зеркалится незаметно.
+struct SpriteFrame {
+    bool ok = false;
+    std::vector<pw::Rgba8> pixels;
+};
+
+SpriteFrame renderSprite(bool yDown) {
+    SpriteFrame frame;
+    pw::setLogLevel(pw::LogLevel::Warn);
+    if (!pw::initPlatform(/*headless=*/true)) return frame;
+
+    pw::WindowDesc windowDesc;
+    windowDesc.headless = true;
+    windowDesc.width = kWidth;
+    windowDesc.height = kHeight;
+    pw::Window window(windowDesc);
+
+    pw::rhi::DeviceDesc deviceDesc;
+    deviceDesc.window = &window;
+    deviceDesc.width = kWidth;
+    deviceDesc.height = kHeight;
+    deviceDesc.validation = true;
+
+    pw::rhi::Device device;
+    if (!device.init(deviceDesc)) {
+        pw::shutdownPlatform();
+        return frame;
+    }
+    if (!device.createSpritePipeline(bytes(kSpriteVert, sizeof(kSpriteVert)),
+                                     bytes(kSpriteFrag, sizeof(kSpriteFrag)))) {
+        pw::shutdownPlatform();
+        return frame;
+    }
+
+    // Текстура: верхняя половина красная, нижняя синяя.
+    constexpr int kSize = 16;
+    std::vector<pw::Rgba8> texels(size_t(kSize) * size_t(kSize));
+    for (int y = 0; y < kSize; ++y) {
+        for (int x = 0; x < kSize; ++x) {
+            texels[size_t(y) * kSize + size_t(x)] =
+                y < kSize / 2 ? pw::Rgba8{255, 0, 0, 255} : pw::Rgba8{0, 0, 255, 255};
+        }
+    }
+    const pw::rhi::TextureHandle texture = device.createTexture(kSize, kSize, texels.data());
+    if (texture == pw::rhi::kInvalidTexture) {
+        device.shutdown();
+        pw::shutdownPlatform();
+        return frame;
+    }
+
+    pw::rhi::Camera camera;
+    camera.centerX = 0.0f;
+    camera.centerY = 0.0f;
+    camera.worldHeight = 100.0f;
+    camera.yDown = yDown;
+    device.setCamera(camera);
+
+    pw::rhi::SpriteInstance sprite;
+    sprite.x = 0.0f;
+    sprite.y = 0.0f;
+    sprite.halfWidth = 20.0f;
+    sprite.halfHeight = 20.0f;
+
+    if (device.beginFrame(kClear)) {
+        device.drawSprites(&sprite, 1, texture);
+        device.endFrame();
+    }
+    frame.ok = device.readback(frame.pixels);
+
+    device.shutdown();
+    pw::shutdownPlatform();
+    return frame;
+}
+
+pw::Rgba8 at(const std::vector<pw::Rgba8>& pixels, int x, int y) {
+    return pixels[size_t(y) * size_t(kWidth) + size_t(x)];
+}
+
+}  // namespace
+
+TEST_CASE("спрайт: верх текстуры оказывается вверху экрана") {
+    // Мир смотрит осью Y вверх. Верхняя половина текстуры красная,
+    // значит верхняя половина спрайта на экране обязана быть красной.
+    const SpriteFrame frame = renderSprite(/*yDown=*/false);
+    REQUIRE(frame.ok);
+
+    // Спрайт занимает 40 из 100 мировых единиц по высоте кадра в 360
+    // пикселей, то есть примерно 144 пикселя вокруг центра.
+    const int centerX = kWidth / 2;
+    const int centerY = kHeight / 2;
+
+    const pw::Rgba8 above = at(frame.pixels, centerX, centerY - 40);
+    const pw::Rgba8 below = at(frame.pixels, centerX, centerY + 40);
+
+    CHECK(above.r > 150);
+    CHECK(above.b < 100);
+    CHECK(below.b > 150);
+    CHECK(below.r < 100);
+}
+
+TEST_CASE("спрайт: в экранных координатах ориентация та же") {
+    // У панелей интерфейса ось Y смотрит вниз. Картинка от этого
+    // зеркалиться НЕ должна: верх текстуры остаётся вверху экрана.
+    // Первая версия этого не делала, и надписи читались в зеркале.
+    const SpriteFrame frame = renderSprite(/*yDown=*/true);
+    REQUIRE(frame.ok);
+
+    const int centerX = kWidth / 2;
+    const int centerY = kHeight / 2;
+
+    const pw::Rgba8 above = at(frame.pixels, centerX, centerY - 40);
+    const pw::Rgba8 below = at(frame.pixels, centerX, centerY + 40);
+
+    CHECK(above.r > 150);
+    CHECK(above.b < 100);
+    CHECK(below.b > 150);
+    CHECK(below.r < 100);
+}
+
+TEST_CASE("спрайт: тон умножается на текстуру") {
+    // На этом держится цвет империи: модели испечены серыми, один атлас
+    // работает на всех игроков. Если тон не умножается, каждому цвету
+    // потребовалась бы своя копия атласа.
+    const SpriteFrame frame = renderSprite(/*yDown=*/false);
+    REQUIRE(frame.ok);
+
+    // Тон по умолчанию белый, поэтому красное осталось красным.
+    const pw::Rgba8 red = at(frame.pixels, kWidth / 2, kHeight / 2 - 40);
+    CHECK(red.r > 150);
+    CHECK(red.g < 100);
+}
