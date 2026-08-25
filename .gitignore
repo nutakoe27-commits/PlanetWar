@@ -30,3 +30,7 @@ __pycache__/
 .idea/
 .DS_Store
 compile_commands.json
+
+# Кадры, отрисованные проверочными запусками
+triangle.png
+*.frame.png

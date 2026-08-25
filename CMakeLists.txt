@@ -30,6 +30,12 @@ include(PwTarget)
 add_subdirectory(third_party)
 add_subdirectory(engine/core)
 
+if(PW_BUILD_CLIENT)
+    add_subdirectory(engine/platform)
+    add_subdirectory(engine/rhi)
+    add_subdirectory(samples/triangle)
+endif()
+
 if(PW_BUILD_TESTS)
     enable_testing()
     add_subdirectory(engine/core/tests)

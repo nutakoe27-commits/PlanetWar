@@ -100,6 +100,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step "Графика (необязательно)"
+# ---------------------------------------------------------------------------
+if [ ! -d third_party/SDL/src ]; then
+    printf '  %sпропущено: подмодуль SDL не выкачан%s\n' "$DIM" "$OFF"
+    printf '  %s  git submodule update --init --recursive%s\n' "$DIM" "$OFF"
+elif ! cmake -S . -B build/client -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DPW_BUILD_CLIENT=ON -DPW_BUILD_TESTS=ON >/tmp/pw_client_cfg.log 2>&1; then
+    printf '  %sпропущено: не хватает зависимостей SDL или Vulkan%s\n' "$DIM" "$OFF"
+    printf '  %s  macOS: brew install vulkan-headers molten-vk glslang%s\n' "$DIM" "$OFF"
+    printf '  %s  Linux: см. список пакетов в .github/workflows/ci.yml%s\n' "$DIM" "$OFF"
+    tail -5 /tmp/pw_client_cfg.log | sed 's/^/       /'
+else
+    if cmake --build build/client -j"${JOBS:-4}" >/tmp/pw_client_build.log 2>&1; then
+        ok "клиент собран"
+        if ./build/client/bin/pw_render_tests >/tmp/pw_render.log 2>&1; then
+            ok "$(grep 'test cases:' /tmp/pw_render.log | tr -s ' ')"
+            ./build/client/bin/pw_triangle --out triangle.png --size 640 360 >/dev/null 2>&1 \
+                && ok "кадр отрисован в triangle.png — откройте и посмотрите"
+        else
+            fail "автопроверка рендера не прошла"; tail -20 /tmp/pw_render.log
+        fi
+    else
+        fail "клиент не собрался"; tail -20 /tmp/pw_client_build.log
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 step "Ассетный пайплайн (необязательно)"
 # ---------------------------------------------------------------------------
 BPY_PY=""

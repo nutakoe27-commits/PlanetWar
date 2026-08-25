@@ -26,6 +26,8 @@ jobs:
           - { name: "macOS arm64",   os: macos-latest,   preset: macos-arm64-release, cc: clang, cxx: clang++ }
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Установить ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
@@ -92,6 +94,84 @@ jobs:
         run: |
           if ! git diff --exit-code -- engine/core/include/pw/core/trig_tables.inc; then
             echo "::error::trig_tables.inc не совпадает с выводом tools/gen_trig_tables.py"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Графика. Клиент собирается с SDL3 и Vulkan, а кадр проверяется автотестом
+  # на ПРОГРАММНОМ растеризаторе — видеокарты на раннере нет и не будет.
+  # Без этой работы рендер проверялся бы только глазами и только тогда, когда
+  # кто-то удосужился посмотреть.
+  # ---------------------------------------------------------------------------
+  render:
+    name: Рендер (программный Vulkan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Установить ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Зависимости SDL3 и Vulkan
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libvulkan-dev vulkan-validationlayers mesa-vulkan-drivers glslang-tools \
+            libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev \
+            libxfixes-dev libxss-dev libxtst-dev libxinerama-dev libxkbcommon-dev \
+            libwayland-dev libdrm-dev libgbm-dev libudev-dev libasound2-dev \
+            libpulse-dev libdbus-1-dev libibus-1.0-dev libdecor-0-dev
+
+      - name: Сборка клиента
+        run: |
+          cmake -S . -B build/render -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DPW_BUILD_CLIENT=ON -DPW_BUILD_TESTS=ON
+          cmake --build build/render -j"$(nproc)"
+
+      - name: Автопроверка кадра
+        run: ./build/render/bin/pw_render_tests
+
+      - name: Отрисовать кадр в файл
+        run: ./build/render/bin/pw_triangle --out triangle.png --size 640 360 --validation
+
+      - name: Выгрузить кадр
+        uses: actions/upload-artifact@v4
+        with:
+          name: triangle-frame
+          path: triangle.png
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Слои архитектуры. Правила вроде «pw_sim зависит только от pw_core»
+  # дисциплиной не удержать: однажды кто-то добавит #include, и через полгода
+  # сервер перестанет собираться без видеокарты.
+  # ---------------------------------------------------------------------------
+  layering:
+    name: Слои архитектуры
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: ./tools/check_layering.sh
+
+  # ---------------------------------------------------------------------------
+  # Шейдеры обязаны совпадать со своим исходником — как и таблицы
+  # тригонометрии. Правка SPIR-V руками молча изменила бы картинку.
+  # ---------------------------------------------------------------------------
+  shaders:
+    name: SPIR-V актуален
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq glslang-tools
+      - run: ./tools/compile_shaders.sh
+      - name: Проверить отсутствие расхождений
+        run: |
+          if ! git diff --exit-code -- engine/rhi/shaders/spirv engine/rhi/include/pw/rhi/shaders.inc; then
+            echo "::error::скомпилированные шейдеры не совпадают с исходниками"
             exit 1
           fi
 
