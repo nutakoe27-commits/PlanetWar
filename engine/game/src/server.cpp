@@ -432,6 +432,29 @@ void Server::notifyChanges() {
         if (after < before) notify(empire, NoticeKind::FleetDestroyed, 0);
     }
     previousFleets_.swap(alive);
+
+    // --- сражения ---
+    //
+    // Перезарядка взлетает в момент боя и дальше только убывает, поэтому
+    // скачок вверх — надёжный признак свежего сражения. Отдельного журнала
+    // не нужно: событие живёт ровно до следующего боя в этой системе.
+    if (previousCooldown_.size() != systemCount) previousCooldown_.assign(systemCount, 0);
+
+    world_.each<sim::StarSystem, sim::BattleState>(
+        [&](sim::Entity, sim::StarSystem& system, sim::BattleState& battle) {
+            if (system.index >= systemCount) return;
+            const uint32_t before = previousCooldown_[system.index];
+            previousCooldown_[system.index] = battle.cooldown;
+            if (battle.cooldown <= before) return;
+
+            if (battle.lastWinner == sim::kBattleDraw) return;   // разошлись — не новость
+            if (battle.lastWinner != sim::kBattleNobody) {
+                notify(battle.lastWinner, NoticeKind::BattleWon, system.index);
+            }
+            if (battle.lastLoser != sim::kBattleNobody) {
+                notify(battle.lastLoser, NoticeKind::BattleLost, system.index);
+            }
+        });
 }
 
 void Server::update(int64_t now, std::vector<OutgoingPacket>& outgoing) {

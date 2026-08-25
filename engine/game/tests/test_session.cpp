@@ -477,3 +477,67 @@ TEST_CASE("уведомления: слияние флотов не считае
         CHECK(event.kind != NoticeKind::FleetDestroyed);
     }
 }
+
+TEST_CASE("уведомления: о бое узнают обе стороны, и по-разному") {
+    // Одно сражение — две новости: победителю «выиграл», проигравшему
+    // «проиграл». Если сервер шлёт одно и то же обоим, интерфейс врёт.
+    Session session(40);
+    session.addClient("первый");
+    session.addClient("второй");
+    session.run(2000);
+
+    Client& first = *session.clients[0];
+    Client& second = *session.clients[1];
+    REQUIRE(first.ready());
+    REQUIRE(second.ready());
+    first.takeEvents();
+    second.takeEvents();
+
+    // Сводим флоты в одной системе. Гнать их через всю галактику
+    // не нужно и вредно: тест проверяет уведомление, а не поиск пути,
+    // и лишние двадцать минут игрового времени только делают его хрупким.
+    // Ищем систему, соседнюю обеим столицам, иначе просто ближайшую
+    // к обеим.
+    uint32_t battlefield = 0xFFFFFFFFu;
+    int32_t best = 1 << 20;
+    for (uint32_t index = 0; index < first.galaxy().systemCount(); ++index) {
+        const int32_t toFirst = first.galaxy().hopDistance(first.capital(), index);
+        const int32_t toSecond = first.galaxy().hopDistance(second.capital(), index);
+        if (toFirst < 0 || toSecond < 0) continue;
+        const int32_t total = toFirst + toSecond;
+        if (total >= best) continue;
+        if (index == first.capital() || index == second.capital()) continue;
+        best = total;
+        battlefield = index;
+    }
+    REQUIRE(battlefield != 0xFFFFFFFFu);
+
+    const uint32_t defender = first.fleetsAt(first.capital()).front();
+    const uint32_t attacker = second.fleetsAt(second.capital()).front();
+    REQUIRE(first.orderMove(defender, battlefield));
+    REQUIRE(second.orderMove(attacker, battlefield));
+
+    bool firstHeard = false, secondHeard = false;
+    NoticeKind firstKind = NoticeKind::None, secondKind = NoticeKind::None;
+
+    for (int round = 0; round < 60 && !(firstHeard && secondHeard); ++round) {
+        session.run(20000);
+        for (const ClientEvent& event : first.takeEvents()) {
+            if (event.kind == NoticeKind::BattleWon || event.kind == NoticeKind::BattleLost) {
+                firstHeard = true;
+                firstKind = event.kind;
+            }
+        }
+        for (const ClientEvent& event : second.takeEvents()) {
+            if (event.kind == NoticeKind::BattleWon || event.kind == NoticeKind::BattleLost) {
+                secondHeard = true;
+                secondKind = event.kind;
+            }
+        }
+    }
+
+    REQUIRE(firstHeard);
+    REQUIRE(secondHeard);
+    // Один выиграл, другой проиграл — не оба одно и то же.
+    CHECK(firstKind != secondKind);
+}

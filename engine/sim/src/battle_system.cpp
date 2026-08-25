@@ -17,7 +17,8 @@ void registerBattleComponents(World& world) {
 
 void initialiseBattles(World& world, const Galaxy& galaxy) {
     for (uint32_t index = 0; index < galaxy.systemCount(); ++index) {
-        world.add<BattleState>(galaxy.systemEntity(index), BattleState{0, 0});
+        world.add<BattleState>(galaxy.systemEntity(index),
+                               BattleState{0, 0, kBattleNobody, kBattleNobody});
     }
 }
 
@@ -258,8 +259,19 @@ void systemBattles(World& world, const TickContext& context) {
         distribute(world, present, parties[a].first, parties[a].last, result.lossesA);
         distribute(world, present, parties[b].first, parties[b].last, result.lossesB);
 
-        states[system]->lastRounds = result.rounds;
+        states[system]->lastRounds = uint16_t(result.rounds);
         states[system]->cooldown = uint32_t(kBattleIntervalSeconds * kTicksPerSecond);
+
+        // Исход запоминаем здесь же: сервер прочитает его и скажет игрокам.
+        if (result.outcome == 2) {
+            states[system]->lastWinner = kBattleDraw;
+            states[system]->lastLoser = kBattleDraw;
+        } else {
+            const Party& winner = result.outcome == 0 ? parties[a] : parties[b];
+            const Party& loser = result.outcome == 0 ? parties[b] : parties[a];
+            states[system]->lastWinner = uint8_t(winner.empire & 0xFFu);
+            states[system]->lastLoser = uint8_t(loser.empire & 0xFFu);
+        }
 
         // Проигравший отходит. Победитель остаётся: система за ним.
         if (result.outcome != 2) {

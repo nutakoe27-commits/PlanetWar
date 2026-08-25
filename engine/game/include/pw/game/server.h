@@ -117,6 +117,9 @@ private:
     /// изменение на карте — в MMO он часто смотрит в другую её часть.
     std::vector<uint8_t> previousOwners_;
     std::vector<std::pair<uint32_t, uint32_t>> previousFleets_;   // сущность, империя
+    /// Перезарядка боя в каждой системе на прошлом тике. Скачок вверх
+    /// означает, что сражение только что произошло.
+    std::vector<uint32_t> previousCooldown_;
     /// Отказы, собранные в receive: отправлять оттуда некуда, поэтому
     /// они ждут ближайшего update.
     std::vector<OutgoingPacket> pendingRejects_;
