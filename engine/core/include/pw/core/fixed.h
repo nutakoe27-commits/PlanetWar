@@ -65,9 +65,9 @@ struct FixedOps<int64_t> {
     static constexpr int64_t kMax = INT64_MAX;
     static constexpr int64_t kMin = INT64_MIN;
 
-    static int64_t mul(int64_t a, int64_t b, int frac) { return mulShift(a, b, frac); }
-    static int64_t div(int64_t a, int64_t b, int frac) { return divShift(a, b, frac); }
-    static int64_t sqrtRaw(int64_t v, int frac) { return sqrtShift(v, frac); }
+    static constexpr int64_t mul(int64_t a, int64_t b, int frac) { return mulShift(a, b, frac); }
+    static constexpr int64_t div(int64_t a, int64_t b, int frac) { return divShift(a, b, frac); }
+    static constexpr int64_t sqrtRaw(int64_t v, int frac) { return sqrtShift(v, frac); }
 };
 
 }  // namespace detail
@@ -175,7 +175,7 @@ constexpr Fixed<S, F> lerp(Fixed<S, F> a, Fixed<S, F> b, Fixed<S, F> t) {
 }
 
 template <typename S, int F>
-inline Fixed<S, F> sqrt(Fixed<S, F> v) {
+constexpr Fixed<S, F> sqrt(Fixed<S, F> v) {
     return Fixed<S, F>::fromRaw(Fixed<S, F>::Ops::sqrtRaw(v.raw(), F));
 }
 

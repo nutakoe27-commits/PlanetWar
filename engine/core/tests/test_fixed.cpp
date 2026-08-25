@@ -5,6 +5,16 @@
 
 using namespace pw;
 
+// Константы баланса должны считаться компилятором, а не в рантайме. Заодно
+// это гарантия, что constexpr-объявления не расходятся с реализацией: если
+// какая-то операция перестанет быть вычислимой на этапе компиляции, файл
+// просто не соберётся.
+static_assert((fx::fromInt(7) * fx::fromInt(6)).floorToInt() == 42);
+static_assert(fx::fromFraction(1, 4).raw() == (int64_t(1) << 30));
+static_assert((fx::fromInt(9) / fx::fromInt(2)).floorToInt() == 4);
+static_assert(sqrt(fx::fromInt(144)).floorToInt() == 12);
+static_assert(fxs::fromInt(100).raw() == 100 * 65536);
+
 TEST_CASE("fixed: базовая арифметика точна") {
     const fx a = fx::fromInt(7);
     const fx b = fx::fromInt(3);

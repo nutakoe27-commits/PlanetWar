@@ -2,6 +2,7 @@
 #include "pw/core/hash.h"
 #include "pw/core/rng.h"
 
+#include <bit>
 #include <set>
 
 using namespace pw;
@@ -73,7 +74,9 @@ TEST_CASE("hash: mixCoord даёт лавину на соседних коорд
 
     // Соседние системы галактики обязаны быть некоррелированы, иначе
     // процедурная генерация даст видимые полосы и повторы.
-    const int differing = __builtin_popcountll(a ^ b);
+    // std::popcount, а не __builtin_popcountll: последнего нет в MSVC,
+    // и CI это поймал ровно на первом же прогоне матрицы платформ.
+    const int differing = std::popcount(a ^ b);
     CHECK(differing > 20);
     CHECK(differing < 44);
 

@@ -36,7 +36,7 @@ struct U128Soft {
     uint64_t lo = 0;
 };
 
-inline U128Soft mulU64(uint64_t a, uint64_t b) {
+constexpr inline U128Soft mulU64(uint64_t a, uint64_t b) {
     const uint64_t aLo = a & 0xFFFFFFFFull, aHi = a >> 32;
     const uint64_t bLo = b & 0xFFFFFFFFull, bHi = b >> 32;
 
@@ -53,25 +53,25 @@ inline U128Soft mulU64(uint64_t a, uint64_t b) {
     return r;
 }
 
-inline U128Soft shlU128(U128Soft v, int s) {
+constexpr inline U128Soft shlU128(U128Soft v, int s) {
     if (s == 0) return v;
     if (s >= 128) return {0, 0};
     if (s >= 64) return {v.lo << (s - 64), 0};
     return {(v.hi << s) | (v.lo >> (64 - s)), v.lo << s};
 }
 
-inline U128Soft shrU128(U128Soft v, int s) {
+constexpr inline U128Soft shrU128(U128Soft v, int s) {
     if (s == 0) return v;
     if (s >= 128) return {0, 0};
     if (s >= 64) return {0, v.hi >> (s - 64)};
     return {v.hi >> s, (v.lo >> s) | (v.hi << (64 - s))};
 }
 
-inline bool geU128(U128Soft a, U128Soft b) {
+constexpr inline bool geU128(U128Soft a, U128Soft b) {
     return a.hi != b.hi ? a.hi > b.hi : a.lo >= b.lo;
 }
 
-inline U128Soft subU128(U128Soft a, U128Soft b) {
+constexpr inline U128Soft subU128(U128Soft a, U128Soft b) {
     U128Soft r;
     r.lo = a.lo - b.lo;
     r.hi = a.hi - b.hi - (a.lo < b.lo ? 1u : 0u);
@@ -80,7 +80,7 @@ inline U128Soft subU128(U128Soft a, U128Soft b) {
 
 // Деление 128/64 столбиком. Частное обязано помещаться в 64 бита —
 // вызывающий код это гарантирует диапазонами fixed-point.
-inline uint64_t divU128(U128Soft n, uint64_t d) {
+constexpr inline uint64_t divU128(U128Soft n, uint64_t d) {
     if (d == 0) return ~uint64_t(0);
     if (n.hi == 0) return n.lo / d;
 
@@ -99,7 +99,7 @@ inline uint64_t divU128(U128Soft n, uint64_t d) {
 }
 
 // Целочисленный квадратный корень из 128-битного числа, метод «по биту».
-inline uint64_t sqrtU128(U128Soft v) {
+constexpr inline uint64_t sqrtU128(U128Soft v) {
     U128Soft rem{0, 0}, root{0, 0};
     for (int i = 63; i >= 0; --i) {
         root = shlU128(root, 1);
@@ -129,7 +129,7 @@ inline uint64_t sqrtU128(U128Soft v) {
 /// (a * b) >> shift, с точным 128-битным промежуточным результатом.
 /// Сдвиг арифметический: округление всегда вниз, к минус бесконечности.
 /// Это выбранное нами правило округления — оно однозначно и одинаково везде.
-inline int64_t mulShift(int64_t a, int64_t b, int shift) {
+constexpr inline int64_t mulShift(int64_t a, int64_t b, int shift) {
 #if PW_HAS_INT128
     return int64_t((I128(a) * I128(b)) >> shift);
 #else
@@ -153,7 +153,7 @@ inline int64_t mulShift(int64_t a, int64_t b, int shift) {
 }
 
 /// (a << shift) / b, с точным 128-битным числителем. Деление усекает к нулю.
-inline int64_t divShift(int64_t a, int64_t b, int shift) {
+constexpr inline int64_t divShift(int64_t a, int64_t b, int shift) {
     if (b == 0) return a >= 0 ? INT64_MAX : INT64_MIN;
 #if PW_HAS_INT128
     return int64_t((I128(a) << shift) / I128(b));
@@ -167,7 +167,7 @@ inline int64_t divShift(int64_t a, int64_t b, int shift) {
 }
 
 /// Целочисленный корень из (v << shift). v должно быть неотрицательным.
-inline int64_t sqrtShift(int64_t v, int shift) {
+constexpr inline int64_t sqrtShift(int64_t v, int shift) {
     if (v <= 0) return 0;
 #if PW_HAS_INT128
     U128 n = U128(uint64_t(v)) << shift;
