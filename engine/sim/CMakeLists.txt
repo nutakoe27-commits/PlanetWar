@@ -13,7 +13,8 @@ add_library(pw_sim STATIC
     src/control.cpp
     src/economy.cpp
     src/commands.cpp
-    src/production.cpp)
+    src/production.cpp
+    src/combat.cpp)
 
 target_include_directories(pw_sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pw_sim PUBLIC pw_core)
