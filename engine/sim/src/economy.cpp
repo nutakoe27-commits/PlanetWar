@@ -1,6 +1,7 @@
 #include "pw/sim/economy.h"
 
 #include <algorithm>
+#include <vector>
 
 #include "pw/sim/control.h"
 #include "pw/sim/fleet.h"
@@ -10,6 +11,16 @@ namespace pw::sim {
 
 void registerEconomyComponents(World& world) {
     world.registerComponent<PlanetDevelopment>("PlanetDevelopment");
+}
+
+void initialiseEconomy(World& world) {
+    // Собираем сущности заранее: навешивание компонента переносит сущность
+    // между таблицами, а менять мир прямо в обходе нельзя.
+    std::vector<Entity> planets;
+    world.each<Planet>([&](Entity entity, Planet&) { planets.push_back(entity); });
+    for (const Entity planet : planets) {
+        world.add<PlanetDevelopment>(planet, PlanetDevelopment{});
+    }
 }
 
 void Ledger::reset(uint32_t empires) {

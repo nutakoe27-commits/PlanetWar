@@ -162,4 +162,13 @@ void systemDefenceCap(World& world, const TickContext& context);
 
 void registerEconomyComponents(World& world);
 
+/// Навесить застройку на все планеты галактики.
+///
+/// Без этого вызова планета существует, но застроить её невозможно: обход
+/// экономики требует PlanetDevelopment и просто не видит планету без него.
+/// Юнит-тесты этого не ловят — они вешают компонент руками. Поймал прогон
+/// сезона на ботах: империи расселялись по галактике, но ни одна не могла
+/// добыть ни минерала.
+void initialiseEconomy(World& world);
+
 }  // namespace pw::sim

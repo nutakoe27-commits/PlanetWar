@@ -1,5 +1,6 @@
 #include "doctest.h"
 
+#include "pw/sim/combat.h"
 #include "pw/sim/commands.h"
 #include "pw/sim/control.h"
 #include "pw/sim/economy.h"
@@ -342,4 +343,127 @@ TEST_CASE("постройка: воспроизводится тик в тик")
 
     CHECK(first.world.hash() == second.world.hash());
     CHECK(first.fleetsOf(0) == 8);
+}
+
+// ---------------------------------------------------------------------------
+// Слияние флотов
+// ---------------------------------------------------------------------------
+
+namespace {
+
+FleetArmament withArmament(uint8_t kinetic, uint8_t energy) {
+    FleetArmament armament = balancedArmament();
+    armament.kinetic = kinetic;
+    armament.energy = energy;
+    return armament;
+}
+
+Entity stationed(Yard& yard, uint32_t system, uint32_t empire, const Fleet& composition,
+                 const FleetArmament& armament) {
+    const Entity e = yard.world.create();
+    yard.world.add<Fleet>(e, composition);
+    yard.world.add<FleetLocation>(e, FleetLocation{system, system, fx::zero()});
+    yard.world.add<MoveOrder>(e, MoveOrder{kNoSystem, 0});
+    yard.world.add<Owner>(e, Owner{empire, 0});
+    yard.world.add<FleetArmament>(e, armament);
+    return e;
+}
+
+void mergeTick(Yard& yard) {
+    TickContext context;
+    systemMergeFleets(yard.world, context);
+    systemApplyCommands(yard.world, context);
+}
+
+}  // namespace
+
+TEST_CASE("слияние: свои флоты в одной системе объединяются") {
+    // Без слияния каждый построенный корабль остаётся отдельным отрядом:
+    // прогон сезона за шесть часов набрал 98 отрядов по одному кораблю.
+    Yard yard;
+    yard.world.registerComponent<FleetArmament>("FleetArmament");
+    const FleetArmament same = withArmament(50, 50);
+
+    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
+    stationed(yard, 1, 0, Fleet{3, 1, 0, 0}, same);
+    stationed(yard, 1, 0, Fleet{0, 0, 1, 0}, same);
+    CHECK(yard.fleetsOf(0) == 3);
+
+    mergeTick(yard);
+    CHECK(yard.fleetsOf(0) == 1);
+    // Корабли не потерялись и не удвоились.
+    CHECK(yard.shipsIn(1) == 5u + 3u + 3u + 8u);
+}
+
+TEST_CASE("слияние: разное вооружение не смешивается") {
+    Yard yard;
+    yard.world.registerComponent<FleetArmament>("FleetArmament");
+
+    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, withArmament(100, 0));
+    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, withArmament(0, 100));
+
+    mergeTick(yard);
+    // Смешав их, мы потеряли бы выбор игрока, а вместе с ним контр-систему.
+    CHECK(yard.fleetsOf(0) == 2);
+}
+
+TEST_CASE("слияние: чужие флоты не сливаются") {
+    Yard yard;
+    yard.world.registerComponent<FleetArmament>("FleetArmament");
+    const FleetArmament same = withArmament(50, 50);
+
+    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
+    stationed(yard, 1, 7, Fleet{5, 0, 0, 0}, same);
+
+    mergeTick(yard);
+    CHECK(yard.fleetsOf(0) == 1);
+    CHECK(yard.fleetsOf(7) == 1);
+}
+
+TEST_CASE("слияние: флот с приказом не трогают") {
+    Yard yard;
+    yard.world.registerComponent<FleetArmament>("FleetArmament");
+    const FleetArmament same = withArmament(50, 50);
+
+    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
+    const Entity ordered = stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
+    yard.world.get<MoveOrder>(ordered)->target = 9;
+
+    mergeTick(yard);
+    // Идущий к цели флот — отдельное намерение игрока, склеивать его нельзя.
+    CHECK(yard.fleetsOf(0) == 2);
+}
+
+TEST_CASE("слияние: флоты в разных системах остаются раздельными") {
+    Yard yard;
+    yard.world.registerComponent<FleetArmament>("FleetArmament");
+    const FleetArmament same = withArmament(50, 50);
+
+    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
+    stationed(yard, 2, 0, Fleet{5, 0, 0, 0}, same);
+
+    mergeTick(yard);
+    CHECK(yard.fleetsOf(0) == 2);
+}
+
+TEST_CASE("производство: корабль наследует вооружение империи") {
+    Yard yard;
+    yard.world.registerComponent<FleetArmament>("FleetArmament");
+    // Выбор билда, сделанный игроком, обязан доезжать до верфи: иначе
+    // построенные корабли воюют не тем, чем империя собиралась воевать.
+    yard.world.add<FleetArmament>(yard.empireEntity, withArmament(90, 10));
+
+    yard.buildShipyards(1, 8);
+    yard.empire().alloys = fx::fromInt(5000);
+    enqueueBuild(yard.queue(1), Hull::Corvette, 1);
+    yard.run(60 * kSecond);
+
+    REQUIRE(yard.fleetsOf(0) == 1);
+    bool checked = false;
+    yard.world.each<Fleet, FleetArmament>([&](Entity, Fleet&, FleetArmament& armament) {
+        CHECK(armament.kinetic == 90);
+        CHECK(armament.energy == 10);
+        checked = true;
+    });
+    CHECK(checked);
 }

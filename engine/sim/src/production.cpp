@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "pw/sim/combat.h"
 #include "pw/sim/commands.h"
 #include "pw/sim/control.h"
 #include "pw/sim/economy.h"
@@ -54,8 +55,16 @@ void systemProduction(World& world, const TickContext& context) {
     if (empires == 0 || empires > 4096) return;
 
     std::vector<fx> treasury(empires, fx::zero());
-    world.each<Empire>([&](Entity, Empire& empire) {
-        if (empire.id < empires) treasury[empire.id] = empire.alloys;
+    // Стандартное вооружение империи: компонент FleetArmament на её сущности.
+    // Без него новые корабли получали бы абстрактно сбалансированный набор,
+    // и выбор билда, сделанный игроком, не доезжал бы до верфи.
+    std::vector<FleetArmament> doctrine(empires, balancedArmament());
+    world.each<Empire>([&](Entity entity, Empire& empire) {
+        if (empire.id >= empires) return;
+        treasury[empire.id] = empire.alloys;
+        if (const FleetArmament* armament = world.get<FleetArmament>(entity)) {
+            doctrine[empire.id] = *armament;
+        }
     });
 
     world.each<StarSystem, Owner, BuildQueue>(
@@ -86,7 +95,7 @@ void systemProduction(World& world, const TickContext& context) {
 
             Fleet built{};
             fleetAdd(built, Hull(queue.hull), 1);
-            commands->spawnFleet(owner.empire, system.index, built);
+            commands->spawnFleet(owner.empire, system.index, built, &doctrine[owner.empire]);
 
             if (queue.remaining == 0) {
                 queue.hull = uint8_t(Hull::None);

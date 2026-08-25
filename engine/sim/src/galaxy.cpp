@@ -391,6 +391,7 @@ void Galaxy::spawnPlanets(World& world, const GalaxyParams& params) {
 // ---------------------------------------------------------------------------
 
 void Galaxy::generate(World& world, const GalaxyParams& params) {
+    seed_ = params.seed;
     placeSystems(params);
     linkSystems(params);
 

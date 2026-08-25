@@ -32,7 +32,9 @@ class World;
 class Commands {
 public:
     /// Создать флот в системе. Сущность появится при применении буфера.
-    void spawnFleet(uint32_t empire, uint32_t system, const Fleet& composition);
+    /// armament — вооружение новых кораблей; nullptr даёт сбалансированное.
+    void spawnFleet(uint32_t empire, uint32_t system, const Fleet& composition,
+                    const struct FleetArmament* armament = nullptr);
 
     /// Удалить сущность. Повторное удаление одной и той же безопасно.
     void destroy(Entity entity);
@@ -49,6 +51,8 @@ private:
         uint32_t empire;
         uint32_t system;
         Fleet composition;
+        uint8_t armament[8];   // FleetArmament, скопированный побайтово
+        bool hasArmament;
     };
 
     std::vector<SpawnFleet> spawns_;

@@ -1,12 +1,18 @@
 #include "pw/sim/commands.h"
 
+#include <cstring>
+
+#include "pw/sim/combat.h"
 #include "pw/sim/galaxy.h"
 #include "pw/sim/world.h"
 
 namespace pw::sim {
 
-void Commands::spawnFleet(uint32_t empire, uint32_t system, const Fleet& composition) {
-    spawns_.push_back(SpawnFleet{empire, system, composition});
+void Commands::spawnFleet(uint32_t empire, uint32_t system, const Fleet& composition,
+                          const FleetArmament* armament) {
+    SpawnFleet spawn{empire, system, composition, {}, armament != nullptr};
+    if (armament != nullptr) std::memcpy(spawn.armament, armament, sizeof(FleetArmament));
+    spawns_.push_back(spawn);
 }
 
 void Commands::destroy(Entity entity) {
@@ -25,6 +31,14 @@ void Commands::apply(World& world) {
         world.add<FleetLocation>(entity, FleetLocation{spawn.system, spawn.system, fx::zero()});
         world.add<MoveOrder>(entity, MoveOrder{kNoSystem, 0});
         world.add<Owner>(entity, Owner{spawn.empire, 0});
+        // Сбалансированное вооружение по умолчанию. Без него флот не попал бы
+        // в обход сражений вовсе и стал бы неуязвимым призраком.
+        // Новый корабль получает вооружение своей империи, а не абстрактно
+        // сбалансированное: иначе выбор билда, сделанный игроком, не доезжал
+        // бы до построенных кораблей вовсе.
+        FleetArmament armament = balancedArmament();
+        if (spawn.hasArmament) std::memcpy(&armament, spawn.armament, sizeof(FleetArmament));
+        world.add<FleetArmament>(entity, armament);
     }
 
     for (const Entity entity : destroys_) {

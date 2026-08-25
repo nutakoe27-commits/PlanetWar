@@ -52,11 +52,27 @@ void Presence::rebuild(World& world, uint32_t systemCount) {
                 return;
             }
 
-            ++entry.hostileCount;
             // Сильнейший чужой. При равенстве побеждает меньший номер
             // империи — порядок обхода не имеет права решать исход.
-            if (tonnage > entry.hostileTonnage ||
-                (tonnage == entry.hostileTonnage && owner.empire < entry.hostileEmpire)) {
+            const bool stronger =
+                tonnage > entry.hostileTonnage ||
+                (tonnage == entry.hostileTonnage && owner.empire < entry.hostileEmpire);
+
+            // Считаем РАЗНЫЕ империи. Держим две: этого хватает, чтобы
+            // отличить «единственный претендент» от «их несколько», а полный
+            // список рос бы как число систем на число империй.
+            if (entry.hostileCount == 0) {
+                entry.hostileCount = 1;
+                entry.hostileEmpire = owner.empire;
+                entry.hostileTonnage = tonnage;
+                return;
+            }
+            if (owner.empire != entry.hostileEmpire && owner.empire != entry.secondEmpire) {
+                if (entry.hostileCount == 1) entry.secondEmpire = owner.empire;
+                entry.hostileCount = 2;
+            }
+            if (stronger) {
+                if (entry.hostileEmpire != owner.empire) entry.secondEmpire = entry.hostileEmpire;
                 entry.hostileTonnage = tonnage;
                 entry.hostileEmpire = owner.empire;
             }

@@ -32,6 +32,7 @@ add_subdirectory(third_party)
 add_subdirectory(engine/core)
 add_subdirectory(engine/sim)
 add_subdirectory(samples/galaxy)
+add_subdirectory(samples/season)
 
 if(PW_BUILD_CLIENT)
     add_subdirectory(engine/platform)

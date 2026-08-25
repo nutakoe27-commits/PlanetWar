@@ -250,17 +250,6 @@ fx roundDamage(const Aggregate& attacker, const Aggregate& target,
     return max(fx::zero(), damage);
 }
 
-/// Пересчитать выживших: все классы теряют одинаковую долю.
-Fleet survivors(const Fleet& initial, fx fraction) {
-    fraction = clamp(fraction, fx::zero(), fx::one());
-    Fleet out{};
-    out.corvettes = uint32_t((fx::fromInt(initial.corvettes) * fraction).floorToInt());
-    out.destroyers = uint32_t((fx::fromInt(initial.destroyers) * fraction).floorToInt());
-    out.cruisers = uint32_t((fx::fromInt(initial.cruisers) * fraction).floorToInt());
-    out.battleships = uint32_t((fx::fromInt(initial.battleships) * fraction).floorToInt());
-    return out;
-}
-
 Fleet difference(const Fleet& before, const Fleet& after) {
     return Fleet{before.corvettes - after.corvettes, before.destroyers - after.destroyers,
                  before.cruisers - after.cruisers, before.battleships - after.battleships};
@@ -279,6 +268,71 @@ FleetArmament balancedArmament() {
     armament.doctrine = uint8_t(Doctrine::Line);
     return armament;
 }
+
+int64_t fleetHitPoints(const Fleet& fleet) {
+    const uint32_t counts[] = {0, fleet.corvettes, fleet.destroyers,
+                               fleet.cruisers, fleet.battleships};
+    int64_t total = 0;
+    for (int hull = 1; hull < int(Hull::Count); ++hull) {
+        total += int64_t(counts[hull]) * kHulls[hull].hitPoints;
+    }
+    return total;
+}
+
+/// Пересчитать выживших: потерянная прочность тратится на корабли, начиная
+/// с самых дешёвых.
+///
+/// Первая версия умножала на долю КОЛИЧЕСТВО каждого класса и округляла вниз.
+/// Это выглядело безобидно и ломало игру:
+///
+///   — единственный корабль класса погибал от любого урона. Флот 4/3/1/0
+///     получил 136 урона из 4200 (3%) — и потерял корвет, эсминец И
+///     единственный крейсер, то есть 57% тоннажа. Крупные корпуса в
+///     смешанном флоте становились бессмысленной тратой сплавов;
+///   — потери не сходились с уроном: снятый тоннаж не имел отношения к тому,
+///     сколько прочности выбил противник. Обмен переставал быть честным
+///     в обе стороны — сильный флот терял слишком много, слабый слишком мало.
+///
+/// Теперь потери — это ровно выбитая прочность, и тратится она на эскорт
+/// раньше, чем на крупные корпуса: лёгкие корабли для того во флоте и стоят.
+/// Ошибка округления снимается по правилу «половина корпуса — уже потеря»,
+/// иначе одинокий линкор пережил бы что угодно, кроме полного уничтожения.
+Fleet survivors(const Fleet& initial, fx fraction) {
+    fraction = clamp(fraction, fx::zero(), fx::one());
+
+    Fleet out = initial;
+    uint32_t* counts[] = {&out.corvettes, &out.destroyers, &out.cruisers, &out.battleships};
+
+    int64_t total = 0;
+    for (int hull = 1; hull < int(Hull::Count); ++hull) {
+        total += int64_t(*counts[hull - 1]) * kHulls[hull].hitPoints;
+    }
+    if (total == 0) return out;
+
+    // Выбитая прочность. Считаем через долю выживших, чтобы ноль означал
+    // именно полное уничтожение, без ошибок округления в последнем корабле.
+    const fx survivingPoints = fx::fromInt(total) * fraction;
+    int64_t lost = total - survivingPoints.floorToInt();
+    if (lost <= 0) return out;
+
+    for (int hull = 1; hull < int(Hull::Count); ++hull) {
+        const int64_t hp = kHulls[hull].hitPoints;
+        uint32_t& count = *counts[hull - 1];
+        while (count > 0 && lost >= hp) {
+            lost -= hp;
+            --count;
+        }
+        // Остаток меньше корпуса: добираем ближайшим округлением, но только
+        // если в этом классе ещё есть кого снимать.
+        if (count > 0 && lost > 0 && lost * 2 >= hp) {
+            lost -= hp;
+            --count;
+        }
+        if (lost <= 0) break;
+    }
+    return out;
+}
+
 
 uint32_t battleStrength(const Fleet& fleet, const FleetArmament&) {
     const uint32_t counts[] = {0, fleet.corvettes, fleet.destroyers,

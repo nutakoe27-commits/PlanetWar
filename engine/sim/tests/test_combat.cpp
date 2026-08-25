@@ -1,6 +1,9 @@
 #include "doctest.h"
 
+#include <cstdlib>
+
 #include "pw/sim/combat.h"
+#include "pw/sim/fleet.h"
 
 using namespace pw;
 using namespace pw::sim;
@@ -236,4 +239,119 @@ TEST_CASE("оценка: боевая сила растёт с флотом и �
     CHECK(battleStrength(Fleet{10, 0, 0, 0}, any) < battleStrength(Fleet{20, 0, 0, 0}, any));
     CHECK(battleStrength(Fleet{20, 0, 0, 0}, any) < battleStrength(Fleet{0, 0, 0, 20}, any));
     CHECK(battleStrength(Fleet{0, 0, 0, 0}, any) == 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Модель потерь
+//
+// Прогон сезона показал: флот 4/3/1/0 получил 136 урона из 4200 — три
+// процента — и потерял корвет, эсминец И единственный крейсер, то есть 57%
+// тоннажа. Причина: первая версия умножала на долю КОЛИЧЕСТВО кораблей
+// каждого класса и округляла вниз, поэтому единственный корабль класса
+// погибал от любого урона.
+//
+// Все 124 теста симуляции при этом проходили. Свойства ниже — те, которых
+// не хватало: они говорят о модели потерь, а не о формуле урона.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("потери: единственный крупный корабль переживает царапину") {
+    const Fleet fleet{4, 3, 1, 0};
+    const int64_t total = fleetHitPoints(fleet);
+    CHECK(total == 4 * 200 + 3 * 600 + 1600);
+
+    // Три процента урона — ровно тот случай из прогона сезона.
+    const fx fraction = fx::one() - fx::fromFraction(3, 100);
+    const Fleet left = survivors(fleet, fraction);
+    CHECK(left.cruisers == 1);
+    CHECK(fleetHitPoints(left) >= total - 200);
+}
+
+TEST_CASE("потери: снятая прочность равна выбитой") {
+    // Главное свойство модели: обмен честен в обе стороны. Ошибка не больше
+    // одного самого дешёвого корпуса — на меньшее целочисленные корабли
+    // не делятся.
+    const Fleet fleets[] = {
+        {10, 0, 0, 0}, {0, 5, 0, 0}, {0, 0, 3, 0}, {0, 0, 0, 2},
+        {8, 4, 2, 1},  {1, 1, 1, 1}, {40, 12, 5, 3}, {0, 0, 0, 1},
+    };
+    for (const Fleet& fleet : fleets) {
+        const int64_t total = fleetHitPoints(fleet);
+        for (int percent = 0; percent <= 100; ++percent) {
+            const fx fraction = fx::fromFraction(percent, 100);
+            const Fleet left = survivors(fleet, fraction);
+
+            const int64_t expectedLost = total - (fx::fromInt(total) * fraction).floorToInt();
+            const int64_t actualLost = total - fleetHitPoints(left);
+
+            CHECK(actualLost >= 0);
+            CHECK(actualLost <= total);
+            // Округление — не более чем на половину корпуса в каждую сторону,
+            // а самый дорогой корпус — линкор.
+            CHECK(std::llabs(actualLost - expectedLost) <= 4000);
+
+            // Ни один класс не может вырасти.
+            CHECK(left.corvettes <= fleet.corvettes);
+            CHECK(left.destroyers <= fleet.destroyers);
+            CHECK(left.cruisers <= fleet.cruisers);
+            CHECK(left.battleships <= fleet.battleships);
+        }
+    }
+}
+
+TEST_CASE("потери: эскорт гибнет раньше крупных корпусов") {
+    // Лёгкие корабли для того во флоте и стоят: они прикрывают дорогие
+    // корпуса. Если это не так, смешанный флот теряет смысл, а вместе с ним
+    // и выбор между массой и качеством.
+    const Fleet fleet{10, 5, 2, 1};
+    const int64_t total = fleetHitPoints(fleet);
+
+    // Снимаем ровно столько, сколько весят все корветы.
+    const int64_t corvetteMass = 10 * 200;
+    const fx fraction = fx::fromFraction(total - corvetteMass, total);
+    const Fleet left = survivors(fleet, fraction);
+
+    CHECK(left.corvettes == 0);
+    CHECK(left.destroyers == 5);
+    CHECK(left.cruisers == 2);
+    CHECK(left.battleships == 1);
+}
+
+TEST_CASE("потери: ноль прочности — флот уничтожен полностью") {
+    const Fleet fleets[] = {{10, 5, 2, 1}, {0, 0, 0, 1}, {1, 0, 0, 0}};
+    for (const Fleet& fleet : fleets) {
+        const Fleet left = survivors(fleet, fx::zero());
+        CHECK(fleetEmpty(left));
+    }
+}
+
+TEST_CASE("потери: полная прочность — флот цел") {
+    const Fleet fleet{10, 5, 2, 1};
+    const Fleet left = survivors(fleet, fx::one());
+    CHECK(left.corvettes == 10);
+    CHECK(left.destroyers == 5);
+    CHECK(left.cruisers == 2);
+    CHECK(left.battleships == 1);
+}
+
+TEST_CASE("бой: одинокий эсминец не уносит крейсер с эскортом") {
+    // Тот самый случай из прогона: 4/5/1/0 против 0/1/0/0. Проигравший
+    // обязан погибнуть, победитель — отделаться потерями по эскорту.
+    BattleSide big;
+    big.fleet = Fleet{4, 5, 1, 0};
+    big.armament = balancedArmament();
+    big.doctrine = Doctrine::Line;
+
+    BattleSide small;
+    small.fleet = Fleet{0, 1, 0, 0};
+    small.armament = balancedArmament();
+    small.doctrine = Doctrine::Line;
+
+    for (uint64_t seed = 0; seed < 32; ++seed) {
+        Rng rng(seed, /*stream=*/7);
+        const BattleResult result = resolveBattle(big, small, rng);
+        CHECK(result.outcome == 0);
+        CHECK(result.lossesA.cruisers == 0);
+        // Потерять больше трети тоннажа против одного эсминца невозможно.
+        CHECK(fleetTonnage(result.lossesA) * 3 < fleetTonnage(big.fleet));
+    }
 }

@@ -97,4 +97,15 @@ BattleResult resolveBattle(const BattleSide& a, const BattleSide& b, Rng& rng);
 /// Нужна интерфейсу и ботам, но НЕ решает исход — его решает контр-система.
 uint32_t battleStrength(const Fleet& fleet, const FleetArmament& armament);
 
+/// Суммарная боевая прочность флота.
+int64_t fleetHitPoints(const Fleet& fleet);
+
+/// Что осталось от флота, сохранившего долю `fraction` своей прочности.
+///
+/// Потери — это ровно выбитая прочность, потраченная на корабли, начиная
+/// с самых дешёвых: эскорт для того во флоте и стоит. Публична, потому что
+/// это отдельная модель со своими свойствами, и проверять их надо напрямую,
+/// а не сквозь прогон боя.
+Fleet survivors(const Fleet& fleet, fx fraction);
+
 }  // namespace pw::sim

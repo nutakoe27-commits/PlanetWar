@@ -170,6 +170,11 @@ public:
     void generate(World& world, const GalaxyParams& params);
 
     uint32_t systemCount() const { return uint32_t(systems_.size()); }
+
+    /// Сид сезона, от которого построена галактика. Бои сеются от него
+    /// вместе с номером системы и тиком: у каждого сражения свой поток
+    /// случайности, не зависящий от порядка обхода.
+    uint64_t seed() const { return seed_; }
     Entity systemEntity(uint32_t index) const { return systems_[index]; }
 
     /// Соседи системы по гиперлиниям.
@@ -226,6 +231,7 @@ private:
     std::vector<uint32_t> offsets_;    // размер systemCount + 1
     std::vector<uint32_t> adjacency_;
     uint32_t laneCount_ = 0;
+    uint64_t seed_ = 0;
 };
 
 /// Зарегистрировать компоненты галактики.
