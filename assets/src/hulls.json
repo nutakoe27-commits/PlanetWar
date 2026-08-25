@@ -1,0 +1,65 @@
+{
+  "_comment": [
+    "Спецификации корпусов. Эти же числа питают и геометрию в Blender, и",
+    "таблицу баланса: корвет с двумя оружейными слотами получает ровно две",
+    "турели на модели. Художник и балансировщик не могут разойтись, потому",
+    "что источник данных один.",
+    "",
+    "На Фазе 3 файл заменится на схему из pw_data (см. ADR-010), а генератор",
+    "начнёт читать её же. Формат полей уже совпадает со схемой ship_hull."
+  ],
+  "hulls": [
+    {
+      "id": "corvette",
+      "display_name": "Корвет",
+      "length": 1.0,
+      "beam": 0.36,
+      "height": 0.24,
+      "engines": 2,
+      "weapon_slots": 2,
+      "defense_slots": 1,
+      "utility_slots": 1,
+      "fins": 2,
+      "sprite_size": 64
+    },
+    {
+      "id": "destroyer",
+      "display_name": "Эсминец",
+      "length": 1.7,
+      "beam": 0.52,
+      "height": 0.32,
+      "engines": 2,
+      "weapon_slots": 4,
+      "defense_slots": 2,
+      "utility_slots": 2,
+      "fins": 2,
+      "sprite_size": 96
+    },
+    {
+      "id": "cruiser",
+      "display_name": "Крейсер",
+      "length": 2.6,
+      "beam": 0.78,
+      "height": 0.46,
+      "engines": 3,
+      "weapon_slots": 6,
+      "defense_slots": 4,
+      "utility_slots": 3,
+      "fins": 4,
+      "sprite_size": 128
+    },
+    {
+      "id": "battleship",
+      "display_name": "Линкор",
+      "length": 4.0,
+      "beam": 1.15,
+      "height": 0.66,
+      "engines": 4,
+      "weapon_slots": 10,
+      "defense_slots": 6,
+      "utility_slots": 4,
+      "fins": 4,
+      "sprite_size": 192
+    }
+  ]
+}
