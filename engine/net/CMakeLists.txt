@@ -8,7 +8,9 @@
 add_library(pw_net STATIC
     src/bitstream.cpp
     src/sequence.cpp
-    src/channel.cpp)
+    src/channel.cpp
+    src/socket.cpp
+    src/connection.cpp)
 
 target_include_directories(pw_net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pw_net PUBLIC pw_core)

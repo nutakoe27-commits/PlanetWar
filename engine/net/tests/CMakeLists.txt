@@ -2,7 +2,9 @@ add_executable(pw_net_tests
     main.cpp
     test_bitstream.cpp
     test_sequence.cpp
-    test_channel.cpp)
+    test_channel.cpp
+    test_socket.cpp
+    test_connection.cpp)
 
 target_link_libraries(pw_net_tests PRIVATE pw_net doctest)
 pw_configure_target(pw_net_tests)
