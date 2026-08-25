@@ -50,12 +50,16 @@ enum class PlanetClass : uint8_t {
 struct StarSystem {
     fx x, y;              // положение на карте галактики
     uint32_t seed;        // сид содержимого — от него зависят планеты
+    /// Свой номер в графе. Нужен обработчикам, которым иначе пришлось бы
+    /// ходить в Galaxy за обратным отображением «сущность -> индекс».
+    uint32_t index;
     uint8_t starClass;    // StarClass
     uint8_t planetCount;
     uint8_t ring;         // 0 — ядро, дальше кольца, последнее — фронтир
-    uint8_t reserved;     // явное дополнение до 24 байт
+    uint8_t reserved;
+    uint32_t reserved2;   // явное дополнение до 32 байт
 };
-static_assert(sizeof(StarSystem) == 24, "структура обязана быть без дыр");
+static_assert(sizeof(StarSystem) == 32, "структура обязана быть без дыр");
 
 /// Планета. Экономика на слотах и специализации (ADR-004).
 struct Planet {

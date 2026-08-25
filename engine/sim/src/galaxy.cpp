@@ -399,9 +399,10 @@ void Galaxy::generate(World& world, const GalaxyParams& params) {
     for (uint32_t index = 0; index < points_.size(); ++index) {
         const Entity entity = world.create();
         world.add<StarSystem>(entity, StarSystem{points_[index].x, points_[index].y,
-                                                 /*seed=*/0, uint8_t(StarClass::Red),
+                                                 /*seed=*/0, index,
+                                                 uint8_t(StarClass::Red),
                                                  /*planetCount=*/0, points_[index].ring,
-                                                 /*reserved=*/0});
+                                                 /*reserved=*/0, /*reserved2=*/0});
         systems_.push_back(entity);
     }
 
