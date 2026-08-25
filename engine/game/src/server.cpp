@@ -165,6 +165,12 @@ void Server::receive(const net::Address& from, const uint8_t* data, size_t size,
         if (sim::Owner* owner = world_.get<sim::Owner>(galaxy_.systemEntity(player.home))) {
             owner->empire = empire;
         }
+        // Столица считается принадлежащей игроку С САМОГО НАЧАЛА, а не
+        // «захваченной» им. Без этой строки первым, что видит вошедший,
+        // становится «система захвачена» о его собственном доме.
+        if (player.home < previousOwners_.size()) {
+            previousOwners_[player.home] = uint8_t(empire & 0xFFu);
+        }
         if (sim::SystemDefense* defense =
                 world_.get<sim::SystemDefense>(galaxy_.systemEntity(player.home))) {
             defense->readiness = defense->maxReadiness;
@@ -313,6 +319,22 @@ void Server::applyBuildShip(Player& player, const BuildShipMessage& message) {
         ++rejectedOrders_;
         return;
     }
+
+    // Без верфи система не строит флот вовсе. Раньше заказ принимался
+    // и молча не выполнялся: игрок жал клавишу, ничего не происходило,
+    // и понять почему было неоткуда. Молчаливый отказ — худший вид
+    // отказа, потому что человек повторяет одно и то же.
+    const std::vector<uint32_t> shipyards = sim::countBuildingsPerSystem(
+        world_, sim::Building::Shipyard, galaxy_.systemCount());
+    if (message.system >= shipyards.size() || shipyards[message.system] == 0) {
+        ++rejectedOrders_;
+        uint8_t buffer[32];
+        net::ByteWriter writer(buffer, sizeof(buffer));
+        writeNotice(writer, NoticeMessage{NoticeKind::OrderRejected, message.system});
+        if (!writer.overflowed()) player.connection.sendReliable(buffer, writer.size());
+        return;
+    }
+
     sim::enqueueBuild(*queue, sim::Hull(message.hull), message.count);
 }
 

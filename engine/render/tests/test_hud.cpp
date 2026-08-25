@@ -354,3 +354,12 @@ TEST_CASE("журнал: без сообщений панель не меняе�
     table.hud.build(table.client, Selection{}, 1280, 720, 0, table.frame);
     CHECK(table.frame.lines.size() == without);
 }
+
+TEST_CASE("панель: отсутствие верфи названо прямо") {
+    // Знать это игрок должен ДО того, как нажмёт заказ, а не после.
+    Table table;
+    Selection selection;
+    selection.system = table.client.capital();
+    table.build(selection);
+    CHECK(table.has("верфи нет"));
+}

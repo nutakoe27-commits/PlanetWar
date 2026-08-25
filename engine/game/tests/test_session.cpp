@@ -449,9 +449,15 @@ TEST_CASE("уведомления: захват системы доезжает 
 }
 
 TEST_CASE("уведомления: о своей столице при входе не сообщают") {
-    // Иначе игрок при подключении получал бы «система захвачена»
-    // о том, что и так его.
+    // Иначе первым, что видит вошедший, становится «система захвачена»
+    // о его собственном доме.
+    //
+    // Клиент подключается НЕ СРАЗУ, а к уже работающему серверу: именно
+    // так и бывает в жизни, и именно этот случай ломался. Первая версия
+    // теста подключала клиента в первую же миллисекунду, сервер не успевал
+    // снять исходное состояние, и дефект не проявлялся.
     Session session(120);
+    session.run(3000);   // сервер живёт сам по себе
     session.addClient("Михаил");
     session.run(3000);
 
@@ -586,4 +592,47 @@ TEST_CASE("уведомления: о бое узнают обе стороны,
     REQUIRE(secondHeard);
     // Один выиграл, другой проиграл — не оба одно и то же.
     CHECK(firstKind != secondKind);
+}
+
+TEST_CASE("приказ: заказ корабля без верфи отвергается вслух") {
+    // Раньше заказ принимался и молча не выполнялся: игрок жал клавишу,
+    // ничего не происходило, и понять почему было неоткуда. Молчаливый
+    // отказ — худший вид отказа, потому что человек повторяет одно
+    // и то же, считая, что промахнулся.
+    Session session(80);
+    session.addClient("Михаил");
+    session.run(2000);
+
+    Client& client = *session.clients[0];
+    client.takeEvents();
+
+    // Свежая столица без единого здания.
+    REQUIRE(client.orderBuildShip(client.capital(), sim::Hull::Corvette, 1));
+    session.run(2000);
+
+    bool told = false;
+    for (const ClientEvent& event : client.takeEvents()) {
+        if (event.kind == NoticeKind::OrderRejected) told = true;
+    }
+    CHECK(told);
+}
+
+TEST_CASE("приказ: с верфью заказ принимается") {
+    Session session(80);
+    session.addClient("Михаил");
+    session.run(2000);
+
+    Client& client = *session.clients[0];
+    const auto planets = client.planetsAt(client.capital());
+    REQUIRE_FALSE(planets.empty());
+    REQUIRE(client.orderBuildBuilding(planets.front().id, 0, sim::Building::Shipyard));
+    session.run(3000);
+    client.takeEvents();
+
+    REQUIRE(client.orderBuildShip(client.capital(), sim::Hull::Corvette, 1));
+    session.run(3000);
+
+    for (const ClientEvent& event : client.takeEvents()) {
+        CHECK(event.kind != NoticeKind::OrderRejected);
+    }
 }

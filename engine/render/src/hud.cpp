@@ -163,6 +163,22 @@ void Hud::build(const game::Client& client, const Selection& selection, int scre
         }
 
         const auto planets = client.planetsAt(index);
+
+        // Есть ли верфь. Без неё система не строит флот, и знать это
+        // игрок должен ДО того, как нажмёт заказ, а не после.
+        uint32_t shipyards = 0;
+        for (const auto& planet : planets) {
+            for (uint8_t slot = 0; slot < planet.slots; ++slot) {
+                if (planet.buildings[slot] == uint8_t(sim::Building::Shipyard)) ++shipyards;
+            }
+        }
+        if (view.owner == uint8_t(client.empire())) {
+            panel.push_back(shipyards > 0
+                                ? HudLine{"верфей " + number(shipyards) + " — флот строится",
+                                          kGood}
+                                : HudLine{"верфи нет — флот здесь не построить", kWarn});
+        }
+
         for (size_t order = 0; order < planets.size(); ++order) {
             const auto& planet = planets[order];
             // Стрелка отмечает планету, на которую пойдёт следующая
