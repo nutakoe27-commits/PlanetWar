@@ -60,6 +60,18 @@ const char* starName(uint8_t starClass) {
 
 }  // namespace
 
+void MessageLog::add(const std::string& text, const TextColor& color, int64_t now) {
+    entries_.push_back(Entry{text, color, now});
+    // Держим только последние: длинная лента съедает экран и внимание.
+    while (entries_.size() > kMaxVisible) entries_.erase(entries_.begin());
+}
+
+void MessageLog::update(int64_t now) {
+    while (!entries_.empty() && now - entries_.front().bornAt > kLifetime) {
+        entries_.erase(entries_.begin());
+    }
+}
+
 float Hud::lineHeight(int screenHeight) {
     // Доля высоты экрана, а не фиксированный размер: на 4K надпись
     // в 14 пикселей нечитаема, а на ноутбуке в 28 занимает пол-экрана.
@@ -74,6 +86,11 @@ void Hud::push(HudFrame& out, const std::string& text, float x, float y, float h
 
 void Hud::build(const game::Client& client, const Selection& selection, int screenWidth,
                 int screenHeight, HudFrame& out) const {
+    build(client, selection, screenWidth, screenHeight, /*now=*/0, out);
+}
+
+void Hud::build(const game::Client& client, const Selection& selection, int screenWidth,
+                int screenHeight, int64_t now, HudFrame& out) const {
     out.clear();
     if (!client.ready()) {
         push(out, "подключаюсь...", 16.0f, 16.0f, lineHeight(screenHeight), kDim);
@@ -145,11 +162,19 @@ void Hud::build(const game::Client& client, const Selection& selection, int scre
             panel.push_back(HudLine{"ОСАДА: " + number(view.siegeProgress) + "%", kWarn});
         }
 
-        for (const auto& planet : client.planetsAt(index)) {
-            std::string text = "планета " + number(planet.id) + ": слотов " +
-                               number(planet.slots) + ", свободно " +
-                               number(planet.freeSlots());
-            panel.push_back(HudLine{text, kDim});
+        const auto planets = client.planetsAt(index);
+        for (size_t order = 0; order < planets.size(); ++order) {
+            const auto& planet = planets[order];
+            // Стрелка отмечает планету, на которую пойдёт следующая
+            // постройка. Без неё игрок строит вслепую и не понимает,
+            // почему здание появилось не там, где он ждал.
+            const bool active = order == selection.planetIndex;
+            const std::string mark = active ? "> " : "  ";
+
+            panel.push_back(HudLine{mark + "планета " + number(int64_t(order) + 1) +
+                                        ": слотов " + number(planet.slots) + ", свободно " +
+                                        number(planet.freeSlots()),
+                                    active ? kNormal : kDim});
 
             std::string built;
             for (uint8_t slot = 0; slot < planet.slots; ++slot) {
@@ -157,18 +182,20 @@ void Hud::build(const game::Client& client, const Selection& selection, int scre
                 if (!built.empty()) built += ", ";
                 built += buildingName(planet.buildings[slot]);
             }
-            if (!built.empty()) panel.push_back(HudLine{"   " + built, kDim});
+            if (!built.empty()) panel.push_back(HudLine{"     " + built, kDim});
         }
 
         const auto own = client.fleetsAt(index);
         for (uint32_t id : own) {
             const auto& fleet = client.view().fleets.at(id);
+            const bool active = id == selection.fleet;
             panel.push_back(HudLine{
-                "флот " + number(id) + ": " + number(fleet.composition.corvettes) + " корв, " +
+                std::string(active ? "> " : "  ") + "флот " + number(id) + ": " +
+                    number(fleet.composition.corvettes) + " корв, " +
                     number(fleet.composition.destroyers) + " эсм, " +
                     number(fleet.composition.cruisers) + " крей, " +
                     number(fleet.composition.battleships) + " линк",
-                kGood});
+                active ? kGood : kDim});
         }
 
         // Панель растёт вверх от нижнего края: так её высота не влияет
@@ -177,6 +204,34 @@ void Hud::build(const game::Client& client, const Selection& selection, int scre
         for (const HudLine& line : panel) {
             push(out, line.text, margin, panelY, height, line.color);
             panelY += step;
+        }
+    }
+
+    // --- журнал событий: по центру сверху ---
+    //
+    // Именно там, куда игрок смотрит реже всего в спокойный момент и
+    // куда переводит взгляд, когда что-то случилось. Сбоку он спорил бы
+    // с ресурсами, снизу — с панелью системы.
+    if (messages_ != nullptr && !messages_->entries().empty()) {
+        float messageY = margin;
+        for (const MessageLog::Entry& entry : messages_->entries()) {
+            TextColor color = entry.color;
+            // Гаснет к концу жизни: угасающая строка не отвлекает,
+            // но ещё читается, если игрок обернулся.
+            const int64_t age = now - entry.bornAt;
+            const int64_t fadeFrom = MessageLog::kLifetime * 2 / 3;
+            if (now > 0 && age > fadeFrom) {
+                const float left = float(MessageLog::kLifetime - age) /
+                                   float(MessageLog::kLifetime - fadeFrom);
+                color.a *= std::clamp(left, 0.0f, 1.0f);
+            }
+
+            const float textWidth = font_ != nullptr
+                                        ? font_->width(entry.text, height)
+                                        : float(entry.text.size()) * height * 0.47f;
+            push(out, entry.text, (float(screenWidth) - textWidth) * 0.5f, messageY, height,
+                 color);
+            messageY += step;
         }
     }
 

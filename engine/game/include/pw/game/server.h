@@ -109,6 +109,14 @@ private:
     uint64_t rejectedOrders_ = 0;
 
     WorldView view_;
+
+    /// Владельцы систем на прошлом тике и живые флоты на прошлом тике.
+    ///
+    /// Нужны, чтобы заметить событие: система сменила хозяина, флот
+    /// пропал. Игрок обязан узнавать об этом сам, а не замечать
+    /// изменение на карте — в MMO он часто смотрит в другую её часть.
+    std::vector<uint8_t> previousOwners_;
+    std::vector<std::pair<uint32_t, uint32_t>> previousFleets_;   // сущность, империя
     /// Отказы, собранные в receive: отправлять оттуда некуда, поэтому
     /// они ждут ближайшего update.
     std::vector<OutgoingPacket> pendingRejects_;
@@ -120,6 +128,9 @@ private:
     void applyBuildShip(Player& player, const BuildShipMessage& message);
     void applyBuildBuilding(Player& player, const BuildBuildingMessage& message);
     void sendWelcome(Player& player);
+    /// Разослать уведомления о том, что изменилось за тик.
+    void notifyChanges();
+    void notify(uint32_t empire, NoticeKind kind, uint32_t system);
     /// Выбрать стартовую систему подальше от уже занятых.
     uint32_t pickHome();
 };

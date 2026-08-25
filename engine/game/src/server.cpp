@@ -354,6 +354,86 @@ void Server::step() {
     ++tick_;
 }
 
+void Server::notify(uint32_t empire, NoticeKind kind, uint32_t system) {
+    for (auto& [address, player] : players_) {
+        if (player.empire != empire) continue;
+        uint8_t buffer[32];
+        net::ByteWriter writer(buffer, sizeof(buffer));
+        writeNotice(writer, NoticeMessage{kind, system});
+        if (!writer.overflowed()) player.connection.sendReliable(buffer, writer.size());
+        return;
+    }
+}
+
+void Server::notifyChanges() {
+    const uint32_t systemCount = galaxy_.systemCount();
+    if (previousOwners_.size() != systemCount) {
+        previousOwners_.assign(systemCount, 0xFF);
+        // Первый проход только запоминает: иначе игрок при подключении
+        // получил бы уведомление о захвате собственной столицы.
+        world_.each<sim::StarSystem, sim::Owner>(
+            [&](sim::Entity, sim::StarSystem& system, sim::Owner& owner) {
+                if (system.index < systemCount) {
+                    previousOwners_[system.index] =
+                        uint8_t(owner.empire == sim::kNoEmpire ? 0xFFu : owner.empire & 0xFFu);
+                }
+            });
+        return;
+    }
+
+    // --- смена владельца ---
+    world_.each<sim::StarSystem, sim::Owner>(
+        [&](sim::Entity, sim::StarSystem& system, sim::Owner& owner) {
+            if (system.index >= systemCount) return;
+            const uint8_t now =
+                uint8_t(owner.empire == sim::kNoEmpire ? 0xFFu : owner.empire & 0xFFu);
+            const uint8_t before = previousOwners_[system.index];
+            if (now == before) return;
+
+            if (before != 0xFF) notify(before, NoticeKind::SystemLost, system.index);
+            if (now != 0xFF) notify(now, NoticeKind::SystemCaptured, system.index);
+            previousOwners_[system.index] = now;
+        });
+
+    // --- погибшие флоты ---
+    //
+    // Флот исчезает и от слияния, и от гибели в бою. Разделяем по тому,
+    // остался ли у империи флот в той же системе: слияние переносит
+    // корабли, гибель — нет.
+    std::vector<std::pair<uint32_t, uint32_t>> alive;
+    world_.each<sim::Fleet, sim::FleetLocation, sim::Owner>(
+        [&](sim::Entity entity, sim::Fleet& fleet, sim::FleetLocation& location,
+            sim::Owner& owner) {
+            if (sim::fleetEmpty(fleet)) return;
+            alive.emplace_back(entity.index, owner.empire);
+            (void)location;
+        });
+
+    for (const auto& [id, empire] : previousFleets_) {
+        bool stillThere = false;
+        for (const auto& [aliveId, aliveEmpire] : alive) {
+            if (aliveId == id) { stillThere = true; break; }
+            (void)aliveEmpire;
+        }
+        if (stillThere) continue;
+
+        // Если у империи стало меньше флотов, чем было, — это потеря;
+        // если столько же или больше, корабли просто перешли в другой
+        // отряд при слиянии.
+        uint32_t before = 0, after = 0;
+        for (const auto& [otherId, otherEmpire] : previousFleets_) {
+            if (otherEmpire == empire) ++before;
+            (void)otherId;
+        }
+        for (const auto& [otherId, otherEmpire] : alive) {
+            if (otherEmpire == empire) ++after;
+            (void)otherId;
+        }
+        if (after < before) notify(empire, NoticeKind::FleetDestroyed, 0);
+    }
+    previousFleets_.swap(alive);
+}
+
 void Server::update(int64_t now, std::vector<OutgoingPacket>& outgoing) {
     if (!running_) return;
     if (startedAt_ == 0) startedAt_ = now;
@@ -383,6 +463,7 @@ void Server::update(int64_t now, std::vector<OutgoingPacket>& outgoing) {
         behind = kMaxCatchUpTicks;
     }
     for (int64_t i = 0; i < behind; ++i) step();
+    if (behind > 0) notifyChanges();
 
     // Снапшоты и исходящие пакеты.
     for (auto it = players_.begin(); it != players_.end();) {

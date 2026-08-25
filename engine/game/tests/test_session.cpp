@@ -416,3 +416,64 @@ TEST_CASE("сессия: сервер отказывает, когда мест 
     CHECK(session.clients[2]->state() == net::ConnectionState::Failed);
     CHECK(session.clients[2]->rejectReason() == net::RejectReason::ServerFull);
 }
+
+// ---------------------------------------------------------------------------
+// Уведомления
+//
+// Игрок обязан узнавать о событии сам, а не замечать изменение на карте:
+// в MMO он часто смотрит в другую её часть, а то и вовсе не смотрит.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("уведомления: захват системы доезжает до игрока") {
+    Session session(150);
+    session.addClient("Михаил");
+    session.run(2000);
+
+    Client& client = *session.clients[0];
+    client.takeEvents();   // отбрасываем всё, что накопилось при входе
+
+    const uint32_t home = client.capital();
+    const uint32_t target = client.galaxy().neighbors(home)[0];
+    const uint32_t fleet = client.fleetsAt(home).front();
+    REQUIRE(client.orderMove(fleet, target));
+
+    session.run((sim::kClaimSeconds + 180) * 1000);
+    REQUIRE(client.view().systems[target].owner == uint8_t(client.empire()));
+
+    bool told = false;
+    for (const ClientEvent& event : client.takeEvents()) {
+        if (event.kind == NoticeKind::SystemCaptured && event.system == target) told = true;
+    }
+    CHECK(told);
+}
+
+TEST_CASE("уведомления: о своей столице при входе не сообщают") {
+    // Иначе игрок при подключении получал бы «система захвачена»
+    // о том, что и так его.
+    Session session(120);
+    session.addClient("Михаил");
+    session.run(3000);
+
+    for (const ClientEvent& event : session.clients[0]->takeEvents()) {
+        CHECK(event.kind != NoticeKind::SystemCaptured);
+    }
+}
+
+TEST_CASE("уведомления: слияние флотов не считается потерей") {
+    // Флот исчезает и от слияния, и от гибели. Путать их нельзя:
+    // ложное «флот уничтожен» страшнее пропущенного.
+    Session session(120);
+    session.addClient("Михаил");
+    session.run(2000);
+
+    Client& client = *session.clients[0];
+    client.takeEvents();
+
+    // Заказываем корабли: построенные отряды сольются со стартовым.
+    REQUIRE(client.orderBuildShip(client.capital(), sim::Hull::Corvette, 3));
+    session.run(120000);
+
+    for (const ClientEvent& event : client.takeEvents()) {
+        CHECK(event.kind != NoticeKind::FleetDestroyed);
+    }
+}

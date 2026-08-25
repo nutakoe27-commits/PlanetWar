@@ -140,7 +140,9 @@ void printUsage() {
         "  правая кнопка    панорамирование\n"
         "  левая кнопка     выделить систему\n"
         "  левая по цели    отправить выделенный флот\n"
-        "  1..8             построить здание в первом свободном слоте\n"
+        "  Tab              следующая планета системы\n"
+        "  Shift+Tab        следующий свой флот в системе\n"
+        "  1..8             построить здание на выбранной планете\n"
         "  Q W E R          заказать корвет/эсминец/крейсер/линкор\n"
         "  Пробел           показать всю галактику\n"
         "  Escape           выход\n");
@@ -291,7 +293,13 @@ int main(int argc, char** argv) {
 
     render::Hud hud;
     hud.setFont(&font);
+    render::MessageLog messages;
+    hud.setMessages(&messages);
     render::HudFrame hudFrame;
+
+    const render::TextColor kInfo{0.86f, 0.88f, 0.92f, 1.0f};
+    const render::TextColor kGoodMessage{0.62f, 0.84f, 0.52f, 1.0f};
+    const render::TextColor kBadMessage{0.88f, 0.45f, 0.45f, 1.0f};
 
     CameraControl camera;
     Input input;
@@ -329,9 +337,17 @@ int main(int argc, char** argv) {
         }
 
         for (const game::ClientEvent& event : client.takeEvents()) {
-            std::printf("· %s (система %u)\n", noticeText(event.kind), event.system);
-            std::fflush(stdout);
+            const bool bad = event.kind == game::NoticeKind::SystemLost ||
+                             event.kind == game::NoticeKind::BattleLost ||
+                             event.kind == game::NoticeKind::FleetDestroyed ||
+                             event.kind == game::NoticeKind::OrderRejected;
+            std::string text = noticeText(event.kind);
+            if (event.kind != game::NoticeKind::FleetDestroyed) {
+                text += " — система " + std::to_string(event.system);
+            }
+            messages.add(text, bad ? kBadMessage : kGoodMessage, now);
         }
+        messages.update(now);
 
         // --- камера ---
         //
@@ -399,12 +415,15 @@ int main(int argc, char** argv) {
                 // Второй клик по другой системе — это приказ. Ответ придёт
                 // снапшотом: клиент ничего не двигает сам.
                 if (client.orderMove(selectedFleet, under)) {
-                    std::printf("приказ: флот %u -> система %u\n", selectedFleet, under);
+                    messages.add("флот " + std::to_string(selectedFleet) + " идёт в систему " +
+                                     std::to_string(under),
+                                 kInfo, now);
                 }
                 selectedFleet = 0xFFFFFFFFu;
                 selection.system = under;
             } else {
                 selection.system = under;
+                selection.planetIndex = 0;
                 const auto own = client.fleetsAt(under);
                 selectedFleet = own.empty() ? 0xFFFFFFFFu : own.front();
 
@@ -417,27 +436,44 @@ int main(int argc, char** argv) {
 
         // --- приказы с клавиатуры ---
         if (client.ready() && selection.system < client.galaxy().systemCount()) {
+            const auto planets = client.planetsAt(selection.system);
+
+            // Tab переключает планету, Shift+Tab — свой флот. Строить
+            // и командовать вслепую нельзя: игрок должен видеть, на что
+            // подействует следующее нажатие.
+            if (input.wasPressed(Key::Tab) && !planets.empty()) {
+                const bool back = input.isDown(Key::LeftShift) || input.isDown(Key::RightShift);
+                if (back) {
+                    const auto own = client.fleetsAt(selection.system);
+                    if (!own.empty()) {
+                        size_t at = own.size();
+                        for (size_t i = 0; i < own.size(); ++i) {
+                            if (own[i] == selectedFleet) { at = i; break; }
+                        }
+                        selectedFleet = own[(at + 1) % own.size()];
+                    }
+                } else {
+                    selection.planetIndex =
+                        uint32_t((selection.planetIndex + 1) % planets.size());
+                }
+            }
+
             const Key buildKeys[] = {Key::Num1, Key::Num2, Key::Num3, Key::Num4,
                                      Key::Num5, Key::Num6, Key::Num7, Key::Num8};
             for (int i = 0; i < 8; ++i) {
                 if (!input.wasPressed(buildKeys[i])) continue;
-                // Первый свободный слот первой планеты: полноценный
-                // конструктор застройки — работа интерфейса Фазы 3,
-                // здесь важно, что путь «нажал — построилось» замкнут.
-                for (const auto& planet : client.planetsAt(selection.system)) {
-                    bool placed = false;
-                    for (uint8_t slot = 0; slot < planet.slots; ++slot) {
-                        if (planet.buildings[slot] != uint8_t(sim::Building::None)) continue;
-                        const sim::Building what = sim::Building(i + 1);
-                        if (client.orderBuildBuilding(planet.id, slot, what)) {
-                            std::printf("строю %s на планете %u, слот %u\n", buildingName(uint8_t(what)),
-                                        planet.id, slot);
-                            std::fflush(stdout);
-                        }
-                        placed = true;
-                        break;
+                if (selection.planetIndex >= planets.size()) continue;
+
+                const auto& planet = planets[selection.planetIndex];
+                for (uint8_t slot = 0; slot < planet.slots; ++slot) {
+                    if (planet.buildings[slot] != uint8_t(sim::Building::None)) continue;
+                    const sim::Building what = sim::Building(i + 1);
+                    if (client.orderBuildBuilding(planet.id, slot, what)) {
+                        messages.add(std::string("строю ") + buildingName(uint8_t(what)) +
+                                         " — планета " + std::to_string(selection.planetIndex + 1),
+                                     kInfo, now);
                     }
-                    if (placed) break;
+                    break;
                 }
             }
 
@@ -447,9 +483,9 @@ int main(int argc, char** argv) {
             for (int i = 0; i < 4; ++i) {
                 if (!input.wasPressed(shipKeys[i])) continue;
                 if (client.orderBuildShip(selection.system, hulls[i], 1)) {
-                    std::printf("заказан %s в системе %u\n", hullName(hulls[i]),
-                                selection.system);
-                    std::fflush(stdout);
+                    messages.add(std::string("заказан ") + hullName(hulls[i]) + " — система " +
+                                     std::to_string(selection.system),
+                                 kInfo, now);
                 }
             }
         }
@@ -479,7 +515,7 @@ int main(int argc, char** argv) {
         // Камера меняется между вызовами отрисовки — отдельного конвейера
         // для интерфейса не нужно. Начало в левом верхнем углу, ось Y
         // вниз, единица — пиксель: то есть обычные экранные координаты.
-        hud.build(client, selection, width, height, hudFrame);
+        hud.build(client, selection, width, height, now, hudFrame);
         if (!hudFrame.sprites.empty()) {
             rhi::Camera screen;
             screen.centerX = float(width) * 0.5f;
