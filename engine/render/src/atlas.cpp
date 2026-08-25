@@ -139,6 +139,8 @@ bool Atlas::load(const std::string& jsonPath) {
         if (!json.number("h", h, hullAt)) break;
 
         frame.rotation = uint32_t(rotation);
+        frame.x = int(x);
+        frame.y = int(y);
         frame.width = int(w);
         frame.height = int(h);
         frame.u0 = float(x) * inverseSize;

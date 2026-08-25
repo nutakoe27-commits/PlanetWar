@@ -33,8 +33,82 @@ TEST_CASE("атлас: описание из Blender читается") {
     CHECK(atlas.textureHeight() == 1024);
     CHECK(atlas.rotationSteps() == 8);
 
-    // Четыре корпуса на восемь направлений.
-    CHECK(atlas.frames().size() == 32);
+    // Четыре корпуса на восемь направлений плюс пять классов светил.
+    // Звезде хватает одного ракурса: шар одинаков со всех сторон, и печь
+    // для неё восемь поворотов — это восемь одинаковых кадров.
+    CHECK(atlas.frames().size() == 4 * 8 + 5);
+}
+
+TEST_CASE("атлас: у каждого класса светила есть свой кадр") {
+    Atlas atlas;
+    if (!loadShips(atlas)) return;
+
+    for (const char* star : {"star_red", "star_yellow", "star_blue", "star_neutron",
+                             "star_blackhole"}) {
+        CAPTURE(star);
+        const AtlasFrame* frame = atlas.frame(star, 0.0f);
+        REQUIRE(frame != nullptr);
+        CHECK(frame->width > 0);
+    }
+}
+
+TEST_CASE("атлас: звёзды НЕ принимают цвет империи") {
+    // Класс светила — свойство мира, а не игрока. Если маска акцента
+    // накроет звезду, все светила станут одного цвета, и класс перестанет
+    // читаться с карты. Первая версия ошиблась ровно здесь: маска красила
+    // ореол белым, и звёзды выходили одинаково белыми.
+    Atlas atlas;
+    if (!loadShips(atlas)) return;
+    if (atlas.accentMask().empty()) return;
+
+    const int width = atlas.textureWidth();
+    for (const AtlasFrame& frame : atlas.frames()) {
+        if (frame.hull.rfind("star_", 0) != 0) continue;
+        CAPTURE(frame.hull);
+
+        long accent = 0;
+        for (int y = frame.y; y < frame.y + frame.height; ++y) {
+            for (int x = frame.x; x < frame.x + frame.width; ++x) {
+                accent += atlas.accentMask()[size_t(y) * size_t(width) + size_t(x)].r;
+            }
+        }
+        // Порог, а не строгий ноль: рендер оставляет по краям геометрии
+        // единицы из 255 — шум округления sRGB, который глазу не виден
+        // и на цвет не влияет. Требовать точного нуля значило бы получить
+        // тест, падающий от смены версии Blender.
+        //
+        // Замер на текущем атласе: у звёзд средняя маска 0,08 из 255,
+        // у кораблей 12–15. Порог 2 лежит между ними с большим запасом
+        // в обе стороны.
+        const long pixels = long(frame.width) * long(frame.height);
+        CHECK(accent < pixels * 2);
+    }
+}
+
+TEST_CASE("атлас: корабли ПРИНИМАЮТ цвет империи") {
+    // Обратная сторона: если маска пуста и у кораблей, все флоты будут
+    // серыми, и владение флотом перестанет читаться.
+    Atlas atlas;
+    if (!loadShips(atlas)) return;
+    if (atlas.accentMask().empty()) return;
+
+    const int width = atlas.textureWidth();
+    for (const char* hull : {"corvette", "destroyer", "cruiser", "battleship"}) {
+        const AtlasFrame* frame = atlas.frame(hull, 0.0f);
+        REQUIRE(frame != nullptr);
+        CAPTURE(std::string(hull));
+
+        long accent = 0;
+        for (int y = frame->y; y < frame->y + frame->height; ++y) {
+            for (int x = frame->x; x < frame->x + frame->width; ++x) {
+                accent += atlas.accentMask()[size_t(y) * size_t(width) + size_t(x)].r;
+            }
+        }
+        // Существенно выше шума: акцент на корабле — это реальные пиксели,
+        // а не единицы округления по краям (замер: 12–15 против 0,08).
+        const long pixels = long(frame->width) * long(frame->height);
+        CHECK(accent > pixels * 5);
+    }
 }
 
 TEST_CASE("атлас: у каждого корпуса есть все направления") {

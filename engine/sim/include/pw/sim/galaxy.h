@@ -190,6 +190,8 @@ public:
     /// Сколько планет в системе. Задаёт её ценность, а значит и то,
     /// насколько заметной она должна быть на карте.
     uint8_t planetCount(uint32_t index) const { return points_[index].planets; }
+    /// Класс светила. Читается с карты и определяет, что в системе искать.
+    uint8_t starClass(uint32_t index) const { return points_[index].starClass; }
 
     /// Габарит галактики: половина стороны квадрата, накрывающего все
     /// системы. Нужен, чтобы камера при запуске показала карту целиком.
@@ -243,6 +245,7 @@ private:
         fx x, y;
         uint8_t ring;
         uint8_t planets = 0;
+        uint8_t starClass = 0;
     };
 
     std::vector<Point> points_;

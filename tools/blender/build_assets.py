@@ -32,6 +32,7 @@ import bpy  # noqa: E402
 import pw_atlas  # noqa: E402
 import pw_bake  # noqa: E402
 import pw_hulls  # noqa: E402
+import pw_stars  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC_DIR = os.path.join(ROOT, "assets", "src")
@@ -118,6 +119,44 @@ def build(quality: str, keep_frames: bool) -> int:
                 scene, obj, hull_id=spec.id, pass_name=pass_name,
                 steps=rotations, size=size, samples=samples, out_dir=WORK_DIR)
             sink.extend((spec.id, index, path) for index, path in enumerate(paths))
+
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    # --- звёзды ---
+    # Звезда на карте — главный элемент интерфейса: по ней читается
+    # владение, ценность системы и происходящее в ней. Поэтому она
+    # делается так же, как корабли, а не рисуется кругом из шейдера:
+    # в графике игры вектора нет.
+    print()
+    for star_class, core_radius, color, strength, halo in pw_stars.star_specs():
+        obj = pw_stars.build_star_object(star_class, core_radius, color, strength, halo)
+        bpy.context.view_layer.update()
+
+        extent = pw_bake.fit_ortho_scale(obj)
+        camera.data.ortho_scale = extent
+        size = sprite_size_for(extent, scale)
+
+        print(f"  звезда     {star_class:11s} "
+              f"{len(obj.data.polygons):5d} полигонов  спрайт {size}x{size}")
+
+        # Звезде хватает одного ракурса: шар одинаков со всех сторон, и
+        # печь для неё восемь поворотов — это восемь одинаковых кадров.
+        for pass_name, sink in ((pw_bake.PASS_ALBEDO, albedo_entries),
+                                (pw_bake.PASS_MASK, mask_entries)):
+            if pass_name == pw_bake.PASS_MASK:
+                # Звезда НЕ принимает цвет империи: её класс — свойство
+                # мира, а не игрока. Маска должна быть чёрной ЦЕЛИКОМ.
+                #
+                # Обычная маска красит второй слот белым — у корабля это
+                # акцент, а у звезды это ореол. Первая версия так и делала,
+                # и все звёзды на карте выходили одинаково белыми: класс
+                # светила переставал читаться вовсе.
+                pw_bake.swap_materials(
+                    obj, pw_bake.make_empty_mask_materials(len(obj.data.materials)))
+            paths = pw_bake.render_rotations(
+                scene, obj, hull_id=f"star_{star_class}", pass_name=pass_name,
+                steps=1, size=size, samples=samples, out_dir=WORK_DIR)
+            sink.extend((f"star_{star_class}", index, path) for index, path in enumerate(paths))
 
         bpy.data.objects.remove(obj, do_unlink=True)
 

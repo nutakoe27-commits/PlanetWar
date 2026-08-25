@@ -202,8 +202,33 @@ else
     ok "клиент собран"
     if ./build/client/bin/pw_render_tests >/tmp/pw_render.log 2>&1; then
         ok "$(grep 'test cases:' /tmp/pw_render.log | tr -s ' ')"
+        if ./build/client/bin/pw_render_view_tests >/tmp/pw_mapview.log 2>&1; then
+            ok "карта: $(grep 'test cases:' /tmp/pw_mapview.log | tr -s ' ' | sed 's/^\[doctest\] //')"
+        else
+            fail "проверки сборки карты не прошли"; tail -20 /tmp/pw_mapview.log
+        fi
         if ./build/client/bin/pw_triangle --out triangle.png --size 640 360 >/dev/null 2>&1; then
             ok "кадр отрисован в triangle.png — откройте и посмотрите"
+        fi
+
+        # Живая игра целиком: сервер, клиент, карта в PNG. Это последняя
+        # проверка перед тем, как сказать «работает»: она поднимает
+        # настоящий сервер, подключается настоящим клиентом через
+        # настоящие сокеты и рисует то, что игрок увидит на экране.
+        if [ -x ./build/client/bin/pw_server ]; then
+            ./build/client/bin/pw_server --port 27099 --systems 120 --report 0 \
+                >/tmp/pw_verify_server.log 2>&1 &
+            PW_SERVER_PID=$!
+            sleep 1
+            if ./build/client/bin/pw_game_client --port 27099 --name проверка \
+                    --shot galaxy_map.png --shot-after 4 --width 1280 --height 720 \
+                    >/tmp/pw_mapshot.log 2>&1; then
+                ok "$(grep 'карта отрисована' /tmp/pw_mapshot.log)"
+            else
+                fail "клиент не смог отрисовать карту"; tail -10 /tmp/pw_mapshot.log
+            fi
+            kill "$PW_SERVER_PID" 2>/dev/null
+            wait "$PW_SERVER_PID" 2>/dev/null
         fi
     else
         fail "автопроверка рендера не прошла"

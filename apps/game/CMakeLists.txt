@@ -1,0 +1,3 @@
+add_executable(pw_game_client main.cpp)
+target_link_libraries(pw_game_client PRIVATE pw_render pw_platform)
+pw_configure_target(pw_game_client)

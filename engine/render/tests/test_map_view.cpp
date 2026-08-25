@@ -57,22 +57,61 @@ TEST_CASE("карта: каждая гиперлиния рисуется ров
     CHECK(scene.lineCount() == scene.galaxy.laneCount());
 }
 
-TEST_CASE("карта: владение видно цветом") {
+TEST_CASE("карта: владение показано кольцом, а не цветом самой звезды") {
+    // Цвет империи и класс светила — два разных факта, и смешивать их
+    // в одном пикселе значит потерять оба: голубой гигант у янтарной
+    // империи выглядел бы как красный карлик у неё же. А класс — это
+    // ценность системы, ради которой за неё и воюют.
     Scene scene(30);
+    scene.build();
+    const size_t withoutOwners = scene.lineCount();
+
     scene.view.systems[5].owner = 0;
     scene.view.systems[6].owner = 3;
     scene.build(/*empire=*/0);
 
-    // Спрайты систем идут в порядке индексов и лежат первыми.
-    const EmpireColor& mine = empireColor(0);
-    const EmpireColor& theirs = empireColor(3);
-    CHECK(scene.frame.sprites[5].r == doctest::Approx(mine.r));
-    CHECK(scene.frame.sprites[6].r == doctest::Approx(theirs.r));
+    // Звёзды остались белыми: цвет придёт из текстуры класса.
+    CHECK(scene.frame.sprites[5].r == doctest::Approx(1.0f));
+    CHECK(scene.frame.sprites[5].g == doctest::Approx(1.0f));
+    CHECK(scene.frame.sprites[5].b == doctest::Approx(1.0f));
 
-    // Ничья система — нейтральным и приглушённо: она не должна спорить
-    // за внимание с занятой.
-    CHECK(scene.frame.sprites[0].r == doctest::Approx(neutralColor().r));
-    CHECK(scene.frame.sprites[0].a < scene.frame.sprites[5].a);
+    // Зато появились кольца владения.
+    CHECK(scene.lineCount() > withoutOwners);
+}
+
+TEST_CASE("карта: кольцо владения красится цветом империи") {
+    Scene scene(30);
+    scene.view.systems[5].owner = 3;
+    scene.build(/*empire=*/0);
+
+    const EmpireColor& theirs = empireColor(3);
+    const float x = float(scene.galaxy.positionX(5).toDouble());
+    const float y = float(scene.galaxy.positionY(5).toDouble());
+
+    // Ищем вершину кольца: рядом с системой и нужного цвета.
+    bool found = false;
+    for (const auto& vertex : scene.frame.lines) {
+        if (std::fabs(vertex.x - x) > 40.0f || std::fabs(vertex.y - y) > 40.0f) continue;
+        if (std::fabs(vertex.r - theirs.r) > 0.01f) continue;
+        if (std::fabs(vertex.g - theirs.g) > 0.01f) continue;
+        found = true;
+        break;
+    }
+    CHECK(found);
+}
+
+TEST_CASE("карта: класс светила виден на карте") {
+    // Класс — это ценность системы: голубой гигант богат энергией,
+    // чёрная дыра ценнейшая. Игрок обязан читать это с карты, не
+    // открывая систему.
+    Scene scene(200);
+    std::set<uint8_t> classes;
+    for (uint32_t index = 0; index < scene.galaxy.systemCount(); ++index) {
+        classes.insert(scene.galaxy.starClass(index));
+    }
+    // Галактика на двести систем обязана содержать хотя бы три класса,
+    // иначе разведка теряет смысл.
+    CHECK(classes.size() >= 3);
 }
 
 TEST_CASE("карта: цвета империй различимы по светлоте") {
@@ -110,9 +149,34 @@ TEST_CASE("карта: флот виден и стоит в своей сист�
     scene.build();
     REQUIRE(scene.spriteCount() == 31);   // тридцать звёзд и флот
 
+    // Стоящий флот смещён от звезды: в центре системы он накрывал бы её
+    // собой, и игрок переставал видеть класс светила и владение — ровно
+    // то, по чему принимает решение.
     const auto& sprite = scene.frame.sprites.back();
-    CHECK(sprite.x == doctest::Approx(float(scene.galaxy.positionX(7).toDouble())));
-    CHECK(sprite.y == doctest::Approx(float(scene.galaxy.positionY(7).toDouble())));
+    const float starX = float(scene.galaxy.positionX(7).toDouble());
+    const float starY = float(scene.galaxy.positionY(7).toDouble());
+    CHECK(sprite.x > starX);
+    CHECK(sprite.x - starX < 40.0f);
+    CHECK(sprite.y == doctest::Approx(starY));
+}
+
+TEST_CASE("карта: флот не крупнее системы, за которую воюют") {
+    // Система — то, за что воюют, флот — то, чем воюют. Спутать их
+    // на карте нельзя. Первая версия брала размер спрайта из ширины
+    // испечённого кадра, и флот выходил втрое крупнее звезды.
+    Scene scene(30);
+    game::FleetView fleet;
+    fleet.id = 1;
+    fleet.empire = 0;
+    fleet.system = 7;
+    fleet.nextSystem = 7;
+    fleet.composition = sim::Fleet{0, 0, 0, 40};   // сорок линкоров
+    scene.view.fleets[1] = fleet;
+    scene.build();
+
+    const auto& ship = scene.frame.sprites.back();
+    const auto& star = scene.frame.sprites[7];
+    CHECK(ship.halfWidth <= star.halfWidth * 2.0f);
 }
 
 TEST_CASE("карта: летящий флот стоит между узлами ровно там, где сказал сервер") {

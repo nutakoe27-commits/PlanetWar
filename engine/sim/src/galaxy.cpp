@@ -357,6 +357,7 @@ void Galaxy::spawnPlanets(World& world, const GalaxyParams& params) {
         else if (roll < (core ? 70u : 62u)) starClass = StarClass::Yellow;
         star->seed = uint32_t(systemSeed);
         star->starClass = uint8_t(starClass);
+        points_[index].starClass = uint8_t(starClass);
 
         // Число планет. У чёрных дыр их нет — система ценна сама по себе.
         uint32_t planets = 0;

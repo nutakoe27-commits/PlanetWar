@@ -53,6 +53,7 @@ if(PW_BUILD_CLIENT)
     add_subdirectory(engine/platform)
     add_subdirectory(engine/rhi)
     add_subdirectory(engine/render)
+    add_subdirectory(apps/game)
     add_subdirectory(samples/triangle)
 endif()
 

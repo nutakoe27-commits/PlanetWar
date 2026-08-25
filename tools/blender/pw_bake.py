@@ -105,6 +105,28 @@ def make_mask_materials() -> list[bpy.types.Material]:
     return made
 
 
+def make_empty_mask_materials(count: int) -> list[bpy.types.Material]:
+    """Полностью чёрная маска на все слоты объекта.
+
+    Нужна тем, кто НЕ принимает цвет империи: звёзды, аномалии, значки
+    мира. Обычная маска красит второй слот белым — у корабля это акцент,
+    а у звезды это ореол, и звезда целиком становилась белой.
+    """
+    made = []
+    for index in range(max(1, count)):
+        mat = bpy.data.materials.new(f"pw_mask_empty_{index}")
+        mat.use_nodes = True
+        tree = mat.node_tree
+        tree.nodes.clear()
+        output = tree.nodes.new("ShaderNodeOutputMaterial")
+        emission = tree.nodes.new("ShaderNodeEmission")
+        emission.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+        emission.inputs["Strength"].default_value = 1.0
+        tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
+        made.append(mat)
+    return made
+
+
 def swap_materials(obj, materials: list[bpy.types.Material]) -> None:
     for index, mat in enumerate(materials):
         if index < len(obj.data.materials):
