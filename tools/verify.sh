@@ -130,6 +130,7 @@ run_suite() {
 
 run_suite pw_core_tests "ядро"
 run_suite pw_sim_tests  "симуляция"
+run_suite pw_net_tests  "сеть"
 
 # ---------------------------------------------------------------------------
 step "Детерминизм симуляции"

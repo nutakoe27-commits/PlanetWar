@@ -28,9 +28,21 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(PwTarget)
 include(PwVulkan)
 
+# enable_testing() ОБЯЗАН стоять до подключения модулей.
+#
+# add_test() регистрирует тест, только если тестирование уже включено в этой
+# точке. Пока вызов стоял ниже, pw_sim_tests и pw_net_tests собирались, но
+# в ctest не попадали — а матрица CI запускает именно ctest. То есть 130
+# тестов симуляции и 47 тестов сети не выполнялись ни на Windows, ни на
+# macOS, и зелёный CI это никак не показывал.
+if(PW_BUILD_TESTS)
+    enable_testing()
+endif()
+
 add_subdirectory(third_party)
 add_subdirectory(engine/core)
 add_subdirectory(engine/sim)
+add_subdirectory(engine/net)
 add_subdirectory(samples/galaxy)
 add_subdirectory(samples/season)
 
@@ -41,7 +53,6 @@ if(PW_BUILD_CLIENT)
 endif()
 
 if(PW_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(engine/core/tests)
 endif()
 

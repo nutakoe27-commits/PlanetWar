@@ -78,6 +78,36 @@ else
     printf '  %sпропущено: pw_sim ещё не написан%s\n' "$DIM" "$OFF"
 fi
 
+# --- 6. pw_net не знает правил игры ---
+# Зачем: транспорт переносит байты, а что в них — дело слоя выше. Из этого
+# следует, что протокол можно заменить (в docs/03 сказано прямо, что решение
+# про UDP пересматриваемое), не трогая симуляцию. Обратное тоже важно: как
+# только транспорт начнёт знать про флоты, симуляцию нельзя будет прогнать
+# без сети — ни в CI, ни в реплее.
+if [ -d engine/net ]; then
+    BAD_NET=$(includes engine/net/include engine/net/src 2>/dev/null \
+        | grep -oE '[<"]pw/[^>"]+[>"]' \
+        | tr -d '<>"' | grep -vE '^pw/(core|net)/' || true)
+    if [ -n "$BAD_NET" ]; then
+        break_ "pw_net зависит не только от pw_core:"; echo "$BAD_NET" | sort -u | sed 's/^/       /'
+    else
+        check "pw_net зависит только от pw_core"
+    fi
+
+    # --- 7. Внутри pw_net нет плавающей точки ---
+    # Зачем: то же, что и в pw_sim, плюс своё — число, ушедшее в пакет
+    # как float, прочитается на другой машине иначе, и клиенты разойдутся
+    # не в расчётах, а прямо на проводе.
+    NET_FLOATS=$(grep -rnE '^[^/]*\b(float|double)\b' \
+        engine/net/include engine/net/src --include=*.h --include=*.cpp 2>/dev/null \
+        | grep -vE '//|/\*' || true)
+    if [ -n "$NET_FLOATS" ]; then
+        break_ "в pw_net найдена плавающая точка:"; echo "$NET_FLOATS" | head -10 | sed 's/^/       /'
+    else
+        check "в протоколе нет плавающей точки"
+    fi
+fi
+
 # --- 6. Сгенерированные файлы никто не правил руками ---
 if command -v python3 >/dev/null 2>&1; then
     python3 tools/gen_trig_tables.py >/dev/null 2>&1
