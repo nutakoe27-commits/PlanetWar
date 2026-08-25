@@ -15,6 +15,14 @@ add_library(pw_net STATIC
 target_include_directories(pw_net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pw_net PUBLIC pw_core)
 
+# Windows держит сокеты в отдельной библиотеке, и без неё сборка падает
+# на четырнадцати неразрешённых символах. На Unix сокеты в libc, поэтому
+# ничего подключать не нужно — и именно поэтому строку легко забыть:
+# у разработчика на Linux всё собирается, а у игрока на Windows нет.
+if(WIN32)
+    target_link_libraries(pw_net PUBLIC ws2_32)
+endif()
+
 pw_configure_target(pw_net)
 add_library(pw::net ALIAS pw_net)
 

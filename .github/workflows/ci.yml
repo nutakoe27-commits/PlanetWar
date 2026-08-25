@@ -163,13 +163,13 @@ jobs:
         run: ./build/render/bin/pw_render_tests
 
       - name: Проверки сборки карты
-        run: ./build/client/bin/pw_render_view_tests
+        run: ./build/render/bin/pw_render_view_tests
       - name: "Живая игра: сервер, клиент, карта в PNG"
         run: |
-          ./build/client/bin/pw_server --port 27099 --systems 120 --report 0 &
+          ./build/render/bin/pw_server --port 27099 --systems 120 --report 0 &
           SERVER=$!
           sleep 1
-          ./build/client/bin/pw_game_client --port 27099 --name ci \
+          ./build/render/bin/pw_game_client --port 27099 --name ci \
             --shot galaxy_map.png --shot-after 4 --width 1280 --height 720
           kill $SERVER
       - name: Отрисовать кадр в файл
