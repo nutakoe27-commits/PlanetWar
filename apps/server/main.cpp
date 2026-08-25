@@ -9,6 +9,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <string>
 #include <thread>
 #include <vector>
@@ -41,7 +42,9 @@ void printUsage() {
         "  --systems <n>    размер галактики (по умолчанию 200)\n"
         "  --seed <n>       сид сезона\n"
         "  --players <n>    сколько игроков принимать (по умолчанию 8)\n"
-        "  --report <сек>   как часто печатать состояние (0 — не печатать)\n");
+        "  --report <сек>   как часто печатать состояние (0 — не печатать)\n"
+        "  --speed <n>      во сколько раз ускорить игровое время\n"
+        "                   (для оценки и отладки; сезон рассчитан на 1)\n");
 }
 
 }  // namespace
@@ -66,6 +69,8 @@ int main(int argc, char** argv) {
             config.maxPlayers = uint32_t(std::atoi(argv[++i]));
         } else if (arg == "--report" && i + 1 < argc) {
             reportSeconds = std::atoi(argv[++i]);
+        } else if (arg == "--speed" && i + 1 < argc) {
+            config.speed = uint32_t(std::max(1, std::atoi(argv[++i])));
         } else {
             printUsage();
             return arg == "--help" ? 0 : 2;
@@ -95,6 +100,9 @@ int main(int argc, char** argv) {
     std::printf("  галактика   %u систем, сид 0x%llX\n", server.galaxy().systemCount(),
                 static_cast<unsigned long long>(config.galaxy.seed));
     std::printf("  мест        %u\n", config.maxPlayers);
+    if (config.speed > 1) {
+        std::printf("  скорость    x%u — игровое время ускорено\n", config.speed);
+    }
     std::printf("  остановка   Ctrl+C\n\n");
 
     int64_t nextReport = reportSeconds * 1000;

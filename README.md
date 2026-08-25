@@ -104,6 +104,10 @@ sudo apt install cmake ninja-build libvulkan-dev glslang-tools mesa-vulkan-drive
 # терминал 1 — сервер
 ./build/client/bin/pw_server --systems 200 --players 8
 
+# то же, но игровое время в двадцать раз быстрее — чтобы посмотреть,
+# как разворачивается партия, не ожидая шесть минут за каждую проверку
+./build/client/bin/pw_server --systems 200 --speed 20
+
 # терминал 2 — клиент с окном
 ./build/client/bin/pw_game_client --name Михаил
 ```

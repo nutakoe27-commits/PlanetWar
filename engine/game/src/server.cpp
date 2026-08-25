@@ -395,42 +395,34 @@ void Server::notifyChanges() {
             previousOwners_[system.index] = now;
         });
 
-    // --- погибшие флоты ---
+    // --- потери флота ---
     //
-    // Флот исчезает и от слияния, и от гибели в бою. Разделяем по тому,
-    // остался ли у империи флот в той же системе: слияние переносит
-    // корабли, гибель — нет.
+    // Считаем ТОННАЖ, а не число отрядов.
+    //
+    // Первая версия считала отряды и слала «флот уничтожен» при обычном
+    // слиянии: два отряда становятся одним, количество падает, а не
+    // потеряно ни одного корабля. Ложная тревога хуже пропущенной —
+    // игрок бросает дела и летит спасать то, что цело.
+    //
+    // Тоннаж при слиянии сохраняется точно: это проверяется отдельным
+    // инвариантом в ночном прогоне. Значит его падение — это ровно
+    // потеря, и ничего больше.
     std::vector<std::pair<uint32_t, uint32_t>> alive;
-    world_.each<sim::Fleet, sim::FleetLocation, sim::Owner>(
-        [&](sim::Entity entity, sim::Fleet& fleet, sim::FleetLocation& location,
-            sim::Owner& owner) {
-            if (sim::fleetEmpty(fleet)) return;
-            alive.emplace_back(entity.index, owner.empire);
-            (void)location;
-        });
+    std::vector<uint32_t> tonnage(config_.maxPlayers + 1, 0);
+    world_.each<sim::Fleet, sim::Owner>([&](sim::Entity entity, sim::Fleet& fleet,
+                                            sim::Owner& owner) {
+        if (sim::fleetEmpty(fleet)) return;
+        alive.emplace_back(entity.index, owner.empire);
+        if (owner.empire < tonnage.size()) tonnage[owner.empire] += sim::fleetTonnage(fleet);
+    });
 
-    for (const auto& [id, empire] : previousFleets_) {
-        bool stillThere = false;
-        for (const auto& [aliveId, aliveEmpire] : alive) {
-            if (aliveId == id) { stillThere = true; break; }
-            (void)aliveEmpire;
+    if (previousTonnage_.size() == tonnage.size()) {
+        for (size_t empire = 0; empire < tonnage.size(); ++empire) {
+            if (tonnage[empire] >= previousTonnage_[empire]) continue;
+            notify(uint32_t(empire), NoticeKind::FleetDestroyed, 0);
         }
-        if (stillThere) continue;
-
-        // Если у империи стало меньше флотов, чем было, — это потеря;
-        // если столько же или больше, корабли просто перешли в другой
-        // отряд при слиянии.
-        uint32_t before = 0, after = 0;
-        for (const auto& [otherId, otherEmpire] : previousFleets_) {
-            if (otherEmpire == empire) ++before;
-            (void)otherId;
-        }
-        for (const auto& [otherId, otherEmpire] : alive) {
-            if (otherEmpire == empire) ++after;
-            (void)otherId;
-        }
-        if (after < before) notify(empire, NoticeKind::FleetDestroyed, 0);
     }
+    previousTonnage_ = tonnage;
     previousFleets_.swap(alive);
 
     // --- сражения ---
@@ -477,13 +469,16 @@ void Server::update(int64_t now, std::vector<OutgoingPacket>& outgoing) {
 
     // Симуляция тикает по СВОИМ часам, а не по числу вызовов update:
     // иначе сервер на медленной машине играл бы в замедленную игру.
-    const int64_t wanted = (now - startedAt_) / kTickMilliseconds;
+    const int64_t speed = int64_t(config_.speed == 0 ? 1u : config_.speed);
+    const int64_t wanted = (now - startedAt_) * speed / kTickMilliseconds;
     int64_t behind = wanted - int64_t(tick_);
-    if (behind > kMaxCatchUpTicks) {
+    // Догоняем не больше, чем позволяет скорость: при ускорении в двадцать
+    // раз двадцать тиков за вызов — это норма, а не отставание.
+    if (behind > kMaxCatchUpTicks * speed) {
         // Признаём потерянное время вместо того, чтобы догонять его в
         // одном вызове и повиснуть ещё раз.
-        startedAt_ = now - int64_t(tick_) * kTickMilliseconds;
-        behind = kMaxCatchUpTicks;
+        startedAt_ = now - int64_t(tick_) * kTickMilliseconds / speed;
+        behind = kMaxCatchUpTicks * speed;
     }
     for (int64_t i = 0; i < behind; ++i) step();
     if (behind > 0) notifyChanges();

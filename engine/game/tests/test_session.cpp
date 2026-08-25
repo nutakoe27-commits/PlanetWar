@@ -1,5 +1,6 @@
 #include "doctest.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -460,8 +461,13 @@ TEST_CASE("уведомления: о своей столице при вход�
 }
 
 TEST_CASE("уведомления: слияние флотов не считается потерей") {
-    // Флот исчезает и от слияния, и от гибели. Путать их нельзя:
-    // ложное «флот уничтожен» страшнее пропущенного.
+    // Ложная тревога хуже пропущенной: игрок бросает дела и летит
+    // спасать то, что цело.
+    //
+    // Первая версия считала ОТРЯДЫ и слала «флот уничтожен» при каждом
+    // слиянии: два отряда становятся одним, количество падает, а не
+    // потеряно ни одного корабля. Тест обязан это ловить, поэтому
+    // проверяет, что слияние действительно произошло.
     Session session(120);
     session.addClient("Михаил");
     session.run(2000);
@@ -469,9 +475,49 @@ TEST_CASE("уведомления: слияние флотов не считае
     Client& client = *session.clients[0];
     client.takeEvents();
 
-    // Заказываем корабли: построенные отряды сольются со стартовым.
-    REQUIRE(client.orderBuildShip(client.capital(), sim::Hull::Corvette, 3));
-    session.run(120000);
+    const auto countFleets = [&] {
+        uint32_t total = 0;
+        for (const auto& [id, fleet] : client.view().fleets) {
+            if (fleet.empire == uint8_t(client.empire())) ++total;
+        }
+        return total;
+    };
+    const auto totalTonnage = [&] {
+        uint32_t total = 0;
+        for (const auto& [id, fleet] : client.view().fleets) {
+            if (fleet.empire != uint8_t(client.empire())) continue;
+            total += sim::fleetTonnage(fleet.composition);
+        }
+        return total;
+    };
+
+    // Сначала верфь: без неё система не имеет права строить флот,
+    // и заказ просто не выполнится. Заодно шахты и литейная — иначе
+    // стартовых сплавов не хватит на шесть корветов.
+    const auto planets = client.planetsAt(client.capital());
+    REQUIRE_FALSE(planets.empty());
+    const uint32_t planet = planets.front().id;
+    REQUIRE(planets.front().slots >= 4);
+
+    REQUIRE(client.orderBuildBuilding(planet, 0, sim::Building::Shipyard));
+    REQUIRE(client.orderBuildBuilding(planet, 1, sim::Building::Mine));
+    REQUIRE(client.orderBuildBuilding(planet, 2, sim::Building::Mine));
+    REQUIRE(client.orderBuildBuilding(planet, 3, sim::Building::Foundry));
+    session.run(5000);
+
+    REQUIRE(client.orderBuildShip(client.capital(), sim::Hull::Corvette, 6));
+
+    const uint32_t tonnageBefore = totalTonnage();
+    for (int round = 0; round < 60; ++round) session.run(10000);
+
+    // Слияние наблюдаем по РЕЗУЛЬТАТУ, а не по мгновенному состоянию:
+    // построенный корабль сливается в следующем же тике, и поймать
+    // промежуточный момент выборкой раз в десять секунд нельзя.
+    //
+    // Шесть новых кораблей без слияния дали бы шесть отрядов. Отряд
+    // остался один — значит слияние произошло, причём многократно.
+    CHECK(totalTonnage() > tonnageBefore);
+    CHECK(countFleets() <= 2);
 
     for (const ClientEvent& event : client.takeEvents()) {
         CHECK(event.kind != NoticeKind::FleetDestroyed);
