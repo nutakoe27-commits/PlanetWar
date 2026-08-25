@@ -17,6 +17,16 @@ class Galaxy;
 /// «Никуда» — и для системы, и для цели приказа.
 inline constexpr uint32_t kNoSystem = 0xFFFFFFFFu;
 
+/// Класс корпуса. Нужен там, где корабль ещё не построен и состава нет.
+enum class Hull : uint8_t {
+    None = 0,
+    Corvette,
+    Destroyer,
+    Cruiser,
+    Battleship,
+    Count
+};
+
 /// Состав флота. Отдельные корабли сущностями НЕ являются.
 ///
 /// Это то самое решение, которое избавляет нас от замедления времени
@@ -30,6 +40,12 @@ struct Fleet {
     uint32_t battleships;
 };
 static_assert(sizeof(Fleet) == 16, "структура обязана быть без дыр");
+
+/// Стоимость корпуса в сплавах.
+uint32_t hullCost(Hull hull);
+
+/// Добавить корабли заданного класса к флоту.
+void fleetAdd(Fleet& fleet, Hull hull, uint32_t count = 1);
 
 /// Где флот находится.
 ///

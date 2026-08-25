@@ -36,6 +36,7 @@ enum class Building : uint8_t {
     Laboratory,   // исследования
     TradeHub,     // энергия и влияние
     Fortress,     // не производит, но поднимает потолок обороны
+    Shipyard,     // не производит ресурсов — даёт системе право строить флот
     Count
 };
 
@@ -46,6 +47,7 @@ enum class Specialization : uint8_t {
     Research,
     Trade,
     Fortress,
+    Shipyard,
     Count
 };
 
@@ -97,6 +99,14 @@ inline const fx kClassAffinityBonus = fx::fromFraction(5, 4);
 /// Прибавка к потолку обороны за одну крепость.
 inline const fx kFortressReadiness = fx::fromInt(25);
 
+/// Сколько сплавов в секунду способна освоить одна верфь.
+///
+/// Развитая система даёт около 0.75 сплава в секунду, поэтому две верфи
+/// примерно покрывают её доход. Меньше верфей — узкое место в сборке,
+/// больше — можно быстро потратить накопленный запас. То есть верфь решает
+/// не «сколько построю всего», а «как быстро смогу потратить».
+inline const fx kBuildRateShipyard = fx::fromFraction(1, 2);
+
 // ---------------------------------------------------------------------------
 // Учёт по империям
 // ---------------------------------------------------------------------------
@@ -134,6 +144,11 @@ bool matchesSpecialisation(Building building, Specialization specialisation);
 
 /// Подходит ли класс планеты под здание.
 bool matchesClass(Building building, uint8_t planetClass);
+
+/// Сколько зданий заданного типа стоит в каждой системе.
+/// Используют и крепости, и верфи — считать одинаково незачем дважды.
+std::vector<uint32_t> countBuildingsPerSystem(World& world, Building building,
+                                             uint32_t systemCount);
 
 // ---------------------------------------------------------------------------
 // Системы тика

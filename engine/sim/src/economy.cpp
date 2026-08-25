@@ -27,6 +27,7 @@ bool matchesSpecialisation(Building building, Specialization specialisation) {
         case Specialization::Research:   return building == Building::Laboratory;
         case Specialization::Trade:      return building == Building::TradeHub;
         case Specialization::Fortress:   return building == Building::Fortress;
+        case Specialization::Shipyard:   return building == Building::Shipyard;
         default:                         return false;
     }
 }
@@ -49,6 +50,22 @@ bool matchesClass(Building building, uint8_t planetClass) {
         default:
             return false;
     }
+}
+
+std::vector<uint32_t> countBuildingsPerSystem(World& world, Building building,
+                                             uint32_t systemCount) {
+    std::vector<uint32_t> counts(systemCount, 0);
+    world.each<Planet, PlanetDevelopment>(
+        [&](Entity, Planet& planet, PlanetDevelopment& development) {
+            if (planet.system >= counts.size()) return;
+            const uint8_t limit = std::min<uint8_t>(planet.slots, kMaxSlots);
+            for (uint8_t slot = 0; slot < limit; ++slot) {
+                if (development.buildings[slot] == uint8_t(building)) {
+                    ++counts[planet.system];
+                }
+            }
+        });
+    return counts;
 }
 
 namespace {
@@ -211,17 +228,8 @@ void systemDefenceCap(World& world, const TickContext&) {
     const Galaxy* galaxy = world.resource<Galaxy>();
     if (galaxy == nullptr) return;
 
-    std::vector<uint32_t> fortresses(galaxy->systemCount(), 0);
-    world.each<Planet, PlanetDevelopment>(
-        [&](Entity, Planet& planet, PlanetDevelopment& development) {
-            if (planet.system >= fortresses.size()) return;
-            const uint8_t limit = std::min<uint8_t>(planet.slots, kMaxSlots);
-            for (uint8_t slot = 0; slot < limit; ++slot) {
-                if (Building(development.buildings[slot]) == Building::Fortress) {
-                    ++fortresses[planet.system];
-                }
-            }
-        });
+    const std::vector<uint32_t> fortresses =
+        countBuildingsPerSystem(world, Building::Fortress, galaxy->systemCount());
 
     world.each<StarSystem, SystemDefense>(
         [&](Entity, StarSystem& system, SystemDefense& defense) {

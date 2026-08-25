@@ -27,6 +27,26 @@ uint32_t fleetTonnage(const Fleet& fleet) {
            fleet.cruisers * 8u + fleet.battleships * 20u;
 }
 
+uint32_t hullCost(Hull hull) {
+    switch (hull) {
+        case Hull::Corvette:   return kCostCorvette;
+        case Hull::Destroyer:  return kCostDestroyer;
+        case Hull::Cruiser:    return kCostCruiser;
+        case Hull::Battleship: return kCostBattleship;
+        default:               return 0;
+    }
+}
+
+void fleetAdd(Fleet& fleet, Hull hull, uint32_t count) {
+    switch (hull) {
+        case Hull::Corvette:   fleet.corvettes += count; break;
+        case Hull::Destroyer:  fleet.destroyers += count; break;
+        case Hull::Cruiser:    fleet.cruisers += count; break;
+        case Hull::Battleship: fleet.battleships += count; break;
+        default: break;
+    }
+}
+
 uint32_t fleetCost(const Fleet& fleet) {
     return fleet.corvettes * kCostCorvette + fleet.destroyers * kCostDestroyer +
            fleet.cruisers * kCostCruiser + fleet.battleships * kCostBattleship;
