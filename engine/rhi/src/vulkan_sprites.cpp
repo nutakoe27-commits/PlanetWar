@@ -498,8 +498,10 @@ CameraPush makePush(const Camera& camera, int width, int height) {
     // больше карты, чем на обычном, — то есть получал преимущество за форму
     // монитора. Для MMO «без pay to win» это ровно тот же класс проблемы.
     push.scaleX = halfHeight > 0.0f ? 1.0f / (halfHeight * aspect) : 0.0f;
-    // Ось Y на экране смотрит вниз, в мире — вверх.
-    push.scaleY = halfHeight > 0.0f ? -1.0f / halfHeight : 0.0f;
+    // Знак задаёт направление оси Y и служит шейдеру ответом на вопрос,
+    // какой край текстуры окажется вверху экрана.
+    const float sign = camera.yDown ? 1.0f : -1.0f;
+    push.scaleY = halfHeight > 0.0f ? sign / halfHeight : 0.0f;
     return push;
 }
 

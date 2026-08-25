@@ -32,6 +32,7 @@ import bpy  # noqa: E402
 import pw_atlas  # noqa: E402
 import pw_bake  # noqa: E402
 import pw_hulls  # noqa: E402
+import pw_font  # noqa: E402
 import pw_stars  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -180,13 +181,35 @@ def build(quality: str, keep_frames: bool) -> int:
         rotation_steps=rotations, camera_elevation=pw_bake.CAMERA_ELEVATION_DEG,
         frames=frames, generator=f"blender {bpy.app.version_string}")
 
+    # --- шрифт интерфейса ---
+    #
+    # Отдельный атлас, а не общий со спрайтами: у глифов своя сетка и свой
+    # размер клетки, и упаковывать их вместе с кораблями значило бы
+    # усложнить обоим жизнь ради экономии одной текстуры.
+    print()
+    print("  выпечка шрифта...")
+    font_png = os.path.join(BUILD_DIR, "font.png")
+    font_scene = pw_bake.reset_scene()
+    layout = pw_font.build_font_atlas(font_scene, font_png,
+                                      cell=48, samples=max(8, samples // 2))
+    font_manifest = os.path.join(BUILD_DIR, "font.json")
+    with open(font_manifest, "w", encoding="utf-8") as handle:
+        json.dump({
+            "version": 1,
+            "note": "Сгенерировано tools/blender/build_assets.py. Не редактировать руками.",
+            "generator": f"blender {bpy.app.version_string}",
+            **layout,
+        }, handle, ensure_ascii=False, indent=2)
+    print(f"  шрифт       {layout['width']}x{layout['height']}, "
+          f"глифов {len(layout['charset'])}, клетка {layout['cell']}")
+
     if not keep_frames and os.path.isdir(WORK_DIR):
         shutil.rmtree(WORK_DIR)
 
     elapsed = time.time() - started
     print()
     print(f"  атлас        {atlas_size}x{atlas_size}, кадров {len(frames)}")
-    for path in (albedo_png, mask_png, manifest):
+    for path in (albedo_png, mask_png, manifest, font_png, font_manifest):
         print(f"  {os.path.relpath(path, ROOT):40s} {os.path.getsize(path) // 1024:6d} КБ")
     print(f"\n  готово за {elapsed:.1f} с")
     return 0

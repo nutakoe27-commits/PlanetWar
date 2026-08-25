@@ -7,7 +7,9 @@
 
 add_library(pw_render STATIC
     src/atlas.cpp
-    src/map_view.cpp)
+    src/map_view.cpp
+    src/font.cpp
+    src/hud.cpp)
 
 target_include_directories(pw_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pw_render PUBLIC pw_game pw_rhi)

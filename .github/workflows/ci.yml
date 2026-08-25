@@ -49,6 +49,35 @@ jobs:
         run: ctest --preset ${{ matrix.preset }}
 
   # ---------------------------------------------------------------------------
+  # Клиент на macOS.
+  #
+  # Отдельной работой, потому что клиенту нужны Vulkan и SDL, а основная
+  # матрица собирает ядро и сервер без них. Без этой проверки разработчик
+  # на маке узнавал бы о поломке клиента только когда сам сядет собирать —
+  # а это единственная машина, на которой Vulkan идёт не нативно,
+  # а поверх Metal через MoltenVK (ADR-013).
+  # ---------------------------------------------------------------------------
+  macos-client:
+    name: Клиент на macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Установить ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Зависимости Vulkan
+        run: |
+          brew install --quiet vulkan-headers vulkan-loader molten-vk glslang || true
+      - name: Собрать клиент
+        run: |
+          cmake -S . -B build/client -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPW_BUILD_CLIENT=ON -DPW_BUILD_TESTS=ON
+          cmake --build build/client -j3
+      - name: Проверки сборки карты
+        run: ./build/client/bin/pw_render_view_tests
+
+  # ---------------------------------------------------------------------------
   # Детерминизм. Каждая платформа сверяется с эталоном, зафиксированным
   # в determinism_main.cpp. Расхождение хотя бы в одном разряде означает, что
   # симуляция разъехалась между x86 и ARM — красный билд, а не предупреждение.

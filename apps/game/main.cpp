@@ -24,6 +24,8 @@
 #include "pw/platform/platform.h"
 #include "pw/platform/window.h"
 #include "pw/render/atlas.h"
+#include "pw/render/font.h"
+#include "pw/render/hud.h"
 #include "pw/render/map_view.h"
 #include "pw/rhi/rhi.h"
 
@@ -246,6 +248,29 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Шрифт. Отдельная текстура: у глифов своя сетка и свой размер клетки,
+    // и паковать их вместе с кораблями значило бы усложнить жизнь обоим.
+    render::Font font;
+    const char* fontCandidates[] = {"assets/build/font.json", "../assets/build/font.json",
+                                    "../../assets/build/font.json"};
+    for (const char* path : fontCandidates) {
+        if (font.load(path)) break;
+    }
+    rhi::TextureHandle fontTexture = rhi::kInvalidTexture;
+    if (font.valid()) {
+        fontTexture = device.createTexture(font.textureWidth(), font.textureHeight(),
+                                           font.pixels().data());
+    }
+    if (fontTexture == rhi::kInvalidTexture) {
+        // Игра без надписей работает, но играть в неё нельзя: игрок не
+        // видит своих ресурсов. Это не предупреждение, а отказ.
+        std::fprintf(stderr,
+                     "шрифт не загружен: %s\n"
+                     "соберите ассеты: tools/blender/build_assets.py --quality preview\n",
+                     font.error().c_str());
+        return 1;
+    }
+
     if (!net::initialiseSockets()) {
         std::fprintf(stderr, "не удалось поднять сетевую подсистему\n");
         return 1;
@@ -263,6 +288,10 @@ int main(int argc, char** argv) {
     mapView.setAtlas(&atlas);
     render::MapFrame frame;
     render::Selection selection;
+
+    render::Hud hud;
+    hud.setFont(&font);
+    render::HudFrame hudFrame;
 
     CameraControl camera;
     Input input;
@@ -316,6 +345,14 @@ int main(int argc, char** argv) {
             camera.minHeight = std::max(60.0f, extent * 0.05f);
             camera.centerX = 0.0f;
             camera.centerY = 0.0f;
+            if (headless) {
+                // В снимке выделяем столицу: иначе панель сведений
+                // о системе не рисуется, и проверка в CI не увидела бы
+                // половину интерфейса.
+                selection.system = client.capital();
+                const auto own = client.fleetsAt(client.capital());
+                if (!own.empty()) selectedFleet = own.front();
+            }
             if (headless && shotZoom > 1.0f) {
                 // Снимок крупным планом: смотрим на свою столицу. Нужен,
                 // чтобы разглядеть то, что на общем плане не видно, —
@@ -371,25 +408,9 @@ int main(int argc, char** argv) {
                 const auto own = client.fleetsAt(under);
                 selectedFleet = own.empty() ? 0xFFFFFFFFu : own.front();
 
-                std::printf("система %u: ", under);
-                const uint8_t owner = under < client.view().systems.size()
-                                          ? client.view().systems[under].owner
-                                          : 0xFF;
-                std::printf("%s", owner == 0xFF ? "ничья"
-                                                : (owner == client.empire() ? "своя" : "чужая"));
-                const auto planets = client.planetsAt(under);
-                std::printf(", планет %zu", planets.size());
-                for (const auto& planet : planets) {
-                    std::printf("\n    планета %u: слотов %u, свободно %u", planet.id,
-                                planet.slots, planet.freeSlots());
-                    for (uint8_t slot = 0; slot < planet.slots; ++slot) {
-                        if (planet.buildings[slot] == uint8_t(sim::Building::None)) continue;
-                        std::printf("\n        %u: %s", slot, buildingName(planet.buildings[slot]));
-                    }
-                }
-                if (!own.empty()) std::printf("\n    свой флот: %u", own.front());
-                std::printf("\n");
-                std::fflush(stdout);
+                // Подробности показывает панель на экране — печатать их
+                // ещё и в терминал значит разделить внимание игрока
+                // между двумя окнами.
             }
         }
         selection.fleet = selectedFleet;
@@ -452,6 +473,22 @@ int main(int argc, char** argv) {
             device.drawLines(frame.lines.data(), frame.lines.size());
             device.drawSprites(frame.sprites.data(), frame.sprites.size(), texture);
         }
+
+        // Панели поверх карты, в ЭКРАННЫХ координатах.
+        //
+        // Камера меняется между вызовами отрисовки — отдельного конвейера
+        // для интерфейса не нужно. Начало в левом верхнем углу, ось Y
+        // вниз, единица — пиксель: то есть обычные экранные координаты.
+        hud.build(client, selection, width, height, hudFrame);
+        if (!hudFrame.sprites.empty()) {
+            rhi::Camera screen;
+            screen.centerX = float(width) * 0.5f;
+            screen.centerY = float(height) * 0.5f;
+            screen.worldHeight = float(height);
+            screen.yDown = true;
+            device.setCamera(screen);
+            device.drawSprites(hudFrame.sprites.data(), hudFrame.sprites.size(), fontTexture);
+        }
         if (!device.endFrame()) break;
 
         // Снимок: подключились, поиграли заданное время, отрисовали карту.
@@ -477,28 +514,15 @@ int main(int argc, char** argv) {
                         frame.lines.size() / 2);
         }
 
-        // --- строка состояния ---
-        //
-        // В консоль, а не на экран: шрифты и панели — работа Фазы 3,
-        // а знать свои ресурсы игрок должен уже сейчас.
+        // Заголовок окна: имя игрока и число систем. Всё остальное
+        // теперь на экране, в панелях.
         if (client.ready() && now >= nextStatus) {
             nextStatus = now + 5000;
-            uint32_t systems = 0, fleets = 0, tonnage = 0;
+            uint32_t systems = 0;
             for (const auto& system : client.view().systems) {
                 if (system.owner == uint8_t(client.empire())) ++systems;
             }
-            for (const auto& [id, fleet] : client.view().fleets) {
-                if (fleet.empire != uint8_t(client.empire())) continue;
-                ++fleets;
-                tonnage += sim::fleetTonnage(fleet.composition);
-            }
-            window.setTitle(
-                (name + " · систем " + std::to_string(systems) + " · флот " +
-                 std::to_string(tonnage) + " т · сплавы " +
-                 std::to_string(client.view().empire.alloys.floorToInt()) + " · " +
-                 std::to_string(client.roundTrip()) + " мс")
-                    .c_str());
-            (void)fleets;
+            window.setTitle((name + " · систем " + std::to_string(systems)).c_str());
         }
     }
 
