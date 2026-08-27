@@ -332,6 +332,23 @@ def build_structure(kind: str, name: str):
     return obj
 
 
+def unwrap(obj) -> None:
+    """Развернуть объект под запекание.
+
+    Отдельной функцией, потому что переход в режим правки требует
+    АКТИВНОГО объекта, а объект, построенный не оператором, активным
+    не становится. Забыть об этом — значит получить «Context missing
+    active object» на ровном месте, причём в середине сборки ассетов.
+    """
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66.0), island_margin=0.02)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
 def build_structure_material() -> bpy.types.Material:
     """Общий материал построек: металл с потёртостями и окнами.
 

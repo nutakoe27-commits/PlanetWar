@@ -118,6 +118,9 @@ const char* noticeText(game::NoticeKind kind) {
         case game::NoticeKind::BattleWon:      return "бой выигран";
         case game::NoticeKind::BattleLost:     return "бой проигран";
         case game::NoticeKind::BattleDraw:     return "бой без победителя";
+        case game::NoticeKind::PlanetSieged:   return "ОСАДА ПЛАНЕТЫ";
+        case game::NoticeKind::PlanetLost:     return "планета потеряна";
+        case game::NoticeKind::PlanetCaptured: return "планета взята";
         case game::NoticeKind::FleetDestroyed: return "флот уничтожен";
         case game::NoticeKind::OrderRejected:  return "приказ отвергнут";
         case game::NoticeKind::None:
@@ -387,7 +390,9 @@ int main(int argc, char** argv) {
             const bool bad = event.kind == game::NoticeKind::SystemLost ||
                              event.kind == game::NoticeKind::BattleLost ||
                              event.kind == game::NoticeKind::FleetDestroyed ||
-                             event.kind == game::NoticeKind::OrderRejected;
+                             event.kind == game::NoticeKind::OrderRejected ||
+                             event.kind == game::NoticeKind::PlanetSieged ||
+                             event.kind == game::NoticeKind::PlanetLost;
             std::string text = noticeText(event.kind);
             if (event.kind != game::NoticeKind::FleetDestroyed) {
                 text += " — система " + std::to_string(event.system);

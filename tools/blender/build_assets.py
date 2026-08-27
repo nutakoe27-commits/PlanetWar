@@ -341,6 +341,38 @@ def build_planets(samples: int) -> None:
     manifest["structure_texture"] = os.path.relpath(structure_texture,
                                                     BUILD_DIR).replace(os.sep, "/")
 
+    # --- корпуса в объёме ---
+    #
+    # Те же модели, что печатаются в спрайты карты, но целиком, сеткой.
+    # Вид системы обязан показывать осаждающий флот: осада без видимого
+    # осаждающего выглядит сломанной игрой, а не тихой угрозой.
+    manifest["hulls"] = []
+    hull_specs = load_specs()
+    hull_materials = pw_hulls.build_materials()
+    hull_texture = os.path.join(BUILD_DIR, "hulls.png")
+    for index, spec in enumerate(hull_specs):
+        obj = pw_hulls.build_hull_object(spec, hull_materials)
+        bpy.context.view_layer.update()
+
+        pw_planets.unwrap(obj)
+        if index == 0:
+            # Одна текстура на все корпуса: в системе корабль занимает
+            # десяток пикселей, и различает их силуэт, а не поверхность.
+            pw_planets.bake_surface(obj, pw_planets.build_structure_material(),
+                                    hull_texture, samples=samples, width=256, height=256)
+
+        mesh_path = os.path.join(mesh_dir, f"hull_{spec.id}.pwm")
+        vertices, indices = pw_planets.export_mesh(obj, mesh_path)
+        manifest["hulls"].append({
+            "hull": index + 1,   # Hull::None равен нулю
+            "id": spec.id,
+            "mesh": os.path.relpath(mesh_path, BUILD_DIR).replace(os.sep, "/"),
+        })
+        print(f"  корпус {spec.id:12s} {vertices:5d} вершин  {indices // 3:5d} треугольников")
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    manifest["hull_texture"] = os.path.relpath(hull_texture, BUILD_DIR).replace(os.sep, "/")
+
     # --- задник ---
     #
     # Чёрный фон читается как «сцена не догрузилась». Живое небо стоит

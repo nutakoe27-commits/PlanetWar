@@ -7,6 +7,7 @@
 
 #include "pw/core/png.h"
 #include "pw/render/map_view.h"
+#include "pw/sim/fleet.h"
 #include "json.h"
 
 namespace pw::render {
@@ -165,7 +166,10 @@ float planetRadius(uint8_t planetClass) { return byClass(kPlanetRadius, planetCl
 float fitDistance(uint32_t planetCount) {
     const uint32_t outer = planetCount > 0 ? planetCount - 1 : 0;
     const float radius = kFirstOrbitRadius + kOrbitStep * float(outer);
-    return radius * 2.3f + 12.0f;
+    // Запас берётся не на глаз: за внешней орбитой стоят флоты, и кадр,
+    // подогнанный ровно по орбитам, срезал бы их по нижнему краю —
+    // ровно там, где перспектива уводит ближнюю дугу за пределы экрана.
+    return radius * 2.7f + 16.0f;
 }
 
 bool planetHasAtmosphere(uint8_t planetClass) {
@@ -313,6 +317,36 @@ bool SystemAssets::load(const std::string& manifestPath) {
         }
     }
 
+    // Корпуса кораблей. Индекс в списке — это sim::Hull минус единица.
+    {
+        size_t at = json.find("hulls");
+        while (at != std::string::npos) {
+            const size_t entry = json.find("hull", at);
+            if (entry == std::string::npos) break;
+
+            HullEntry hull;
+            std::string meshName;
+            if (!json.string("id", hull.id, entry) ||
+                !json.string("mesh", meshName, entry)) {
+                break;
+            }
+            std::string meshError;
+            if (!loadMesh(directory + meshName, hull.mesh, &meshError)) {
+                error_ = meshError;
+                return false;
+            }
+            hulls_.push_back(std::move(hull));
+            at = entry + 1;
+        }
+
+        std::string textureName;
+        if (json.find("hull_texture") != std::string::npos &&
+            json.string("hull_texture", textureName)) {
+            loadTexture(directory + textureName, hullTextureData_, hullTextureWidth_,
+                        hullTextureHeight_);
+        }
+    }
+
     {
         const size_t spaceBlock = json.find("space");
         std::string textureName;
@@ -392,6 +426,16 @@ bool SystemAssets::upload(rhi::Device& device) {
         structureTexture_ = device.createTexture(structureTextureWidth_,
                                                  structureTextureHeight_,
                                                  structureTextureData_.data());
+    }
+
+    for (HullEntry& hull : hulls_) {
+        hull.meshHandle =
+            device.createMesh(hull.mesh.vertices.data(), hull.mesh.vertices.size(),
+                              hull.mesh.indices.data(), hull.mesh.indices.size());
+    }
+    if (!hullTextureData_.empty()) {
+        hullTexture_ =
+            device.createTexture(hullTextureWidth_, hullTextureHeight_, hullTextureData_.data());
     }
 
     if (!spaceTextureData_.empty()) {
@@ -666,6 +710,86 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
             spot.screenRadius = radius / (spot.depth * halfHeight) * 0.5f;
         }
         out.spots.push_back(spot);
+    }
+
+    // --- флоты ---
+    //
+    // Осада без видимого осаждающего выглядит сломанной игрой, а не тихой
+    // угрозой: игрок видит падающую оборону и не видит причины. Флоты
+    // становятся на высокую орбиту вокруг светила — там, где им и место,
+    // и там, где они не спорят с планетами за один и тот же пиксель.
+    if (!assets_->hulls().empty()) {
+        // Порядок обхода задаёт карман: std::map упорядочен по номеру
+        // сущности, значит расстановка одинакова у всех игроков и не
+        // прыгает от кадра к кадру.
+        uint32_t pocket = 0;
+        for (const auto& [id, fleet] : world.fleets) {
+            if (fleet.system != system || fleet.nextSystem != system) continue;
+
+            const uint32_t tonnage = sim::fleetTonnage(fleet.composition);
+            if (tonnage == 0) continue;
+
+            // Самый крупный присутствующий корпус: он и определяет силуэт.
+            uint32_t hull = 0;
+            if (fleet.composition.battleships > 0)   hull = uint32_t(sim::Hull::Battleship);
+            else if (fleet.composition.cruisers > 0) hull = uint32_t(sim::Hull::Cruiser);
+            else if (fleet.composition.destroyers > 0) hull = uint32_t(sim::Hull::Destroyer);
+            else                                     hull = uint32_t(sim::Hull::Corvette);
+
+            const uint32_t index = hull - 1u;
+            if (index >= assets_->hulls().size()) continue;
+
+            // Место на дуге вокруг светила. Чуть дальше внешней орбиты:
+            // флот виден целиком и не спорит с планетами за один пиксель,
+            // но остаётся в кадре, подобранном под систему.
+            const float outer =
+                kFirstOrbitRadius + kOrbitStep * float(planetCount > 0 ? planetCount - 1 : 0);
+            const float radius = outer + 3.5f;
+            const float angle = kTau * (float(pocket) * 0.081f +
+                                        float(id % 97u) / 97.0f);
+            const float x = radius * std::cos(angle);
+            const float y = radius * std::sin(angle);
+            const float z = 2.4f + float(pocket % 3u) * 1.6f;
+            ++pocket;
+
+            // Размер от тоннажа, но с сильным затуханием: иначе флот
+            // в триста тонн накрыл бы собой всю систему.
+            //
+            // Масштаб заведомо не натуральный: корабль рядом с планетой
+            // в натуральную величину — это доли пикселя. Читается силуэт,
+            // а не размер, и корвет обязан отличаться от линкора.
+            const float size = 2.2f + std::sqrt(float(tonnage)) * 0.5f;
+
+            // Нос смотрит вдоль движения по орбите, то есть по касательной.
+            // Корабль, висящий боком, читается как обломок.
+            const float nose = angle + kTau * 0.25f;
+            rhi::MeshInstance ship;
+            ship.axisX[0] = std::cos(nose) * size;
+            ship.axisX[1] = std::sin(nose) * size;
+            ship.axisY[0] = -std::sin(nose) * size;
+            ship.axisY[1] = std::cos(nose) * size;
+            ship.axisZ[2] = size;
+            ship.origin[0] = x;
+            ship.origin[1] = y;
+            ship.origin[2] = z;
+
+            const EmpireColor& colour =
+                fleet.empire == 0xFF ? neutralColor() : empireColor(fleet.empire);
+            ship.r = colour.r;
+            ship.g = colour.g;
+            ship.b = colour.b;
+            ship.gloss = 0.5f;
+            // Свой флот заметно ярче чужого: в системе, где идёт бой,
+            // взгляд обязан находить своих без чтения подписей.
+            ship.emissive = fleet.empire == uint8_t(empire & 0xFFu) ? 0.30f : 0.10f;
+
+            batchFor(out, assets_->hulls()[index].meshHandle,
+                     assets_->hullTexture() != rhi::kInvalidTexture
+                         ? assets_->hullTexture()
+                         : assets_->blankTexture(),
+                     MeshKind::Fleet)
+                .instances.push_back(ship);
+        }
     }
 
     // --- атмосферы ---

@@ -695,3 +695,64 @@ TEST_CASE("приказ: с верфью заказ принимается") {
         CHECK(event.kind != NoticeKind::OrderRejected);
     }
 }
+
+TEST_CASE("уведомления: об осаде своей планеты игрок узнаёт сразу") {
+    // Заголовок control.h обещает: владелец успевает получить уведомление,
+    // союзники видят осаду и приходят. Без этой новости обещание пустое —
+    // узнать об осаде можно было бы, только глядя в нужную часть карты
+    // в нужную минуту.
+    Session session(60, 0, 0, 0x5E5510, /*speed=*/16);
+    session.addClient("защитник");
+    session.addClient("нападающий");
+    session.run(3000);
+
+    Client& defender = *session.clients[0];
+    Client& attacker = *session.clients[1];
+    REQUIRE(defender.ready());
+    REQUIRE(attacker.ready());
+    defender.takeEvents();
+
+    // Защитник уводит флот. Присутствие владельца снимает осаду
+    // немедленно — это отдельное правило, и проверяется оно отдельно.
+    const uint32_t guard = defender.fleetsAt(defender.capital()).front();
+    REQUIRE(defender.orderMove(guard, defender.galaxy().neighbors(defender.capital())[0]));
+
+    // Гоним флот нападающего прямо в столицу защитника.
+    const uint32_t fleet = attacker.fleetsAt(attacker.capital()).front();
+    REQUIRE(attacker.orderMove(fleet, defender.capital()));
+
+    bool sieged = false;
+    for (int round = 0; round < 60 && !sieged; ++round) {
+        session.run(10000);
+        for (const ClientEvent& event : defender.takeEvents()) {
+            if (event.kind == NoticeKind::PlanetSieged) sieged = true;
+        }
+    }
+    CHECK(sieged);
+}
+
+TEST_CASE("уведомления: о взятой планете узнаёт тот, кто её взял") {
+    Session session(80, 0, 0, 0x5E5510, /*speed=*/8);
+    session.addClient("Михаил");
+    session.run(3000);
+
+    Client& client = *session.clients[0];
+    REQUIRE(client.ready());
+    client.takeEvents();
+
+    const uint32_t home = client.capital();
+    const uint32_t target = client.galaxy().neighbors(home)[0];
+    const uint32_t fleet = client.fleetsAt(home).front();
+    REQUIRE(client.orderMove(fleet, target));
+
+    bool captured = false;
+    for (int round = 0; round < 80 && !captured; ++round) {
+        session.run(10000);
+        for (const ClientEvent& event : client.takeEvents()) {
+            if (event.kind == NoticeKind::PlanetCaptured && event.system == target) {
+                captured = true;
+            }
+        }
+    }
+    CHECK(captured);
+}

@@ -141,6 +141,29 @@
     }
   ],
   "structure_texture": "structures.png",
+  "hulls": [
+    {
+      "hull": 1,
+      "id": "corvette",
+      "mesh": "meshes/hull_corvette.pwm"
+    },
+    {
+      "hull": 2,
+      "id": "destroyer",
+      "mesh": "meshes/hull_destroyer.pwm"
+    },
+    {
+      "hull": 3,
+      "id": "cruiser",
+      "mesh": "meshes/hull_cruiser.pwm"
+    },
+    {
+      "hull": 4,
+      "id": "battleship",
+      "mesh": "meshes/hull_battleship.pwm"
+    }
+  ],
+  "hull_texture": "hulls.png",
   "space": {
     "texture": "space.png"
   }

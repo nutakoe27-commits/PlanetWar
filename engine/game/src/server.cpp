@@ -502,6 +502,54 @@ void Server::notifyChanges() {
             previousOwners_[system.index] = now;
         });
 
+    // --- планеты: осада, потеря, захват ---
+    //
+    // Захватывают теперь планеты, и молчать о них нельзя. Заголовок
+    // control.h обещает игроку, что владелец успеет получить уведомление,
+    // а союзники — увидеть осаду и прийти; без этих новостей обещание
+    // было пустым, и узнать об осаде можно было, только глядя в нужную
+    // часть карты в нужную минуту.
+    {
+        const bool firstPass = previousPlanets_.empty();
+        world_.each<sim::Planet, sim::Owner, sim::SiegeState>(
+            [&](sim::Entity entity, sim::Planet& planet, sim::Owner& owner,
+                sim::SiegeState& siege) {
+                PlanetMemory now;
+                now.owner =
+                    uint8_t(owner.empire == sim::kNoEmpire ? 0xFFu : owner.empire & 0xFFu);
+                now.besieger = uint8_t(siege.besieger == sim::kNoEmpire
+                                           ? 0xFFu
+                                           : siege.besieger & 0xFFu);
+                now.system = planet.system;
+
+                PlanetMemory& before = previousPlanets_[entity.index];
+                if (firstPass) {
+                    // Первый проход только запоминает: иначе игрок при
+                    // подключении получил бы новость о захвате каждой
+                    // планеты собственной столицы.
+                    before = now;
+                    return;
+                }
+
+                if (now.owner != before.owner) {
+                    if (before.owner != 0xFF) {
+                        notify(before.owner, NoticeKind::PlanetLost, now.system);
+                    }
+                    if (now.owner != 0xFF) {
+                        notify(now.owner, NoticeKind::PlanetCaptured, now.system);
+                    }
+                }
+                // Осада объявляется один раз, в момент начала. Повторять
+                // её каждый тик значит превратить журнал в шум, а шум
+                // игрок перестаёт читать целиком.
+                if (now.besieger != before.besieger && now.besieger != 0xFF &&
+                    now.owner != 0xFF) {
+                    notify(now.owner, NoticeKind::PlanetSieged, now.system);
+                }
+                before = now;
+            });
+    }
+
     // --- потери флота ---
     //
     // Считаем ТОННАЖ, а не число отрядов.

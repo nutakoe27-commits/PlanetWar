@@ -336,6 +336,7 @@ jobs:
                   "stars": [(s["class"], s["id"]) for s in data.get("stars", [])],
                   "structures": [(b["building"], b["id"])
                                  for b in data.get("structures", [])],
+                  "hulls": [(h["hull"], h["id"]) for h in data.get("hulls", [])],
               }
 
           fresh = planets(open("assets/build/planets.json", encoding="utf-8").read())
@@ -345,7 +346,8 @@ jobs:
 
           if fresh == committed:
               print("планеты совпадают:", len(fresh["planets"]), "классов,",
-                    len(fresh["structures"]), "построек")
+                    len(fresh["structures"]), "построек,",
+                    len(fresh["hulls"]), "корпусов")
               sys.exit(0)
 
           print("::error::манифест планет разошёлся с моделями —"

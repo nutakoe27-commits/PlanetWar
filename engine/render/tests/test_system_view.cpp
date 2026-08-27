@@ -332,6 +332,86 @@ TEST_CASE("вид системы: недостроенное меньше гот
     CHECK(full > small);
 }
 
+TEST_CASE("вид системы: осаждающий флот виден") {
+    // Осада без видимого осаждающего выглядит сломанной игрой, а не тихой
+    // угрозой: игрок видит падающую оборону и не видит причины.
+    const std::string manifest = findManifest();
+    if (manifest.empty()) return;
+
+    Scene scene(60);
+    REQUIRE(scene.assets.load(manifest));
+    const uint32_t system = scene.systemWith(3);
+    REQUIRE(system != UINT32_MAX);
+
+    scene.build(system);
+    CHECK(scene.instanceCount(MeshKind::Fleet) == 0);
+
+    game::FleetView raider;
+    raider.id = 7;
+    raider.empire = 1;
+    raider.system = system;
+    raider.nextSystem = system;
+    raider.composition = sim::Fleet{4, 1, 0, 0};
+    scene.view.fleets[raider.id] = raider;
+
+    // Флот в пути не стоит в системе и рисоваться там не должен.
+    game::FleetView passing = raider;
+    passing.id = 8;
+    passing.nextSystem = system + 1;
+    scene.view.fleets[passing.id] = passing;
+
+    scene.build(system);
+    CHECK(scene.instanceCount(MeshKind::Fleet) == 1);
+
+    // Цвет империи: чей флот, видно без подписей.
+    for (const MeshBatch& batch : scene.frame.batches) {
+        if (batch.kind != MeshKind::Fleet) continue;
+        for (const rhi::MeshInstance& instance : batch.instances) {
+            CHECK(std::abs(instance.r - empireColor(1).r) < 0.01f);
+            CHECK(std::abs(instance.g - empireColor(1).g) < 0.01f);
+        }
+    }
+}
+
+TEST_CASE("вид системы: флоты не сваливаются в одну точку") {
+    const std::string manifest = findManifest();
+    if (manifest.empty()) return;
+
+    Scene scene(60);
+    REQUIRE(scene.assets.load(manifest));
+    const uint32_t system = scene.systemWith(3);
+    REQUIRE(system != UINT32_MAX);
+
+    for (uint32_t id = 1; id <= 5; ++id) {
+        game::FleetView fleet;
+        fleet.id = id;
+        fleet.empire = uint8_t(id % 3);
+        fleet.system = system;
+        fleet.nextSystem = system;
+        fleet.composition = sim::Fleet{2, 0, 0, 0};
+        scene.view.fleets[id] = fleet;
+    }
+    scene.build(system);
+    CHECK(scene.instanceCount(MeshKind::Fleet) == 5);
+
+    std::vector<std::pair<float, float>> spots;
+    for (const MeshBatch& batch : scene.frame.batches) {
+        if (batch.kind != MeshKind::Fleet) continue;
+        for (const rhi::MeshInstance& instance : batch.instances) {
+            spots.emplace_back(instance.origin[0], instance.origin[1]);
+        }
+    }
+    for (size_t i = 0; i < spots.size(); ++i) {
+        for (size_t j = i + 1; j < spots.size(); ++j) {
+            const float dx = spots[i].first - spots[j].first;
+            const float dy = spots[i].second - spots[j].second;
+            CAPTURE(i);
+            CAPTURE(j);
+            CHECK(dx * dx + dy * dy > 1.0f);
+        }
+    }
+}
+
 TEST_CASE("вид системы: щелчок попадает в ближайшее тело") {
     const std::string manifest = findManifest();
     if (manifest.empty()) return;

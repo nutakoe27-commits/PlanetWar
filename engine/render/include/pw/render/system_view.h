@@ -89,6 +89,13 @@ public:
         rhi::MeshHandle meshHandle = rhi::kInvalidMesh;
     };
 
+    /// Корпус корабля. Индекс в списке равен sim::Hull минус единица.
+    struct HullEntry {
+        std::string id;
+        MeshData mesh;
+        rhi::MeshHandle meshHandle = rhi::kInvalidMesh;
+    };
+
     struct StarEntry {
         std::string id;
         std::vector<Rgba8> texture;
@@ -110,6 +117,8 @@ public:
     const std::vector<StarEntry>& stars() const { return stars_; }
     const std::vector<StructureEntry>& structures() const { return structures_; }
     rhi::TextureHandle structureTexture() const { return structureTexture_; }
+    const std::vector<HullEntry>& hulls() const { return hulls_; }
+    rhi::TextureHandle hullTexture() const { return hullTexture_; }
 
     /// Сетка сферы. Общая на все классы планет — форма у них одна,
     /// различаются они текстурой.
@@ -130,6 +139,9 @@ private:
     std::vector<StructureEntry> structures_;
     std::vector<Rgba8> structureTextureData_;
     int structureTextureWidth_ = 0, structureTextureHeight_ = 0;
+    std::vector<HullEntry> hulls_;
+    std::vector<Rgba8> hullTextureData_;
+    int hullTextureWidth_ = 0, hullTextureHeight_ = 0;
     MeshData ringMeshData_;
     std::vector<Rgba8> ringTextureData_;
     int ringTextureWidth_ = 0, ringTextureHeight_ = 0;
@@ -143,6 +155,7 @@ private:
     rhi::TextureHandle blankTexture_ = rhi::kInvalidTexture;
     rhi::TextureHandle spaceTexture_ = rhi::kInvalidTexture;
     rhi::TextureHandle structureTexture_ = rhi::kInvalidTexture;
+    rhi::TextureHandle hullTexture_ = rhi::kInvalidTexture;
     std::string error_;
 };
 
@@ -175,6 +188,7 @@ enum class MeshKind : uint8_t {
     Planet,
     Ring,
     Structure,
+    Fleet,
     Atmosphere,
     Corona,
 };
