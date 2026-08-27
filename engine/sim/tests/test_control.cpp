@@ -182,11 +182,14 @@ TEST_CASE("владение: поровну — система спорная") 
 // Занятие ничьих планет
 // ---------------------------------------------------------------------------
 
-TEST_CASE("владение: флот занимает ничью планету за пять минут") {
+TEST_CASE("владение: флот занимает ничью планету за kClaimSeconds") {
+    // Срок берётся из константы, а не пишется числом: он балансный
+    // и уже менялся — с пяти минут на три, когда захват переехал
+    // с систем на планеты.
     Realm realm;
     realm.garrison(3, /*empire=*/1, Fleet{2, 0, 0, 0});
 
-    realm.run(4 * kMinute + 50 * kSecond);
+    realm.run(kClaimSeconds * kSecond - 10 * kSecond);
     CHECK(realm.planetOwner(3, 0) == kNoEmpire);  // ещё рано
 
     realm.run(20 * kSecond);
@@ -204,18 +207,18 @@ TEST_CASE("владение: планеты занимаются по одной
     REQUIRE(system != UINT32_MAX);
     realm.garrison(system, /*empire=*/1, Fleet{4, 0, 0, 0});
 
-    realm.run(5 * kMinute + 10 * kSecond);
+    realm.run(kClaimSeconds * kSecond + 10 * kSecond);
     CHECK(realm.planetOwner(system, 0) == 1u);
-    // Вторая ещё ничья: пять минут дают ОДНУ планету, а не систему.
+    // Вторая ещё ничья: срок занятия даёт ОДНУ планету, а не систему.
     CHECK(realm.planetOwner(system, 1) == kNoEmpire);
     CHECK(realm.planetsOwnedBy(system, 1) == 1u);
 
-    realm.run(5 * kMinute);
+    realm.run(kClaimSeconds * kSecond);
     CHECK(realm.planetOwner(system, 1) == 1u);
     CHECK(realm.planetsOwnedBy(system, 1) == 2u);
 
     // Вся система целиком — только когда занята каждая планета.
-    realm.run(5 * kMinute * int64_t(realm.planetCount(system)));
+    realm.run(kClaimSeconds * kSecond * int64_t(realm.planetCount(system)));
     CHECK(realm.planetsOwnedBy(system, 1) == realm.planetCount(system));
     CHECK(realm.ownerOf(system) == 1u);
 }
@@ -230,7 +233,7 @@ TEST_CASE("владение: два своих флота не мешают за
     realm.garrison(4, /*empire=*/1, Fleet{5, 0, 0, 0});
     realm.garrison(4, /*empire=*/1, Fleet{2, 0, 0, 0});
 
-    realm.run(5 * kMinute + 10 * kSecond);
+    realm.run(kClaimSeconds * kSecond + 10 * kSecond);
     CHECK(realm.planetOwner(4, 0) == 1u);
 }
 
@@ -249,12 +252,12 @@ TEST_CASE("владение: ушедший флот не дозанимает �
     Realm realm;
     const Entity fleet = realm.garrison(7, /*empire=*/1, Fleet{3, 0, 0, 0});
 
-    realm.run(3 * kMinute);
+    realm.run(kClaimSeconds * kSecond / 2);
     // Флот отправился дальше — счётчик занятия обязан обнулиться.
     realm.world.get<FleetLocation>(fleet)->nextSystem =
         realm.galaxy.neighbors(7)[0];
 
-    realm.run(4 * kMinute);
+    realm.run(kClaimSeconds * kSecond);
     CHECK(realm.planetOwner(7, 0) == kNoEmpire);
 }
 

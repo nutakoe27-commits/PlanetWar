@@ -90,6 +90,7 @@ public:
         uint8_t buildBuilding = 0;  // Building, который возводится
         uint8_t buildPercent = 0;   // 0..100
         uint8_t buildQueued = 0;    // сколько заказов ждёт очереди
+        uint8_t buildPaid = 0;      // оплачена ли стройка
         uint8_t buildings[sim::kMaxSlots] = {};
         /// Свободных слотов под застройку. Слот со стройкой уже занят:
         /// иначе игрок заказал бы в него второе здание, увидев его пустым.

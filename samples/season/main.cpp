@@ -115,6 +115,55 @@ FleetArmament build(uint8_t k, uint8_t e, uint8_t m, uint8_t sh, uint8_t ar, uin
 
 }  // namespace
 
+/// Разнести стартовые системы по ГРАФУ, а не по номерам.
+///
+/// Номера систем идут вдоль спиральных рукавов, и «каждая четвёртая
+/// система» превращалась в пригоршню соседей. Здесь тот же жадный выбор,
+/// что и у сервера: каждая следующая столица — та, что дальше всех
+/// от уже занятых.
+std::vector<uint32_t> pickHomes(const Galaxy& galaxy, size_t players) {
+    constexpr uint8_t kMinHomePlanets = 3;
+    const uint32_t count = galaxy.systemCount();
+
+    std::vector<uint32_t> homes;
+    std::vector<bool> taken(count, false);
+
+    for (uint32_t index = 0; index < count && homes.empty(); ++index) {
+        if (galaxy.planetCount(index) < kMinHomePlanets) continue;
+        homes.push_back(index);
+        taken[index] = true;
+    }
+    if (homes.empty()) {
+        homes.push_back(0);
+        taken[0] = true;
+    }
+
+    while (homes.size() < players) {
+        uint32_t best = count;
+        int32_t bestDistance = -1;
+        for (int pass = 0; pass < 2 && best == count; ++pass) {
+            for (uint32_t candidate = 0; candidate < count; ++candidate) {
+                if (taken[candidate]) continue;
+                if (pass == 0 && galaxy.planetCount(candidate) < kMinHomePlanets) continue;
+
+                int32_t nearest = 1 << 20;
+                for (uint32_t home : homes) {
+                    const int32_t hops = galaxy.hopDistance(candidate, home);
+                    if (hops >= 0) nearest = std::min(nearest, hops);
+                }
+                if (nearest <= bestDistance) continue;
+                bestDistance = nearest;
+                best = candidate;
+            }
+        }
+        if (best == count) break;
+        homes.push_back(best);
+        taken[best] = true;
+    }
+    while (homes.size() < players) homes.push_back(0);
+    return homes;
+}
+
 int main(int argc, char** argv) {
     uint64_t seed = 0x5EA50FF;
     uint32_t systems = 200;
@@ -179,9 +228,16 @@ int main(int argc, char** argv) {
 
     // Стартовые системы разносим по галактике, чтобы они не оказались
     // соседями и первая встреча случилась не на второй минуте.
+    //
+    // По ГРАФУ, а не по номеру. Номера идут вдоль спиральных рукавов, и
+    // «каждая четвёртая система» оказывалась пригоршней соседей: две
+    // империи теряли флоты в первые полчаса и до конца прогона сидели
+    // по одной системе. Заодно требуем от столицы трёх планет — старт
+    // на одиноком мире это проигрыш до первого хода.
     const uint32_t count = galaxy.systemCount();
+    const std::vector<uint32_t> homes = pickHomes(galaxy, bots.size());
     for (size_t i = 0; i < bots.size(); ++i) {
-        bots[i].home = uint32_t((i * count) / bots.size());
+        bots[i].home = homes[i];
         bots[i].entity = world.create();
         world.add<Empire>(bots[i].entity,
                           Empire{fx::fromInt(500), fx::fromInt(200), fx::fromInt(300),
@@ -217,6 +273,14 @@ int main(int argc, char** argv) {
 
     std::vector<uint32_t> owners(count, kNoEmpire);
     std::vector<uint32_t> unclaimed(count, 0);
+    // Сражения считаются по СКАЧКУ перезарядки, каждый тик.
+    //
+    // Прежняя версия смотрела, сколько систем дерётся В МОМЕНТ ОТЧЁТА, то
+    // есть раз в двадцать минут. Бой длится секунды, и такая выборка почти
+    // всегда показывала ноль: прогон уверенно докладывал «за весь сезон
+    // не случилось ни одного сражения» ровно тогда, когда флоты теряли
+    // половину тоннажа в боях между отчётами.
+    std::vector<uint32_t> battleCooldown(count, 0);
     uint32_t battlesSeen = 0;
     uint32_t violations = 0;
     std::vector<uint32_t> peakSystems(bots.size(), 0);
@@ -362,6 +426,15 @@ int main(int argc, char** argv) {
         systemBattles(world, context);
         if (traceBattles) reportLosses(world, before, tick);
 
+        // Перезарядка взлетает в момент боя и дальше только убывает,
+        // поэтому скачок вверх — надёжный признак свежего сражения.
+        world.each<StarSystem, BattleState>([&](Entity, StarSystem& system,
+                                                BattleState& battle) {
+            if (system.index >= count) return;
+            if (battle.cooldown > battleCooldown[system.index]) ++battlesSeen;
+            battleCooldown[system.index] = battle.cooldown;
+        });
+
         if (check && totalTonnage(world) > beforeBattle) {
             std::printf("НАРУШЕНИЕ t=%lld: бой ДОБАВИЛ тоннаж (%u -> %u)\n",
                         static_cast<long long>(tick), beforeBattle, totalTonnage(world));
@@ -430,7 +503,7 @@ int main(int argc, char** argv) {
             world.each<BattleState>([&](Entity, BattleState& battle) {
                 if (battle.cooldown > 0) ++fighting;
             });
-            battlesSeen += fighting;
+
 
             const int64_t minutes = (tick + 1) / (60 * kTicksPerSecond);
             std::printf("== %lld ч %02lld мин ==   идёт сражений: %u\n",

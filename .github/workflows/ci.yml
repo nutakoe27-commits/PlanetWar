@@ -225,8 +225,13 @@ jobs:
           cmake --build build/linux-x64-release --target pw_season pw_sim_tests -j
       - name: Тесты симуляции
         run: ./build/linux-x64-release/bin/pw_sim_tests
-      - name: Час игры с проверкой инвариантов
-        run: ./build/linux-x64-release/bin/pw_season --hours 1 --check
+      # Галактика маленькая, а часов больше, чем в игре по умолчанию,
+      # и это осознанно: прогон обязан ДОВЕСТИ БОТОВ ДО ВСТРЕЧИ. С захватом
+      # по планетам расселение стало вчетверо медленнее, и на двухстах
+      # системах за час боты не видят друг друга — вся военная часть игры
+      # остаётся непроверенной, а прогон при этом зелёный.
+      - name: Три часа игры с проверкой инвариантов
+        run: ./build/linux-x64-release/bin/pw_season --systems 60 --hours 3 --check
       - name: Прогон воспроизводим бит в бит
         run: |
           A=$(./build/linux-x64-release/bin/pw_season --hours 1 | grep "хеш мира")

@@ -558,7 +558,10 @@ TEST_CASE("стройка: время равно цене, делённой на
     CHECK(yardTime < 500);
 }
 
-TEST_CASE("стройка: без минералов не идёт") {
+TEST_CASE("стройка: без минералов ЖДЁТ, а не отменяется") {
+    // Заказ не отменяется молча: игрок намерение выразил, и съедать его
+    // за него — это ровно то поведение, которое человек читает как
+    // «игра проглотила приказ».
     Yard yard;
     const Entity planet = yard.colony(1);
     yard.empire().minerals = fx::zero();
@@ -567,13 +570,60 @@ TEST_CASE("стройка: без минералов не идёт") {
     yard.runConstruction(300 * kSecond);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::None));
-    CHECK(yard.world.get<PlanetConstruction>(planet)->invested == fx::zero());
+    CHECK(yard.world.get<PlanetConstruction>(planet)->slot == 0);
+    CHECK(yard.world.get<PlanetConstruction>(planet)->paid == 0);
 
-    // Появились минералы — стройка пошла с того же места.
+    // Появились минералы — стройка началась.
     yard.empire().minerals = fx::fromInt(500);
-    yard.runConstruction(200 * kSecond);
+    yard.runConstruction(130 * kSecond);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::Mine));
+}
+
+TEST_CASE("стройка: цена списывается целиком и сразу") {
+    // Размазанная по времени оплата давала тупик: империя с десятью
+    // начатыми стройками делила скудный доход на десять, ни одна
+    // не доходила до конца, шахты не появлялись — и доход не рос никогда.
+    // Прогон сезона показал империю, которая за два часа не построила
+    // ни одного здания.
+    Yard yard;
+    const Entity planet = yard.colony(1);
+    yard.empire().minerals = fx::fromInt(200);
+    enqueueConstruction(*yard.world.get<PlanetConstruction>(planet), 0, Building::Mine);
+
+    yard.runConstruction(1);
+    CHECK(yard.empire().minerals == fx::fromInt(140));
+    CHECK(yard.world.get<PlanetConstruction>(planet)->paid == 1);
+
+    // Дальше цена больше не списывается: она уже уплачена.
+    yard.runConstruction(60 * kSecond);
+    CHECK(yard.empire().minerals == fx::fromInt(140));
+}
+
+TEST_CASE("стройка: скудный доход не делится между стройками") {
+    // Десять начатых строек и минералов ровно на одну: одна обязана
+    // достроиться, остальные — ждать. Делёж поровну не достраивает
+    // ни одной, и это тупик, а не медленное развитие.
+    Yard yard;
+    yard.empire().minerals = fx::fromInt(60);
+
+    std::vector<Entity> planets;
+    for (int i = 0; i < 10; ++i) {
+        planets.push_back(yard.colony(1));
+        enqueueConstruction(*yard.world.get<PlanetConstruction>(planets.back()), 0,
+                            Building::Mine);
+    }
+
+    yard.runConstruction(200 * kSecond);
+
+    int built = 0;
+    for (const Entity planet : planets) {
+        if (yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
+            uint8_t(Building::Mine)) {
+            ++built;
+        }
+    }
+    CHECK(built == 1);
 }
 
 TEST_CASE("стройка: тратит минералы империи") {
@@ -585,9 +635,8 @@ TEST_CASE("стройка: тратит минералы империи") {
     yard.runConstruction(130 * kSecond);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::Mine));
-    // Ровно цена шахты, ни минералом больше: остаток не переносится.
-    CHECK(yard.empire().minerals.toDouble() ==
-          doctest::Approx(200.0 - 60.0).epsilon(0.02));
+    // Ровно цена шахты, ни минералом больше.
+    CHECK(yard.empire().minerals == fx::fromInt(140));
 }
 
 TEST_CASE("стройка: второй заказ встаёт в очередь, а не отменяет первый") {
@@ -631,11 +680,16 @@ TEST_CASE("стройка: отмена бросает начатое и под�
     enqueueConstruction(site, 0, Building::Shipyard);
     enqueueConstruction(site, 1, Building::Mine);
     yard.runConstruction(60 * kSecond);
-    CHECK(site.invested > fx::zero());
+    CHECK(site.elapsed > 0);
+    CHECK(site.paid == 1);
+    const fx afterShipyard = yard.empire().minerals;
 
-    // Передумал — за перестройку планов на ходу надо платить.
+    // Передумал — за перестройку планов на ходу надо платить: уплаченное
+    // за верфь не возвращается.
     enqueueConstruction(site, 0, Building::None);
-    CHECK(site.invested == fx::zero());
+    CHECK(site.elapsed == 0);
+    CHECK(site.paid == 0);
+    CHECK(yard.empire().minerals == afterShipyard);
     CHECK(site.slot == 1);
     CHECK(site.building == uint8_t(Building::Mine));
     CHECK(site.queued == 0);
@@ -715,8 +769,7 @@ TEST_CASE("стройка: две планеты строят параллель
     CHECK(yard.world.get<PlanetDevelopment>(second)->buildings[0] ==
           uint8_t(Building::Mine));
     // Заплачено за обе.
-    CHECK(yard.empire().minerals.toDouble() ==
-          doctest::Approx(1000.0 - 120.0).epsilon(0.02));
+    CHECK(yard.empire().minerals == fx::fromInt(1000 - 120));
 }
 
 TEST_CASE("стройка: воспроизводится тик в тик") {

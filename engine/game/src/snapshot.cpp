@@ -15,8 +15,8 @@ constexpr size_t kSystemEntryBound = 5 + 6;
 /// Верхняя оценка на флот: идентификатор, империя, две системы, прогресс
 /// и четыре счётчика — всё varint'ами.
 constexpr size_t kFleetEntryBound = 5 + 1 + 5 + 5 + 10 + 4 * 5;
-/// Планета: номер, девять однобайтовых полей и слоты застройки.
-constexpr size_t kPlanetEntryBound = 5 + 9 + sim::kMaxSlots;
+/// Планета: номер, десять однобайтовых полей и слоты застройки.
+constexpr size_t kPlanetEntryBound = 5 + 10 + sim::kMaxSlots;
 
 void writeSystem(ByteWriter& writer, uint32_t index, const SystemView& system) {
     writer.varint(index);
@@ -75,6 +75,7 @@ void writePlanet(ByteWriter& writer, uint32_t id, const PlanetView& planet) {
     writer.u8(planet.buildBuilding);
     writer.u8(planet.buildPercent);
     writer.u8(planet.buildQueued);
+    writer.u8(planet.buildPaid);
     for (uint8_t i = 0; i < sim::kMaxSlots; ++i) writer.u8(planet.buildings[i]);
 }
 
@@ -89,6 +90,7 @@ bool readPlanet(ByteReader& reader, uint32_t& id, PlanetView& planet) {
     planet.buildBuilding = reader.u8();
     planet.buildPercent = reader.u8();
     planet.buildQueued = reader.u8();
+    planet.buildPaid = reader.u8();
     for (uint8_t i = 0; i < sim::kMaxSlots; ++i) planet.buildings[i] = reader.u8();
     return !reader.failed();
 }
@@ -189,6 +191,7 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
                 view.buildBuilding = site->building;
                 view.buildPercent = uint8_t(sim::constructionPercent(*site));
                 view.buildQueued = site->queued;
+                view.buildPaid = site->paid;
             }
 
             if (const sim::PlanetDevelopment* development =

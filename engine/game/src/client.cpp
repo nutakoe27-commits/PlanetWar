@@ -176,6 +176,7 @@ std::vector<Client::PlanetInfo> Client::planetsAt(uint32_t system) const {
                 info.buildBuilding = live.buildBuilding;
                 info.buildPercent = live.buildPercent;
                 info.buildQueued = live.buildQueued;
+                info.buildPaid = live.buildPaid;
                 for (uint8_t i = 0; i < sim::kMaxSlots; ++i) {
                     info.buildings[i] = live.buildings[i];
                 }

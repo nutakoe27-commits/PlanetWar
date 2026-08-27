@@ -99,6 +99,10 @@ struct PlanetView {
     uint8_t buildBuilding = 0;     // Building, который возводится
     uint8_t buildPercent = 0;      // 0..100
     uint8_t buildQueued = 0;       // сколько заказов ждёт очереди
+    /// Стройка оплачена и идёт. Ноль при buildSlot != 0xFF означает
+    /// «заказ принят, но минералов на него не хватило» — а это разные
+    /// состояния, и игрок обязан их различать.
+    uint8_t buildPaid = 0;
     uint8_t buildings[sim::kMaxSlots] = {};
 
     bool operator==(const PlanetView& o) const {
@@ -107,6 +111,7 @@ struct PlanetView {
         if (siegeEmpire != o.siegeEmpire || siegeProgress != o.siegeProgress) return false;
         if (buildSlot != o.buildSlot || buildBuilding != o.buildBuilding) return false;
         if (buildPercent != o.buildPercent || buildQueued != o.buildQueued) return false;
+        if (buildPaid != o.buildPaid) return false;
         for (uint8_t i = 0; i < sim::kMaxSlots; ++i) {
             if (buildings[i] != o.buildings[i]) return false;
         }

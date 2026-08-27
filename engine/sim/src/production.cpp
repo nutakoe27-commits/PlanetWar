@@ -15,11 +15,12 @@ PlanetConstruction emptyConstruction() {
     PlanetConstruction site{};
     site.slot = PlanetConstruction::kNoSlot;
     site.building = uint8_t(Building::None);
+    site.paid = 0;
     for (uint8_t i = 0; i < PlanetConstruction::kQueueLimit; ++i) {
         site.queueSlots[i] = PlanetConstruction::kNoSlot;
         site.queueBuildings[i] = uint8_t(Building::None);
     }
-    site.invested = fx::zero();
+    site.elapsed = 0;
     return site;
 }
 
@@ -67,7 +68,8 @@ namespace {
 
 /// Снять первый заказ из очереди и сделать его текущим.
 void promoteQueued(PlanetConstruction& site) {
-    site.invested = fx::zero();
+    site.elapsed = 0;
+    site.paid = 0;
     if (site.queued == 0) {
         site.slot = PlanetConstruction::kNoSlot;
         site.building = uint8_t(Building::None);
@@ -125,7 +127,8 @@ bool enqueueConstruction(PlanetConstruction& site, uint8_t slot, Building buildi
     if (site.slot == PlanetConstruction::kNoSlot) {
         site.slot = slot;
         site.building = uint8_t(building);
-        site.invested = fx::zero();
+        site.elapsed = 0;
+        site.paid = 0;
         return true;
     }
 
@@ -136,12 +139,16 @@ bool enqueueConstruction(PlanetConstruction& site, uint8_t slot, Building buildi
     return true;
 }
 
+int64_t buildingTicks(Building building) {
+    const int64_t cost = int64_t(buildingCost(building));
+    return cost * kBuildSecondsPerMineral * kTicksPerSecond;
+}
+
 uint32_t constructionPercent(const PlanetConstruction& site) {
-    if (site.slot == PlanetConstruction::kNoSlot) return 0;
-    const uint32_t cost = buildingCost(Building(site.building));
-    if (cost == 0) return 0;
-    const int64_t done = (site.invested * fx::fromInt(100)).floorToInt();
-    const int64_t percent = done / int64_t(cost);
+    if (site.slot == PlanetConstruction::kNoSlot || site.paid == 0) return 0;
+    const int64_t total = buildingTicks(Building(site.building));
+    if (total <= 0) return 0;
+    const int64_t percent = int64_t(site.elapsed) * 100 / total;
     return uint32_t(std::clamp<int64_t>(percent, 0, 100));
 }
 
@@ -162,7 +169,7 @@ uint32_t empireCount(World& world) {
 
 }  // namespace
 
-void planetConstructionTick(World& world, const TickContext& context) {
+void planetConstructionTick(World& world, const TickContext&) {
     const uint32_t empires = empireCount(world);
     if (empires == 0) return;
 
@@ -194,18 +201,29 @@ void planetConstructionTick(World& world, const TickContext& context) {
                 return;
             }
 
-            const fx wanted = kBuildRatePlanet * context.delta;
-            const fx spent = min(wanted, minerals[owner.empire]);
-            if (spent <= fx::zero()) return;  // нет минералов — стройка стоит
+            // --- оплата ---
+            //
+            // ЦЕЛИКОМ И СРАЗУ. Размазанная по времени оплата давала тупик:
+            // империя с десятью начатыми стройками делила скудный доход
+            // на десять, ни одна не доходила до конца, шахты не появлялись —
+            // и доход не рос никогда. Прогон сезона показал империю,
+            // которая за два часа не построила ни одного здания.
+            //
+            // Заказ при этом не отменяется: он ждёт минералов. Игрок
+            // намерение выразил, и отменять его за него — значит съесть
+            // приказ.
+            if (site.paid == 0) {
+                const fx price = fx::fromInt(int64_t(cost));
+                if (minerals[owner.empire] < price) return;
+                minerals[owner.empire] -= price;
+                site.paid = 1;
+                site.elapsed = 0;
+                return;
+            }
 
-            minerals[owner.empire] -= spent;
-            site.invested += spent;
+            ++site.elapsed;
+            if (int64_t(site.elapsed) < buildingTicks(Building(site.building))) return;
 
-            if (site.invested < fx::fromInt(int64_t(cost))) return;
-
-            // Здание готово. Остаток НЕ переносится: он уже оплачен этим
-            // зданием, и переносить его в следующее значило бы дать
-            // бесплатную скидку тому, кто строит цепочкой.
             development.buildings[site.slot] = site.building;
             promoteQueued(site);
         });

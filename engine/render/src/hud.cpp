@@ -234,13 +234,18 @@ void Hud::build(const game::Client& client, const Selection& selection, int scre
             // по щелчку, и без этой строки нажатие выглядит как
             // проглоченное игрой.
             if (planet.building()) {
-                std::string line = std::string("     строится ") +
-                                   buildingName(planet.buildBuilding) + " " +
-                                   number(planet.buildPercent) + "%";
+                // «Ждёт минералов» и «строится 3%» — разные состояния,
+                // и путать их нельзя: в первом случае надо строить шахты,
+                // во втором просто ждать.
+                std::string line = planet.buildPaid != 0
+                                       ? std::string("     строится ")
+                                       : std::string("     ждёт минералов: ");
+                line += buildingName(planet.buildBuilding);
+                if (planet.buildPaid != 0) line += " " + number(planet.buildPercent) + "%";
                 if (planet.buildQueued > 0) {
                     line += " (+" + number(planet.buildQueued) + " в очереди)";
                 }
-                panel.push_back(HudLine{line, kGood});
+                panel.push_back(HudLine{line, planet.buildPaid != 0 ? kGood : kWarn});
             }
 
             std::string built;
