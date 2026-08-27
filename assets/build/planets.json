@@ -1,7 +1,7 @@
 {
   "version": 1,
   "note": "Сгенерировано tools/blender/build_assets.py. Не редактировать руками.",
-  "generator": "blender 5.0.1",
+  "generator": "blender 5.2.1 LTS",
   "planets": [
     {
       "class": 0,

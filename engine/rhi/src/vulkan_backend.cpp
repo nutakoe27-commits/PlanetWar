@@ -652,6 +652,16 @@ bool Device::createPipeline(const std::vector<uint8_t>& vertexSpirv,
         return d.fail("не удалось создать раскладку конвейера");
     }
 
+    // Проход общий на всех и несёт вложение глубины, поэтому состояние
+    // глубины обязано быть задано даже там, где оно не нужно: NULL здесь —
+    // нарушение спецификации, а не «значение по умолчанию». Этот конвейер
+    // ничего не пишет и ничего не проверяет, но сказать об этом обязан.
+    VkPipelineDepthStencilStateCreateInfo depthState{
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthState.depthTestEnable = VK_FALSE;
+    depthState.depthWriteEnable = VK_FALSE;
+    depthState.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+
     VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     info.stageCount = 2;
     info.pStages = stages;
@@ -660,6 +670,7 @@ bool Device::createPipeline(const std::vector<uint8_t>& vertexSpirv,
     info.pViewportState = &viewportState;
     info.pRasterizationState = &raster;
     info.pMultisampleState = &multisample;
+    info.pDepthStencilState = &depthState;
     info.pColorBlendState = &blend;
     info.layout = d.layout;
     info.renderPass = d.renderPass;
@@ -675,12 +686,19 @@ bool Device::createPipeline(const std::vector<uint8_t>& vertexSpirv,
     return true;
 }
 
+uint64_t Device::validationErrors() { return validationErrorCount().load(); }
+
 bool Device::beginFrame(const ClearColor& clear) {
     Impl& d = *impl_;
     if (d.frameOpen) return d.fail("beginFrame вызван повторно без endFrame");
 
     vkWaitForFences(d.device, 1, &d.fence, VK_TRUE, UINT64_MAX);
     vkResetFences(d.device, 1, &d.fence);
+
+    // Рост кадровых буферов — здесь и только здесь: барьер уже пройден,
+    // запись команд ещё не начата. Внутри кадра пересоздание буфера
+    // делает недействительным весь командный буфер (см. FrameBufferVk::wanted).
+    if (!d.reserveFrameBuffers()) return false;
 
     d.imageIndex = 0;
     if (!d.headless) {

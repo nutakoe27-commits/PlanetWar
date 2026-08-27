@@ -1,7 +1,7 @@
 {
   "version": 1,
   "note": "Сгенерировано tools/blender/build_assets.py. Не редактировать руками.",
-  "generator": "blender 5.0.1",
+  "generator": "blender 5.2.1 LTS",
   "charset": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя·×—…°",
   "columns": 16,
   "rows": 11,
@@ -18,15 +18,15 @@
     },
     {
       "char": "!",
-      "left": 0.4375,
+      "left": 0.4583,
       "right": 0.5625,
-      "advance": 0.215
+      "advance": 0.1942
     },
     {
       "char": "\"",
       "left": 0.3958,
-      "right": 0.625,
-      "advance": 0.3192
+      "right": 0.6042,
+      "advance": 0.2983
     },
     {
       "char": "#",
@@ -36,9 +36,9 @@
     },
     {
       "char": "$",
-      "left": 0.3333,
-      "right": 0.6875,
-      "advance": 0.4442
+      "left": 0.3542,
+      "right": 0.6667,
+      "advance": 0.4025
     },
     {
       "char": "%",
@@ -48,9 +48,9 @@
     },
     {
       "char": "&",
-      "left": 0.2917,
+      "left": 0.3125,
       "right": 0.7083,
-      "advance": 0.5067
+      "advance": 0.4858
     },
     {
       "char": "'",
@@ -66,15 +66,15 @@
     },
     {
       "char": ")",
-      "left": 0.3958,
+      "left": 0.4167,
       "right": 0.5833,
-      "advance": 0.2775
+      "advance": 0.2567
     },
     {
       "char": "*",
-      "left": 0.3333,
-      "right": 0.6667,
-      "advance": 0.4233
+      "left": 0.3542,
+      "right": 0.6458,
+      "advance": 0.3817
     },
     {
       "char": "+",
@@ -108,14 +108,14 @@
     },
     {
       "char": "0",
-      "left": 0.32289999999999996,
-      "right": 0.6771,
+      "left": 0.31245,
+      "right": 0.6458499999999999,
       "advance": 0.465
     },
     {
       "char": "1",
-      "left": 0.32295,
-      "right": 0.63545,
+      "left": 0.33335,
+      "right": 0.6250499999999999,
       "advance": 0.465
     },
     {
@@ -144,8 +144,8 @@
     },
     {
       "char": "6",
-      "left": 0.3021,
-      "right": 0.6562999999999999,
+      "left": 0.31245,
+      "right": 0.6458499999999999,
       "advance": 0.465
     },
     {
@@ -156,8 +156,8 @@
     },
     {
       "char": "8",
-      "left": 0.3125,
-      "right": 0.6875,
+      "left": 0.31245,
+      "right": 0.6458499999999999,
       "advance": 0.465
     },
     {
@@ -198,8 +198,8 @@
     },
     {
       "char": "?",
-      "left": 0.3542,
-      "right": 0.6458,
+      "left": 0.375,
+      "right": 0.6667,
       "advance": 0.3817
     },
     {
@@ -210,9 +210,9 @@
     },
     {
       "char": "A",
-      "left": 0.2917,
-      "right": 0.7083,
-      "advance": 0.5067
+      "left": 0.3125,
+      "right": 0.6875,
+      "advance": 0.465
     },
     {
       "char": "B",
@@ -229,8 +229,8 @@
     {
       "char": "D",
       "left": 0.3125,
-      "right": 0.6667,
-      "advance": 0.4442
+      "right": 0.6875,
+      "advance": 0.465
     },
     {
       "char": "E",
@@ -252,15 +252,15 @@
     },
     {
       "char": "H",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4442
+      "advance": 0.4233
     },
     {
       "char": "I",
       "left": 0.3542,
-      "right": 0.6667,
-      "advance": 0.4025
+      "right": 0.6458,
+      "advance": 0.3817
     },
     {
       "char": "J",
@@ -271,8 +271,8 @@
     {
       "char": "K",
       "left": 0.3125,
-      "right": 0.7083,
-      "advance": 0.4858
+      "right": 0.6875,
+      "advance": 0.465
     },
     {
       "char": "L",
@@ -283,14 +283,14 @@
     {
       "char": "M",
       "left": 0.3125,
-      "right": 0.7083,
-      "advance": 0.4858
+      "right": 0.6875,
+      "advance": 0.465
     },
     {
       "char": "N",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6875,
-      "advance": 0.465
+      "advance": 0.4442
     },
     {
       "char": "O",
@@ -312,9 +312,9 @@
     },
     {
       "char": "R",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.7083,
-      "advance": 0.4858
+      "advance": 0.465
     },
     {
       "char": "S",
@@ -330,9 +330,9 @@
     },
     {
       "char": "U",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4442
+      "advance": 0.4233
     },
     {
       "char": "V",
@@ -355,14 +355,14 @@
     {
       "char": "Y",
       "left": 0.3125,
-      "right": 0.7083,
-      "advance": 0.4858
+      "right": 0.6875,
+      "advance": 0.465
     },
     {
       "char": "Z",
-      "left": 0.3125,
-      "right": 0.7083,
-      "advance": 0.4858
+      "left": 0.3333,
+      "right": 0.6875,
+      "advance": 0.4442
     },
     {
       "char": "[",
@@ -372,9 +372,9 @@
     },
     {
       "char": "\\",
-      "left": 0.3125,
-      "right": 0.6667,
-      "advance": 0.4442
+      "left": 0.3333,
+      "right": 0.6458,
+      "advance": 0.4025
     },
     {
       "char": "]",
@@ -391,43 +391,43 @@
     {
       "char": "_",
       "left": 0.2917,
-      "right": 0.7292,
-      "advance": 0.5275
+      "right": 0.7083,
+      "advance": 0.5067
     },
     {
       "char": "`",
-      "left": 0.375,
-      "right": 0.5625,
-      "advance": 0.2775
+      "left": 0.3958,
+      "right": 0.5417,
+      "advance": 0.2358
     },
     {
       "char": "a",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4442
+      "advance": 0.4233
     },
     {
       "char": "b",
       "left": 0.3333,
-      "right": 0.6875,
-      "advance": 0.4442
+      "right": 0.6667,
+      "advance": 0.4233
     },
     {
       "char": "c",
-      "left": 0.3542,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4025
+      "advance": 0.4233
     },
     {
       "char": "d",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4442
+      "advance": 0.4233
     },
     {
       "char": "e",
-      "left": 0.3125,
-      "right": 0.6667,
+      "left": 0.3333,
+      "right": 0.6875,
       "advance": 0.4442
     },
     {
@@ -438,9 +438,9 @@
     },
     {
       "char": "g",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4442
+      "advance": 0.4233
     },
     {
       "char": "h",
@@ -450,15 +450,15 @@
     },
     {
       "char": "i",
-      "left": 0.3333,
+      "left": 0.3542,
       "right": 0.6667,
-      "advance": 0.4233
+      "advance": 0.4025
     },
     {
       "char": "j",
-      "left": 0.3333,
+      "left": 0.3542,
       "right": 0.5833,
-      "advance": 0.34
+      "advance": 0.3192
     },
     {
       "char": "k",
@@ -469,8 +469,8 @@
     {
       "char": "l",
       "left": 0.3333,
-      "right": 0.6667,
-      "advance": 0.4233
+      "right": 0.6458,
+      "advance": 0.4025
     },
     {
       "char": "m",
@@ -486,15 +486,15 @@
     },
     {
       "char": "o",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4442
+      "advance": 0.4233
     },
     {
       "char": "p",
-      "left": 0.3333,
-      "right": 0.6875,
-      "advance": 0.4442
+      "left": 0.3542,
+      "right": 0.6667,
+      "advance": 0.4025
     },
     {
       "char": "q",
@@ -505,8 +505,8 @@
     {
       "char": "r",
       "left": 0.3958,
-      "right": 0.7083,
-      "advance": 0.4025
+      "right": 0.6875,
+      "advance": 0.3817
     },
     {
       "char": "s",
@@ -522,15 +522,15 @@
     },
     {
       "char": "u",
-      "left": 0.3333,
+      "left": 0.3542,
       "right": 0.6667,
-      "advance": 0.4233
+      "advance": 0.4025
     },
     {
       "char": "v",
       "left": 0.3125,
-      "right": 0.6875,
-      "advance": 0.465
+      "right": 0.6667,
+      "advance": 0.4442
     },
     {
       "char": "w",
@@ -546,15 +546,15 @@
     },
     {
       "char": "y",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6875,
-      "advance": 0.465
+      "advance": 0.4442
     },
     {
       "char": "z",
       "left": 0.3542,
-      "right": 0.6458,
-      "advance": 0.3817
+      "right": 0.6667,
+      "advance": 0.4025
     },
     {
       "char": "{",
@@ -565,8 +565,8 @@
     {
       "char": "|",
       "left": 0.4375,
-      "right": 0.5625,
-      "advance": 0.215
+      "right": 0.5417,
+      "advance": 0.1942
     },
     {
       "char": "}",
@@ -576,15 +576,15 @@
     },
     {
       "char": "~",
-      "left": 0.2917,
+      "left": 0.3125,
       "right": 0.6875,
-      "advance": 0.4858
+      "advance": 0.465
     },
     {
       "char": "А",
       "left": 0.2917,
-      "right": 0.7083,
-      "advance": 0.5067
+      "right": 0.6875,
+      "advance": 0.4858
     },
     {
       "char": "Б",
@@ -618,9 +618,9 @@
     },
     {
       "char": "Ё",
-      "left": 0.3333,
-      "right": 0.6875,
-      "advance": 0.4442
+      "left": 0.3542,
+      "right": 0.6667,
+      "advance": 0.4025
     },
     {
       "char": "Ж",
@@ -642,15 +642,15 @@
     },
     {
       "char": "Й",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4442
+      "advance": 0.4233
     },
     {
       "char": "К",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.7083,
-      "advance": 0.4858
+      "advance": 0.465
     },
     {
       "char": "Л",
@@ -661,26 +661,26 @@
     {
       "char": "М",
       "left": 0.3125,
-      "right": 0.7083,
-      "advance": 0.4858
+      "right": 0.6875,
+      "advance": 0.465
     },
     {
       "char": "Н",
       "left": 0.3333,
-      "right": 0.6875,
-      "advance": 0.4442
+      "right": 0.6667,
+      "advance": 0.4233
     },
     {
       "char": "О",
-      "left": 0.3125,
-      "right": 0.6875,
-      "advance": 0.465
+      "left": 0.3333,
+      "right": 0.6667,
+      "advance": 0.4233
     },
     {
       "char": "П",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6875,
-      "advance": 0.465
+      "advance": 0.4442
     },
     {
       "char": "Р",
@@ -702,33 +702,33 @@
     },
     {
       "char": "У",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6875,
-      "advance": 0.465
+      "advance": 0.4442
     },
     {
       "char": "Ф",
-      "left": 0.3125,
+      "left": 0.2917,
       "right": 0.6875,
-      "advance": 0.465
+      "advance": 0.4858
     },
     {
       "char": "Х",
       "left": 0.2917,
-      "right": 0.7083,
-      "advance": 0.5067
+      "right": 0.6875,
+      "advance": 0.4858
     },
     {
       "char": "Ц",
-      "left": 0.2917,
+      "left": 0.3125,
       "right": 0.7083,
-      "advance": 0.5067
+      "advance": 0.4858
     },
     {
       "char": "Ч",
       "left": 0.3333,
-      "right": 0.6875,
-      "advance": 0.4442
+      "right": 0.6667,
+      "advance": 0.4233
     },
     {
       "char": "Ш",
@@ -750,9 +750,9 @@
     },
     {
       "char": "Ы",
-      "left": 0.2917,
+      "left": 0.3125,
       "right": 0.6875,
-      "advance": 0.4858
+      "advance": 0.465
     },
     {
       "char": "Ь",
@@ -786,9 +786,9 @@
     },
     {
       "char": "б",
-      "left": 0.3125,
-      "right": 0.6875,
-      "advance": 0.465
+      "left": 0.3333,
+      "right": 0.6667,
+      "advance": 0.4233
     },
     {
       "char": "в",
@@ -810,15 +810,15 @@
     },
     {
       "char": "е",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6875,
-      "advance": 0.465
+      "advance": 0.4442
     },
     {
       "char": "ё",
-      "left": 0.3125,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4442
+      "advance": 0.4233
     },
     {
       "char": "ж",
@@ -828,9 +828,9 @@
     },
     {
       "char": "з",
-      "left": 0.3333,
+      "left": 0.3542,
       "right": 0.6667,
-      "advance": 0.4233
+      "advance": 0.4025
     },
     {
       "char": "и",
@@ -840,9 +840,9 @@
     },
     {
       "char": "й",
-      "left": 0.3333,
+      "left": 0.3542,
       "right": 0.6667,
-      "advance": 0.4233
+      "advance": 0.4025
     },
     {
       "char": "к",
@@ -876,9 +876,9 @@
     },
     {
       "char": "п",
-      "left": 0.3542,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4025
+      "advance": 0.4233
     },
     {
       "char": "р",
@@ -913,8 +913,8 @@
     {
       "char": "х",
       "left": 0.3125,
-      "right": 0.6875,
-      "advance": 0.465
+      "right": 0.6667,
+      "advance": 0.4442
     },
     {
       "char": "ц",
@@ -924,9 +924,9 @@
     },
     {
       "char": "ч",
-      "left": 0.3333,
+      "left": 0.3542,
       "right": 0.6667,
-      "advance": 0.4233
+      "advance": 0.4025
     },
     {
       "char": "ш",
@@ -943,8 +943,8 @@
     {
       "char": "ъ",
       "left": 0.2917,
-      "right": 0.7083,
-      "advance": 0.5067
+      "right": 0.6875,
+      "advance": 0.4858
     },
     {
       "char": "ы",
@@ -954,9 +954,9 @@
     },
     {
       "char": "ь",
-      "left": 0.3542,
+      "left": 0.3333,
       "right": 0.6667,
-      "advance": 0.4025
+      "advance": 0.4233
     },
     {
       "char": "э",
@@ -966,15 +966,15 @@
     },
     {
       "char": "ю",
-      "left": 0.3125,
-      "right": 0.7083,
+      "left": 0.2917,
+      "right": 0.6875,
       "advance": 0.4858
     },
     {
       "char": "я",
-      "left": 0.3542,
+      "left": 0.3333,
       "right": 0.6458,
-      "advance": 0.3817
+      "advance": 0.4025
     },
     {
       "char": "·",
@@ -990,8 +990,8 @@
     },
     {
       "char": "—",
-      "left": 0.2917,
-      "right": 0.7292,
+      "left": 0.2708,
+      "right": 0.7083,
       "advance": 0.5275
     },
     {

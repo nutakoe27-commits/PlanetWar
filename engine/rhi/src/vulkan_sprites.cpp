@@ -11,14 +11,6 @@ namespace pw::rhi {
 
 namespace {
 
-/// Сколько места отводить под кадровые буферы изначально.
-///
-/// Растут по требованию, но начальный размер выбран так, чтобы обычный
-/// кадр не вызывал перевыделения ни разу: перевыделение внутри кадра
-/// стоит ожидания простоя устройства.
-constexpr VkDeviceSize kInitialSpriteBytes = sizeof(SpriteInstance) * 4096;
-constexpr VkDeviceSize kInitialLineBytes = sizeof(LineVertex) * 8192;
-
 /// Камера в push-константах, а не в uniform-буфере.
 ///
 /// Их всего шестнадцать байт, они меняются каждый кадр, и push-константы
@@ -50,6 +42,14 @@ void Device::Impl::destroyBuffer(FrameBufferVk& target) {
 bool Device::Impl::ensureBuffer(FrameBufferVk& target, VkDeviceSize needed,
                                 VkBufferUsageFlags usage) {
     if (target.capacity >= needed && target.buffer != VK_NULL_HANDLE) return true;
+
+    // Внутри кадра — только запомнить и отказать. Почему пересоздавать
+    // здесь нельзя, подробно написано у поля `wanted`.
+    if (frameOpen) {
+        if (needed > target.wanted) target.wanted = needed;
+        return false;
+    }
+
 
     // Растём с запасом вдвое: иначе кадр, в котором спрайтов стало на один
     // больше, перевыделял бы буфер каждый раз.
@@ -92,7 +92,22 @@ bool Device::Impl::ensureBuffer(FrameBufferVk& target, VkDeviceSize needed,
         return fail("не удалось отобразить буфер вершин");
     }
     target.capacity = capacity;
+    if (target.wanted < capacity) target.wanted = capacity;
     return true;
+}
+
+bool Device::Impl::reserveFrameBuffers() {
+    // Начальные размеры выбраны так, чтобы обычный кадр не просил добавки
+    // ни разу. Просьба всё же возможна — тогда она исполняется здесь,
+    // на кадр позже, и это ЕДИНСТВЕННОЕ безопасное место для роста.
+    if (spriteBuffer.wanted < kInitialSpriteBytes) spriteBuffer.wanted = kInitialSpriteBytes;
+    if (lineBuffer.wanted < kInitialLineBytes) lineBuffer.wanted = kInitialLineBytes;
+    if (meshBuffer.wanted < kInitialMeshBytes) meshBuffer.wanted = kInitialMeshBytes;
+
+    return ensureBuffer(spriteBuffer, spriteBuffer.wanted,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) &&
+           ensureBuffer(lineBuffer, lineBuffer.wanted, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) &&
+           ensureBuffer(meshBuffer, meshBuffer.wanted, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 }
 
 // ---------------------------------------------------------------------------
@@ -537,10 +552,17 @@ void Device::drawSprites(const SpriteInstance* instances, size_t count, TextureH
     if (!d.frameOpen || d.spritePipeline == VK_NULL_HANDLE) return;
     if (atlas == kInvalidTexture || atlas > d.textures.size()) return;
 
-    const VkDeviceSize bytes = VkDeviceSize(count) * sizeof(SpriteInstance);
+    VkDeviceSize bytes = VkDeviceSize(count) * sizeof(SpriteInstance);
     if (!d.ensureBuffer(d.spriteBuffer, d.spriteUsed + bytes,
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
-        return;
+        // Места не хватило, а вырасти внутри кадра нельзя. Рисуем СКОЛЬКО
+        // ВЛЕЗЛО, а не бросаем вызов целиком: пропавшая половина карты
+        // заметна куда меньше, чем пропавшая карта. Добавку выдадут
+        // на следующем кадре, и он будет уже полным.
+        if (d.spriteBuffer.capacity <= d.spriteUsed) return;
+        count = size_t((d.spriteBuffer.capacity - d.spriteUsed) / sizeof(SpriteInstance));
+        if (count == 0) return;
+        bytes = VkDeviceSize(count) * sizeof(SpriteInstance);
     }
 
     std::memcpy(static_cast<uint8_t*>(d.spriteBuffer.mapped) + d.spriteUsed, instances,
@@ -552,9 +574,14 @@ void Device::drawSprites(const SpriteInstance* instances, size_t count, TextureH
     vkCmdBindDescriptorSets(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, d.spriteLayout, 0, 1, &set,
                             0, nullptr);
 
+    // Стадии обязаны совпадать с диапазоном, объявленным в раскладке
+    // конвейера, — иначе это нарушение спецификации, а не мелочь:
+    // раскладка объявлена как вершинная И фрагментная, значит и класть
+    // надо в обе. Проверочные слои ловят это первым же кадром.
     const CameraPush push = makePush(d.camera, d.width, d.height);
-    vkCmdPushConstants(d.cmd, d.spriteLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push),
-                       &push);
+    vkCmdPushConstants(d.cmd, d.spriteLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(push), &push);
 
     const VkDeviceSize offset = d.spriteUsed;
     vkCmdBindVertexBuffers(d.cmd, 0, 1, &d.spriteBuffer.buffer, &offset);
@@ -572,9 +599,15 @@ void Device::drawLines(const LineVertex* vertices, size_t count) {
     // Вершины идут парами: нечётный хвост нарисовал бы отрезок в мусор.
     count -= count % 2;
 
-    const VkDeviceSize bytes = VkDeviceSize(count) * sizeof(LineVertex);
+    VkDeviceSize bytes = VkDeviceSize(count) * sizeof(LineVertex);
     if (!d.ensureBuffer(d.lineBuffer, d.lineUsed + bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
-        return;
+        // Как и со спрайтами — рисуем сколько влезло. Вершины идут парами,
+        // поэтому нечётный хвост отсекаем ещё раз.
+        if (d.lineBuffer.capacity <= d.lineUsed) return;
+        count = size_t((d.lineBuffer.capacity - d.lineUsed) / sizeof(LineVertex));
+        count -= count % 2;
+        if (count < 2) return;
+        bytes = VkDeviceSize(count) * sizeof(LineVertex);
     }
 
     std::memcpy(static_cast<uint8_t*>(d.lineBuffer.mapped) + d.lineUsed, vertices,
@@ -583,7 +616,9 @@ void Device::drawLines(const LineVertex* vertices, size_t count) {
     vkCmdBindPipeline(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, d.linePipeline);
 
     const CameraPush push = makePush(d.camera, d.width, d.height);
-    vkCmdPushConstants(d.cmd, d.lineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
+    vkCmdPushConstants(d.cmd, d.lineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(push), &push);
 
     const VkDeviceSize offset = d.lineUsed;
     vkCmdBindVertexBuffers(d.cmd, 0, 1, &d.lineBuffer.buffer, &offset);

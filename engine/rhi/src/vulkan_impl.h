@@ -13,6 +13,7 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -29,12 +30,30 @@ constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
 constexpr VkFormat kOffscreenFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
 
+/// Сколько раз проверочные слои сказали «ошибка».
+///
+/// СЧИТАЕТСЯ, А НЕ ПРОСТО ПЕЧАТАЕТСЯ. Пока это была строчка в журнале,
+/// прогон с сорока семью тысячами нарушений заканчивался кодом ноль
+/// и считался успешным. Среди них лежало то самое пересоздание буфера
+/// внутри кадра, от которого игра падала на кнопке «Отправить флот»:
+/// драйвер llvmpipe его терпел, Metal — нет. Ошибка проверочных слоёв
+/// — это сломанная программа, а не замечание, и прогон обязан падать.
+inline std::atomic<uint64_t>& validationErrorCount() {
+    static std::atomic<uint64_t> count{0};
+    return count;
+}
+
 inline VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
     VkDebugUtilsMessageTypeFlagsEXT,
     const VkDebugUtilsMessengerCallbackDataEXT* data, void*) {
     if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-        PW_LOG_ERROR("rhi", "валидация: %s", data->pMessage);
+        // Первые несколько печатаем целиком, дальше только считаем:
+        // одно нарушение в кадре даёт их десятки тысяч за прогон,
+        // и журнал перестаёт быть читаемым ровно тогда, когда нужен.
+        const uint64_t seen = validationErrorCount().fetch_add(1);
+        if (seen < 12) PW_LOG_ERROR("rhi", "валидация: %s", data->pMessage);
+        else if (seen == 12) PW_LOG_ERROR("rhi", "валидация: дальше только счёт");
     } else if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         PW_LOG_WARN("rhi", "валидация: %s", data->pMessage);
     }
@@ -89,6 +108,20 @@ inline uint32_t findMemoryType(VkPhysicalDevice physical, uint32_t typeBits,
 
 
 
+/// Сколько места отводить под кадровые буферы изначально.
+///
+/// Растут по требованию, но начальный размер выбран так, чтобы обычный
+/// кадр не просил добавки ни разу: добавка выдаётся лишь на следующем
+/// кадре, а до неё лишняя геометрия кадра не рисуется.
+constexpr VkDeviceSize kInitialSpriteBytes = sizeof(SpriteInstance) * 4096;
+constexpr VkDeviceSize kInitialLineBytes = sizeof(LineVertex) * 8192;
+
+/// Начальный размер буфера экземпляров сеток.
+///
+/// Планет в системе единицы, построек — десятки, но выделяем с запасом:
+/// добавка выдаётся только на следующем кадре, и кадру лучше её не просить.
+constexpr VkDeviceSize kInitialMeshBytes = sizeof(MeshInstance) * 1024;
+
 /// Кадровый буфер под спрайты и линии.
 ///
 /// Живёт в памяти, видимой процессору, и остаётся отображённым всё время:
@@ -99,6 +132,27 @@ struct FrameBufferVk {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     void* mapped = nullptr;
     VkDeviceSize capacity = 0;
+
+    /// Сколько байт кадр попросил, но не получил.
+    ///
+    /// БУФЕР НЕЛЬЗЯ ПЕРЕСОЗДАВАТЬ ВНУТРИ КАДРА. Уничтожение буфера,
+    /// уже привязанного к записываемому командному буферу, делает
+    /// НЕДЕЙСТВИТЕЛЬНЫМ САМ КОМАНДНЫЙ БУФЕР — не только эту привязку.
+    /// Всё, что записано после, неопределённо. `vkDeviceWaitIdle` от
+    /// этого не спасает: он ждёт устройство, а запись идёт на процессоре
+    /// и к моменту ожидания уже сослалась на уничтоженный объект.
+    ///
+    /// Так игра и падала на кнопке «Отправить флот»: взведённый приказ
+    /// добавляет к карте линию до цели и два круга, число вершин
+    /// перешагивает вместимость — буфер пересоздаётся посреди кадра,
+    /// командный буфер становится недействительным, и следующий же
+    /// вызов отрисовки уходит в никуда. Драйвер llvmpipe это терпел,
+    /// Metal через MoltenVK — нет.
+    ///
+    /// Поэтому рост отложен: кадр запоминает, сколько ему не хватило,
+    /// пропускает лишнюю геометрию и растёт в `reserveFrameBuffers`
+    /// ПЕРЕД началом записи следующего кадра.
+    VkDeviceSize wanted = 0;
 };
 
 /// Загруженная сетка: вершины и индексы в памяти устройства.
@@ -194,7 +248,13 @@ struct Device::Impl {
     Camera camera;
 
     bool createSamplerResources();
+    /// Хватает ли места. Растит буфер ТОЛЬКО вне кадра; внутри кадра
+    /// лишь запоминает нехватку и отвечает «нет».
     bool ensureBuffer(FrameBufferVk& target, VkDeviceSize needed, VkBufferUsageFlags usage);
+    /// Дорастить кадровые буферы до запрошенного. Вызывается из
+    /// `beginFrame` до `vkBeginCommandBuffer` — единственный момент,
+    /// когда пересоздание буфера безопасно.
+    bool reserveFrameBuffers();
     void destroyBuffer(FrameBufferVk& target);
     bool buildPipeline(const std::vector<uint8_t>& vertexSpirv,
                        const std::vector<uint8_t>& fragmentSpirv,

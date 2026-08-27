@@ -123,6 +123,10 @@ void printUsage() {
         "  --shot-after <с> сколько секунд поиграть до снимка\n"
         "  --shot-cursor <x> <y>  поставить курсор перед снимком —\n"
         "                   так на снимок попадают подсветка и подсказка\n"
+        "  --shot-press     щёлкнуть в этой точке до снимка: проверить,\n"
+        "                   что кнопка делает и не падает\n"
+        "  --sweep <шаг>    без окна: обойти весь экран щелчками с этим шагом\n"
+        "                   в обоих видах и выйти. Ищет падения, а не картинку\n"
         "  --shot-zoom <k>  приблизить перед снимком\n"
         "  --shot-system    снимок ВИДА СИСТЕМЫ, а не карты галактики\n"
         "\nВСЁ УПРАВЛЕНИЕ — МЫШЬЮ. Ни одно действие не требует клавиши:\n"
@@ -156,6 +160,25 @@ int main(int argc, char** argv) {
     // не проверять: правило проекта «снимки ловят замысел» на половину
     // интерфейса просто не распространялось.
     float shotCursorX = -1.0f, shotCursorY = -1.0f;
+    // Нажать в этой точке за секунду до снимка.
+    //
+    // Без этого КНОПКИ НЕ ПРОВЕРЯЕМЫ ВООБЩЕ. Безоконный режим умел
+    // поставить курсор, но не умел щёлкнуть, поэтому всё, что случается
+    // ПОСЛЕ нажатия — новое состояние экрана, приказ, падение, — можно
+    // было увидеть только руками. Игрок и увидел: игра падала на кнопке
+    // «Отправить флот», а прогон был зелёный.
+    bool shotPress = false;
+    // Обход всего экрана щелчками.
+    //
+    // Кнопка «Отправить флот» роняла игру, а прогон был зелёный: тесты
+    // проверяют, ЧТО возвращает экран, но не проверяют, переживёт ли
+    // клиент это намерение целиком — от щелчка до следующего кадра.
+    // Между экраном и падением лежат обработка намерения, приказ,
+    // смена вида и отрисовка, и ни один юнит-тест их не связывает.
+    //
+    // Обход связывает: он щёлкает во ВСЕ точки сетки в обоих видах
+    // и заканчивается кодом ноль, только если клиент дожил до конца.
+    int sweepStep = 0;
     bool shotSystem = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -173,6 +196,8 @@ int main(int argc, char** argv) {
             shotCursorX = float(std::atof(argv[++i]));
             shotCursorY = float(std::atof(argv[++i]));
         }
+        else if (arg == "--shot-press") shotPress = true;
+        else if (arg == "--sweep" && i + 1 < argc) sweepStep = std::atoi(argv[++i]);
         else if (arg == "--shot-system") shotSystem = true;
         else {
             printUsage();
@@ -190,7 +215,7 @@ int main(int argc, char** argv) {
     // интерфейс автоматически: отрисовать кадр в CI, посчитать пиксели
     // и сравнить с ожидаемым. Иначе экран проверяется только глазами
     // и только тогда, когда кто-то удосужился посмотреть.
-    const bool headless = !shotPath.empty();
+    const bool headless = !shotPath.empty() || sweepStep > 0;
 
     if (!initPlatform(headless)) {
         std::fprintf(stderr, "не удалось поднять платформу\n");
@@ -341,6 +366,18 @@ int main(int argc, char** argv) {
 
     const int64_t shotAt = int64_t(shotAfterSeconds) * 1000;
     bool shotTaken = false;
+    // Состояние обхода: номер точки и фаза щелчка внутри неё.
+    int sweepPoint = 0;
+    int sweepPhase = 0;
+    int sweepClicks = 0;
+    // Сколько раз обход добрался до каждого намерения.
+    //
+    // Без этого счётчика обход отвечает только «жив», но не «а всё ли он
+    // потрогал». Зелёный прогон, ни разу не нажавший на кнопку, —
+    // это и есть та самая молча проходящая проверка.
+    int sweepActions[int(render::ActionKind::Count)] = {};
+    int sweepOrders = 0;
+    bool sweepFailed = false;
 
     while (window.pumpEvents(input)) {
         const int64_t now = nowMilliseconds();
@@ -430,6 +467,80 @@ int main(int argc, char** argv) {
             window.setTitle(("PlanetWar — " + name).c_str());
         }
 
+        // --- обход щелчками ---
+        //
+        // Три кадра на точку: нажали, подержали, отпустили. Кнопка
+        // срабатывает по ОТПУСКАНИЮ и только если курсор всё ещё на ней,
+        // поэтому щелчок «в один кадр» проверял бы не то, что делает
+        // человек.
+        //
+        // Щелчок кладётся В САМ ВВОД, а не в структуру интерфейса. Первая
+        // версия обхода подменяла поля `UiInput` — и следующие же три
+        // строки, заполнявшие их из настоящей мыши, затирали подмену.
+        // Обход честно печатал «щелчков 1760», не сделав НИ ОДНОГО: он
+        // считал свои намерения, а не то, что дошло до игры. Проверка,
+        // которая молча проходит, хуже отсутствующей — эта прошла дважды,
+        // в том числе под санитайзером, пока падение лежало на месте.
+        if (sweepStep > 0 && client.ready()) {
+            const int columns = std::max(1, width / sweepStep);
+            const int rows = std::max(1, height / sweepStep);
+            const int total = columns * rows;
+
+            if (sweepPoint >= total * 2) {
+                std::printf("обход закончен: %d точек в двух видах, щелчков %d — "
+                            "клиент жив\n", total, sweepClicks);
+                std::printf("  намерения:");
+                for (int k = 1; k < int(render::ActionKind::Count); ++k) {
+                    if (sweepActions[k] == 0) continue;
+                    std::printf(" %s×%d", render::actionName(render::ActionKind(k)),
+                                sweepActions[k]);
+                }
+                std::printf("\n  приказов флоту отдано: %d\n", sweepOrders);
+                // Прогон, переживший обход, но нарушивший спецификацию
+                // Vulkan, — не зелёный. Ровно такой прогон и пропустил
+                // падение на кнопке «Отправить флот».
+                break;
+            }
+
+            // Первую половину обхода идём по карте, вторую — внутри системы.
+            const bool wantSystem = sweepPoint >= total;
+            if (state.inSystem != wantSystem &&
+                state.system < client.galaxy().systemCount()) {
+                state.inSystem = wantSystem;
+                if (wantSystem) {
+                    systemCamera = render::SystemCamera{};
+                    systemCamera.focusOrbit = 0xFFFFFFFFu;
+                    systemCamera.distance =
+                        render::fitDistance(client.galaxy().planetCount(state.system));
+                }
+            }
+
+            const int at = sweepPoint % total;
+            input.setMouse(float((at % columns) * sweepStep + sweepStep / 2),
+                           float((at / columns) * sweepStep + sweepStep / 2));
+            input.setButton(MouseButton::Left, sweepPhase <= 1);
+            if (sweepPhase == 2) ++sweepClicks;
+            if (++sweepPhase > 2) {
+                sweepPhase = 0;
+                ++sweepPoint;
+            }
+        } else if (headless && shotCursorX >= 0.0f) {
+            // Курсор подменяем в САМОМ вводе, а не только в интерфейсе.
+            //
+            // Подменяя лишь интерфейс, я проверял половину картины: мир
+            // по-прежнему считал, что курсора нет, и всё, что зависит от
+            // него за пределами панелей — подсветка системы под курсором,
+            // линия к цели приказа, выбор планеты — оставалось
+            // непроверенным.
+            input.setMouse(shotCursorX, shotCursorY);
+            if (shotPress) {
+                // Нажатие и отпускание разносим по кадрам по той же
+                // причине, что и в обходе.
+                const int64_t left = shotAt - now;
+                input.setButton(MouseButton::Left, left <= 900 && left > 450);
+            }
+        }
+
         // --- интерфейс ---
         //
         // Собирается ПЕРВЫМ, до разбора щелчков по миру: экран обязан
@@ -438,10 +549,6 @@ int main(int argc, char** argv) {
         render::UiInput uiInput;
         uiInput.mouseX = input.mouseX();
         uiInput.mouseY = input.mouseY();
-        if (headless && shotCursorX >= 0.0f) {
-            uiInput.mouseX = shotCursorX;
-            uiInput.mouseY = shotCursorY;
-        }
         uiInput.down = input.isDown(MouseButton::Left);
         uiInput.pressed = input.wasPressed(MouseButton::Left);
         uiInput.released = input.wasReleased(MouseButton::Left);
@@ -449,6 +556,9 @@ int main(int argc, char** argv) {
         ui.begin(uiInput, width, height);
         const render::ScreenAction action = screen.build(ui, client, state, now);
         ui.end();
+        if (sweepStep > 0 && action.kind < render::ActionKind::Count) {
+            ++sweepActions[int(action.kind)];
+        }
 
         // --- намерения из интерфейса ---
         switch (action.kind) {
@@ -548,6 +658,7 @@ int main(int argc, char** argv) {
             case render::ActionKind::Quit:
                 quit = true;
                 break;
+            case render::ActionKind::Count:
             case render::ActionKind::None:
                 break;
         }
@@ -636,6 +747,7 @@ int main(int argc, char** argv) {
                 if (state.awaitingMoveTarget && state.fleet != kNoFleet) {
                     // Приказ взведён — щелчок задаёт цель. Ответ придёт
                     // снапшотом: клиент ничего не двигает сам.
+                    if (sweepStep > 0) ++sweepOrders;
                     if (client.orderMove(state.fleet, under)) {
                         messages.add("флот идёт в систему " + std::to_string(under), kInfo,
                                      now, under, "icon_fleet");
@@ -729,7 +841,7 @@ int main(int argc, char** argv) {
         if (!device.endFrame()) break;
 
         // --- снимок ---
-        if (headless && !shotTaken && now >= shotAt) {
+        if (headless && !shotPath.empty() && !shotTaken && now >= shotAt) {
             shotTaken = true;
             if (!client.ready()) {
                 std::fprintf(stderr, "снимок не сделан: сервер не ответил\n");
@@ -770,5 +882,15 @@ int main(int argc, char** argv) {
     socket.close();
     net::shutdownSockets();
     shutdownPlatform();
-    return 0;
+
+    // Счёт снимаем ПОСЛЕ выключения: половина нарушений — про то, что
+    // осталось неудалённым, и до `shutdown` их ещё нет. Прогон, переживший
+    // обход, но нарушивший спецификацию Vulkan, зелёным не считается:
+    // ровно такой прогон и пропустил падение на кнопке «Отправить флот».
+    if (const uint64_t bad = rhi::Device::validationErrors(); bad > 0) {
+        std::fprintf(stderr, "проверочные слои насчитали нарушений: %llu\n",
+                     static_cast<unsigned long long>(bad));
+        sweepFailed = true;
+    }
+    return sweepFailed ? 1 : 0;
 }

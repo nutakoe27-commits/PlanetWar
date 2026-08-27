@@ -322,3 +322,156 @@ TEST_CASE("спрайт: тон умножается на текстуру") {
     CHECK(red.r > 150);
     CHECK(red.g < 100);
 }
+
+// ---------------------------------------------------------------------------
+// Переполнение кадрового буфера
+// ---------------------------------------------------------------------------
+//
+// САМАЯ ДОРОГАЯ ОШИБКА ЭТОГО ПРОЕКТА, и вот она в трёх строках.
+//
+// Кадровые буферы росли по требованию — прямо в вызове отрисовки, то есть
+// ВНУТРИ ЗАПИСИ КОМАНДНОГО БУФЕРА. Уничтожить буфер, уже привязанный
+// к записываемому командному буферу, значит сделать недействительным САМ
+// КОМАНДНЫЙ БУФЕР: всё, что записано после, неопределено. `vkDeviceWaitIdle`
+// от этого не спасает — он ждёт устройство, а порча происходит на процессоре.
+//
+// Игрок сообщил: «при нажатии кнопки отправить корабли игра крашится».
+// Взведённый приказ добавляет к карте линию до цели и два круга — вершин
+// становится больше вместимости, буфер пересоздаётся посреди кадра, и
+// следующий вызов отрисовки уходит в недействительный командный буфер.
+// llvmpipe это терпел и прогоны были зелёные; Metal через MoltenVK — нет.
+//
+// Проверка ловит причину, а не симптом: она просит нарисовать заведомо
+// больше линий, чем влезает, и требует, чтобы проверочные слои Vulkan
+// не сказали НИ ОДНОГО слова. Игровое состояние ей не нужно, поэтому
+// она не зависит ни от сервера, ни от того, успел ли игрок построить флот.
+namespace {
+
+struct OverflowResult {
+    bool firstFrame = false;
+    bool secondFrame = false;
+    bool readback = false;
+    uint64_t validationErrors = 0;
+    // Цвет у дальнего конца ленты на втором кадре.
+    pw::Rgba8 farEnd{};
+};
+
+OverflowResult renderOverflow() {
+    OverflowResult result;
+    pw::setLogLevel(pw::LogLevel::Warn);
+    // Счётчик один на процесс, а порядок тестов не гарантирован. Считаем
+    // ПРИРОСТ за свой прогон: иначе проверка либо ловит чужие нарушения,
+    // либо прячет свои за чужими.
+    const uint64_t before = pw::rhi::Device::validationErrors();
+    if (!pw::initPlatform(/*headless=*/true)) return result;
+
+    pw::WindowDesc windowDesc;
+    windowDesc.headless = true;
+    windowDesc.width = kWidth;
+    windowDesc.height = kHeight;
+    pw::Window window(windowDesc);
+
+    pw::rhi::DeviceDesc deviceDesc;
+    deviceDesc.window = &window;
+    deviceDesc.width = kWidth;
+    deviceDesc.height = kHeight;
+    deviceDesc.validation = true;
+
+    pw::rhi::Device device;
+    if (!device.init(deviceDesc)) {
+        pw::shutdownPlatform();
+        return result;
+    }
+    if (!device.createLinePipeline(bytes(kLineVert, sizeof(kLineVert)),
+                                   bytes(kLineFrag, sizeof(kLineFrag)))) {
+        device.shutdown();
+        pw::shutdownPlatform();
+        return result;
+    }
+
+    pw::rhi::Camera camera;
+    camera.centerX = 0.0f;
+    camera.centerY = 0.0f;
+    camera.worldHeight = 100.0f;
+    camera.yDown = true;
+    device.setCamera(camera);
+
+    // Заведомо больше начальной вместимости (8192 вершины). Лента идёт
+    // слева направо, поэтому «сколько влезло» видно прямо на картинке:
+    // при обрезке дальний конец не нарисуется.
+    constexpr size_t kSegments = 12000;
+    std::vector<pw::rhi::LineVertex> strip(kSegments * 2);
+    for (size_t i = 0; i < kSegments; ++i) {
+        const float t = float(i) / float(kSegments - 1);
+        const float x = -80.0f + t * 160.0f;
+        for (int end = 0; end < 2; ++end) {
+            pw::rhi::LineVertex& v = strip[i * 2 + size_t(end)];
+            v.x = x;
+            v.y = end == 0 ? -20.0f : 20.0f;
+            v.r = 0.1f;
+            v.g = 1.0f;
+            v.b = 0.4f;
+            v.a = 1.0f;
+        }
+    }
+
+    // ПОРЯДОК ВЫЗОВОВ ЗДЕСЬ — ЧАСТЬ ПРОВЕРКИ, а не оформление.
+    //
+    // Сначала маленькая порция, которая влезает: она привязывает буфер
+    // к командному буферу. И только потом большая, требующая роста.
+    // Уничтожить буфер, НИ РАЗУ не привязанный в этом кадре, почти
+    // безобидно — и первая версия этой проверки именно так и делала,
+    // а потому проходила даже со снятым исправлением. Порча случается,
+    // когда буфер уже привязан: тогда недействительным становится весь
+    // командный буфер. Ровно так и падала игра — карта рисовалась,
+    // а взведённый приказ добавлял линию к цели сверх вместимости.
+    const size_t small = 64;
+    if (device.beginFrame(kClear)) {
+        device.drawLines(strip.data(), small);
+        device.drawLines(strip.data() + small, strip.size() - small);
+        result.firstFrame = device.endFrame();
+    }
+    // Второй кадр получает выросший буфер и рисует ленту целиком.
+    if (device.beginFrame(kClear)) {
+        device.drawLines(strip.data(), small);
+        device.drawLines(strip.data() + small, strip.size() - small);
+        result.secondFrame = device.endFrame();
+    }
+
+    std::vector<pw::Rgba8> pixels;
+    result.readback = device.readback(pixels);
+    if (result.readback) {
+        // Почти правый край кадра: сюда достаёт только полная лента.
+        result.farEnd = pixels[size_t(kHeight / 2) * size_t(kWidth) + size_t(kWidth - 40)];
+    }
+
+    device.shutdown();
+    pw::shutdownPlatform();
+    result.validationErrors = pw::rhi::Device::validationErrors() - before;
+    return result;
+}
+
+const OverflowResult& overflow() {
+    static OverflowResult cached = renderOverflow();
+    return cached;
+}
+
+}  // namespace
+
+TEST_CASE("буфер: кадр переживает переполнение и не нарушает спецификацию") {
+    const OverflowResult& r = overflow();
+    REQUIRE(r.firstFrame);
+    REQUIRE(r.secondFrame);
+    // Ноль — единственное допустимое число. Именно эта проверка отделяет
+    // «работает у меня» от «работает».
+    CHECK(r.validationErrors == 0);
+}
+
+TEST_CASE("буфер: на следующем кадре геометрия рисуется целиком") {
+    const OverflowResult& r = overflow();
+    REQUIRE(r.readback);
+    // Лента зелёная; фон карты — тёмно-синий. Если бы буфер не вырос,
+    // дальний конец остался бы фоном.
+    CHECK(int(r.farEnd.g) > 120);
+    CHECK(int(r.farEnd.g) > int(r.farEnd.b));
+}

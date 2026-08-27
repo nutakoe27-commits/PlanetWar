@@ -1311,6 +1311,28 @@ ScreenAction Screen::bottomBar(Ui& ui, const game::Client& client,
 // Сборка
 // ---------------------------------------------------------------------------
 
+const char* actionName(ActionKind kind) {
+    switch (kind) {
+        case ActionKind::None: return "ничего";
+        case ActionKind::EnterSystem: return "войти";
+        case ActionKind::LeaveSystem: return "выйти";
+        case ActionKind::SelectPlanet: return "планета";
+        case ActionKind::SelectSlot: return "слот";
+        case ActionKind::Build: return "строить";
+        case ActionKind::Demolish: return "снести";
+        case ActionKind::CancelBuild: return "отменить-стройку";
+        case ActionKind::OrderShip: return "заказать";
+        case ActionKind::SelectFleet: return "выбрать-флот";
+        case ActionKind::BeginMove: return "отправить-флот";
+        case ActionKind::CancelMove: return "отменить-приказ";
+        case ActionKind::FocusSystem: return "навести";
+        case ActionKind::ResetView: return "обзор";
+        case ActionKind::Quit: return "выход";
+        case ActionKind::Count: break;
+    }
+    return "?";
+}
+
 ScreenAction Screen::build(Ui& ui, const game::Client& client, const ScreenState& state,
                            int64_t now) {
     ScreenAction action;

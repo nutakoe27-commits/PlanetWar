@@ -17,12 +17,6 @@ namespace pw::rhi {
 
 namespace {
 
-/// Начальный размер буфера экземпляров.
-///
-/// Планет в системе единицы, построек — десятки, но выделяем с запасом:
-/// перевыделение внутри кадра стоит ожидания простоя устройства.
-constexpr VkDeviceSize kInitialMeshBytes = sizeof(MeshInstance) * 1024;
-
 /// Что уезжает в push-константах сеточного конвейера.
 ///
 /// Девяносто шесть байт при гарантированных Vulkan ста двадцати восьми.
@@ -136,6 +130,10 @@ bool projectPoint(const Camera3D& camera, float aspect, float x, float y, float 
 // ---------------------------------------------------------------------------
 
 void Device::Impl::destroyMeshes() {
+    // Буфер экземпляров жил дольше устройства: сетки чистились, а он —
+    // нет. Проверочные слои Vulkan назвали это первым же выходом из игры.
+    destroyBuffer(meshBuffer);
+
     for (MeshVk& mesh : meshes) {
         if (mesh.vertices) vkDestroyBuffer(device, mesh.vertices, nullptr);
         if (mesh.vertexMemory) vkFreeMemory(device, mesh.vertexMemory, nullptr);
@@ -298,12 +296,14 @@ void Device::Impl::drawMeshesWith(VkPipeline usePipeline, VkPipelineLayout useLa
     if (texture == kInvalidTexture || texture > d.textures.size()) return;
 
     const MeshVk& mesh = d.meshes[handle - 1];
-    const VkDeviceSize bytes = VkDeviceSize(count * sizeof(MeshInstance));
-    if (!d.ensureBuffer(d.meshBuffer, d.meshUsed + bytes > kInitialMeshBytes
-                                          ? d.meshUsed + bytes
-                                          : kInitialMeshBytes,
+    VkDeviceSize bytes = VkDeviceSize(count * sizeof(MeshInstance));
+    if (!d.ensureBuffer(d.meshBuffer, d.meshUsed + bytes,
                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
-        return;
+        // Рисуем сколько влезло: буфер растёт только между кадрами.
+        if (d.meshBuffer.capacity <= d.meshUsed) return;
+        count = size_t((d.meshBuffer.capacity - d.meshUsed) / sizeof(MeshInstance));
+        if (count == 0) return;
+        bytes = VkDeviceSize(count * sizeof(MeshInstance));
     }
 
     std::memcpy(static_cast<uint8_t*>(d.meshBuffer.mapped) + d.meshUsed, instances,
