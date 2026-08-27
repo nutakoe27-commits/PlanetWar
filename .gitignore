@@ -42,4 +42,6 @@ compile_commands.json
 
 # Кадры, отрисованные проверочными запусками
 triangle.png
+galaxy_map.png
+system_view.png
 *.frame.png
