@@ -484,11 +484,35 @@ int main(int argc, char** argv) {
         if (sweepStep > 0 && client.ready()) {
             const int columns = std::max(1, width / sweepStep);
             const int rows = std::max(1, height / sweepStep);
-            const int total = columns * rows;
+            const int gridTotal = columns * rows;
 
-            if (sweepPoint >= total * 2) {
-                std::printf("обход закончен: %d точек в двух видах, щелчков %d — "
-                            "клиент жив\n", total, sweepClicks);
+            // СЕТКА ПЛЮС ЗОНДЫ, а не одна сетка.
+            //
+            // Сетка с шагом 38 проходит МИМО кнопки высотой 28: строка
+            // сетки просто не попадает в её полосу. Именно так обход
+            // и не доходил до кнопки «Отправить флот» — той самой,
+            // на которой игра падала. Шаг, меньший самого мелкого
+            // элемента, стоил бы четырёх минут на прогон.
+            //
+            // Поэтому после двух сеточных проходов идут два ЗОНДА:
+            // вертикальные линии с мелким шагом по левому столбцу
+            // и по правому. Панели выстроены столбцами, все их кнопки
+            // лежат на этих двух линиях, и попасть по ним — уже не
+            // вопрос удачи. Точек у зондов меньше двухсот.
+            const int probeStep = std::max(4, sweepStep / 6);
+            const int probeRows = std::max(1, height / probeStep);
+            // ТРИ линии, а не две: левый столбец, ПОСЕРЕДИНЕ КАРТА,
+            // правый столбец. Средняя линия нужна не для симметрии:
+            // взведённый приказ ждёт щелчка ПО КАРТЕ, и без него путь
+            // «нажал отправить → указал цель» обрывается на середине —
+            // ровно там, где игра и падала. Линия по карте его дожимает.
+            const int probeTotal = probeRows * 3;
+            const int totalPoints = gridTotal * 2 + probeTotal;
+
+            if (sweepPoint >= totalPoints) {
+                std::printf("обход закончен: %d точек сеткой и %d зондом, "
+                            "щелчков %d — клиент жив\n",
+                            gridTotal * 2, probeTotal, sweepClicks);
                 std::printf("  намерения:");
                 for (int k = 1; k < int(render::ActionKind::Count); ++k) {
                     if (sweepActions[k] == 0) continue;
@@ -496,14 +520,19 @@ int main(int argc, char** argv) {
                                 sweepActions[k]);
                 }
                 std::printf("\n  приказов флоту отдано: %d\n", sweepOrders);
-                // Прогон, переживший обход, но нарушивший спецификацию
-                // Vulkan, — не зелёный. Ровно такой прогон и пропустил
-                // падение на кнопке «Отправить флот».
+                if (sweepActions[int(render::ActionKind::BeginMove)] == 0) {
+                    // Молчаливо неполный обход — это не обход. Кнопка,
+                    // с которой начался весь разбор, обязана быть нажата.
+                    std::fprintf(stderr,
+                                 "обход не засчитан: до кнопки «Отправить флот» "
+                                 "так и не дошли\n");
+                    sweepFailed = true;
+                }
                 break;
             }
 
-            // Первую половину обхода идём по карте, вторую — внутри системы.
-            const bool wantSystem = sweepPoint >= total;
+            const bool probing = sweepPoint >= gridTotal * 2;
+            const bool wantSystem = !probing && sweepPoint >= gridTotal;
             if (state.inSystem != wantSystem &&
                 state.system < client.galaxy().systemCount()) {
                 state.inSystem = wantSystem;
@@ -515,9 +544,29 @@ int main(int argc, char** argv) {
                 }
             }
 
-            const int at = sweepPoint % total;
-            input.setMouse(float((at % columns) * sweepStep + sweepStep / 2),
-                           float((at / columns) * sweepStep + sweepStep / 2));
+            float pointX = 0.0f;
+            float pointY = 0.0f;
+            if (probing) {
+                // Столица и флот в ней закреплены на каждом кадре: панель
+                // флота обязана быть на месте, иначе кнопки, которую мы
+                // ищем, на экране просто нет.
+                state.system = client.capital();
+                const auto own = client.fleetsAt(state.system);
+                if (!own.empty()) state.fleet = own.front();
+
+                const int at = sweepPoint - gridTotal * 2;
+                const int lane = at / probeRows;
+                const int step = at % probeRows;
+                const float lanes[] = {0.12f, 0.50f, 0.88f};
+                pointX = float(width) * lanes[lane < 3 ? lane : 2];
+                pointY = float(step * probeStep + probeStep / 2);
+            } else {
+                const int at = sweepPoint % gridTotal;
+                pointX = float((at % columns) * sweepStep + sweepStep / 2);
+                pointY = float((at / columns) * sweepStep + sweepStep / 2);
+            }
+
+            input.setMouse(pointX, pointY);
             input.setButton(MouseButton::Left, sweepPhase <= 1);
             if (sweepPhase == 2) ++sweepClicks;
             if (++sweepPhase > 2) {
@@ -540,6 +589,16 @@ int main(int argc, char** argv) {
                 input.setButton(MouseButton::Left, left <= 900 && left > 450);
             }
         }
+
+        // Что видно на карте — экрану, для рамки «вы здесь» на мини-карте.
+        // Считается из ТОЙ ЖЕ камеры, которой рисуется мир, а не из своих
+        // чисел: два источника правды о видимой области разошлись бы
+        // в первый же день, и рамка начала бы врать.
+        state.viewCenterX = camera.centerX;
+        state.viewCenterY = camera.centerY;
+        state.viewHeight = camera.worldHeight;
+        state.viewWidth =
+            camera.worldHeight * (height > 0 ? float(width) / float(height) : 1.0f);
 
         // --- интерфейс ---
         //
@@ -656,7 +715,15 @@ int main(int argc, char** argv) {
                 }
                 break;
             case render::ActionKind::Quit:
-                quit = true;
+                // Обход НЕ ИМЕЕТ ПРАВА закрыть игру.
+                //
+                // Он щёлкает по всему экрану подряд, в том числе дважды
+                // подряд по кнопке «Выход» — а два щелчка по ней это
+                // и есть подтверждённый выход. Обход честно завершался
+                // кодом ноль, не дойдя и до четверти точек: снаружи это
+                // выглядело как успешная проверка. Намерение считается
+                // (оно попадает в отчёт), но не исполняется.
+                if (sweepStep == 0) quit = true;
                 break;
             case render::ActionKind::Count:
             case render::ActionKind::None:

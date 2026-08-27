@@ -270,10 +270,11 @@ else
             # Поэтому здесь щёлкают по всему экрану в обоих видах,
             # и любое нарушение спецификации Vulkan валит прогон.
             if ./build/client/bin/pw_game_client --port 27099 --name обход \
-                    --sweep 80 --validation --width 1280 --height 720 \
+                    --sweep 38 --validation --width 1280 --height 720 \
                     >/tmp/pw_sweep.log 2>&1; then
                 ok "$(grep 'обход закончен' /tmp/pw_sweep.log)"
                 ok "  $(grep 'намерения:' /tmp/pw_sweep.log | sed 's/^ *//')"
+                ok "  $(grep 'приказов флоту' /tmp/pw_sweep.log | sed 's/^ *//')"
             else
                 fail "обход экрана щелчками не прошёл"; tail -14 /tmp/pw_sweep.log
             fi

@@ -132,6 +132,17 @@ struct ScreenState {
     uint32_t fleet = 0xFFFFFFFFu;
     /// Приказ взведён: следующий щелчок по карте — это цель для флота.
     bool awaitingMoveTarget = false;
+
+    /// Что сейчас видно на карте, в мировых единицах. Нужно мини-карте:
+    /// без рамки «вы здесь» она показывает, ГДЕ что-то есть, но не
+    /// показывает, куда смотрит игрок, — а второе и есть половина ответа.
+    ///
+    /// Ноль в ширине означает «неизвестно»: тогда рамка не рисуется,
+    /// а сама мини-карта работает.
+    float viewCenterX = 0.0f;
+    float viewCenterY = 0.0f;
+    float viewWidth = 0.0f;
+    float viewHeight = 0.0f;
 };
 
 // ---------------------------------------------------------------------------
@@ -212,6 +223,13 @@ private:
     /// второй — каждый раз, когда надо что-то найти.
     ScreenAction outliner(Ui& ui, const game::Client& client, const ScreenState& state,
                           float top, float width);
+    /// Мини-карта галактики в правом нижнем углу.
+    ///
+    /// На двухстах системах вопрос «где я вообще нахожусь» без неё
+    /// не имеет ответа: чтобы его получить, надо отдалиться, потерять
+    /// текущий вид и вернуться обратно. Мини-карта отвечает не отрываясь.
+    ScreenAction minimap(Ui& ui, const game::Client& client, const ScreenState& state,
+                         float bottom, float size) const;
     ScreenAction messagePanel(Ui& ui, int64_t now, float top, float left,
                               float right) const;
     ScreenAction bottomBar(Ui& ui, const game::Client& client, const ScreenState& state,

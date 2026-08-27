@@ -192,6 +192,11 @@ public:
     /// Высота строки текста. Растёт с экраном: на 4K надпись в 14 пикселей
     /// нечитаема, на ноутбуке в 28 занимает пол-экрана.
     float lineHeight() const { return lineHeight_; }
+    /// Где курсор в этом кадре. Нужно виджетам, которым мало «нажали
+    /// или нет»: мини-карта переводит точку щелчка в мировые координаты,
+    /// и без самой точки прямоугольник ей ничего не говорит.
+    float frameMouseX() const { return input_.mouseX; }
+    float frameMouseY() const { return input_.mouseY; }
     float unit() const { return theme_.unit; }
     int screenWidth() const { return width_; }
     int screenHeight() const { return height_; }

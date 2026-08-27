@@ -1435,6 +1435,158 @@ ScreenAction Screen::messagePanel(Ui& ui, int64_t now, float top, float left,
 }
 
 // ---------------------------------------------------------------------------
+// Мини-карта галактики
+// ---------------------------------------------------------------------------
+
+ScreenAction Screen::minimap(Ui& ui, const game::Client& client,
+                             const ScreenState& state, float bottom, float size) const {
+    // ЗАЧЕМ ОНА. На двухстах системах вопрос «где я сейчас нахожусь»
+    // без мини-карты не имеет ответа: чтобы его получить, надо отдалиться,
+    // потерять текущий вид и вернуться обратно. Игрок этого не делает —
+    // он просто перестаёт задавать вопрос и играет вслепую в масштабе,
+    // который видит.
+    //
+    // Показывает ровно две вещи: где чьи владения и куда смотрит камера.
+    // Ни имён, ни линий гиперпутей: мини-карта размером с ладонь,
+    // и всё, что не читается с одного взгляда, только мешает.
+    ScreenAction action;
+    if (!client.ready()) return action;
+
+    const sim::Galaxy& galaxy = client.galaxy();
+    const uint32_t count = galaxy.systemCount();
+    if (count == 0) return action;
+
+    const float unit = ui.unit();
+    const float line = ui.lineHeight();
+    const Rect panel{float(ui.screenWidth()) - size - unit, bottom - size, size, size};
+    // Сначала ГЛУХАЯ заливка, потом рамка поверх. Плитка панели чуть
+    // прозрачна, и сквозь мини-карту просвечивали настоящие звёзды —
+    // рядом с её собственными точками они читались как ещё одни системы.
+    // Карта в карте не должна показывать карту.
+    ui.fill(panel, TextColor{0.012f, 0.018f, 0.032f, 1.0f});
+    ui.panel(panel, "hud_panel_deep");
+
+    const Rect field = panel.inset(unit * 0.7f);
+    const float extent = float(galaxy.extent().toDouble());
+    if (extent <= 0.0f) return action;
+
+    // Галактика круглая, поле квадратное: масштаб один на обе оси,
+    // иначе карта растянется и перестанет совпадать по форме с той,
+    // на которую игрок смотрит.
+    const float scale = std::min(field.w, field.h) / (extent * 2.0f);
+    const auto toScreen = [&](float wx, float wy, float& sx, float& sy) {
+        sx = field.x + field.w * 0.5f + wx * scale;
+        // Ось Y на карте смотрит вверх, на экране вниз.
+        sy = field.y + field.h * 0.5f - wy * scale;
+    };
+
+    // Рамка «вы здесь» рисуется ПОД точками: точки важнее, и перекрывать
+    // их рамкой значит прятать то, ради чего сюда смотрят.
+    if (state.viewWidth > 0.0f && state.viewHeight > 0.0f) {
+        float cx = 0.0f, cy = 0.0f;
+        toScreen(state.viewCenterX, state.viewCenterY, cx, cy);
+        const float halfW = state.viewWidth * 0.5f * scale;
+        const float halfH = state.viewHeight * 0.5f * scale;
+        const Rect box{std::max(field.x, cx - halfW), std::max(field.y, cy - halfH),
+                       std::min(field.right(), cx + halfW) - std::max(field.x, cx - halfW),
+                       std::min(field.bottom(), cy + halfH) -
+                           std::max(field.y, cy - halfH)};
+        if (box.w > 1.0f && box.h > 1.0f) {
+            ui.fill(box, TextColor{0.25f, 0.45f, 0.65f, 0.22f});
+            ui.fill(Rect{box.x, box.y, box.w, 1.0f}, ui.theme().edge);
+            ui.fill(Rect{box.x, box.bottom() - 1.0f, box.w, 1.0f}, ui.theme().edge);
+            ui.fill(Rect{box.x, box.y, 1.0f, box.h}, ui.theme().edge);
+            ui.fill(Rect{box.right() - 1.0f, box.y, 1.0f, box.h}, ui.theme().edge);
+        }
+    }
+
+    const uint8_t mine = uint8_t(client.empire() & 0xFFu);
+    const auto& systems = client.view().systems;
+    for (uint32_t i = 0; i < count; ++i) {
+        float sx = 0.0f, sy = 0.0f;
+        toScreen(float(galaxy.positionX(i).toDouble()),
+                 float(galaxy.positionY(i).toDouble()), sx, sy);
+
+        const uint8_t owner = i < systems.size() ? systems[i].owner : 0xFFu;
+        // Свои крупнее и ярче чужих, ничьи — тусклая точка. Игрок ищет
+        // на мини-карте прежде всего СВОЁ, и оно обязано находиться
+        // без разглядывания.
+        const bool own = owner == mine;
+        // Точка не меньше двух пикселей: точка в один пиксель на мини-карте
+        // не видна вовсе — она попадает между строками растра и гаснет.
+        // Ничья система обязана быть ВИДНА: именно ничьи и есть то, ради
+        // чего на мини-карту смотрят в первой половине сезона.
+        const float dot = own ? 4.0f : (owner == 0xFFu ? 2.0f : 3.0f);
+        TextColor tint{0.52f, 0.60f, 0.72f, 0.9f};
+        if (owner != 0xFFu) {
+            const EmpireColor& c = empireColor(owner);
+            tint = TextColor{c.r, c.g, c.b, own ? 1.0f : 0.85f};
+        }
+        ui.fill(Rect{std::round(sx - dot * 0.5f), std::round(sy - dot * 0.5f), dot, dot},
+                tint);
+    }
+
+    // Выбранная система отмечена отдельно: без метки мини-карта
+    // показывает галактику, но не показывает, о какой системе сейчас
+    // рассказывают панели слева.
+    if (state.system < count) {
+        float sx = 0.0f, sy = 0.0f;
+        toScreen(float(galaxy.positionX(state.system).toDouble()),
+                 float(galaxy.positionY(state.system).toDouble()), sx, sy);
+        ui.fill(Rect{sx - 4.0f, sy - 1.0f, 9.0f, 1.0f}, ui.theme().textWarn);
+        ui.fill(Rect{sx - 1.0f, sy - 4.0f, 1.0f, 9.0f}, ui.theme().textWarn);
+    }
+
+    // Щелчок ведёт к БЛИЖАЙШЕЙ системе, а не к точке карты.
+    //
+    // Точность в один пиксель мини-карты — это десятки световых лет:
+    // попасть по конкретной системе нельзя, и притворяться, что можно,
+    // значит обманывать. Зато «перенеси меня примерно туда» — ровно тот
+    // вопрос, который задают мини-карте, и на него ответ точный.
+    const ButtonResult hit = ui.hotspot(uiId("minimap"), panel);
+    if (hit.hovered) {
+        ui.tooltip("вся галактика · щёлкните — камера перейдёт к ближайшей "
+                   "оттуда системе · рамка показывает, что видно сейчас");
+    }
+    if (hit.clicked) {
+        const float wx = (ui.frameMouseX() - (field.x + field.w * 0.5f)) / scale;
+        const float wy = ((field.y + field.h * 0.5f) - ui.frameMouseY()) / scale;
+        uint32_t best = kNoSystem;
+        float bestDistance = 0.0f;
+        for (uint32_t i = 0; i < count; ++i) {
+            const float dx = float(galaxy.positionX(i).toDouble()) - wx;
+            const float dy = float(galaxy.positionY(i).toDouble()) - wy;
+            const float distance = dx * dx + dy * dy;
+            if (best == kNoSystem || distance < bestDistance) {
+                best = i;
+                bestDistance = distance;
+            }
+        }
+        if (best != kNoSystem) {
+            action.kind = ActionKind::FocusSystem;
+            action.value = best;
+        }
+    }
+
+    // Подпись под мини-картой: сколько систем и сколько ваших. Число,
+    // которое иначе пришлось бы считать по точкам.
+    uint32_t owned = 0;
+    for (const auto& system : systems) {
+        if (system.owner == mine) ++owned;
+    }
+    // Подпись НАД картой и на своей подложке: без неё две цифры висят
+    // прямо на звёздах и читаются как часть галактики.
+    const Rect caption{panel.x, panel.y - line * 1.35f, panel.w, line * 1.35f};
+    ui.fill(caption, ui.theme().headerFill);
+    ui.text(caption.x + unit * 0.7f, caption.y + (caption.h - line) * 0.5f, "ГАЛАКТИКА",
+            ui.theme().textAccent);
+    ui.textRight(Rect{caption.x, caption.y + (caption.h - line) * 0.5f,
+                      caption.w - unit * 0.7f, line},
+                 number(owned) + " из " + number(count), ui.theme().textDim);
+    return action;
+}
+
+// ---------------------------------------------------------------------------
 // Нижняя строка: вид, подсказка, выход
 // ---------------------------------------------------------------------------
 
@@ -1795,6 +1947,14 @@ ScreenAction Screen::build(Ui& ui, const game::Client& client, const ScreenState
     take(outliner(ui, client, state, top, rightWidth));
     take(messagePanel(ui, now, top, unit * 1.5f + leftWidth,
                       float(ui.screenWidth()) - rightWidth - unit * 1.5f));
+    // Мини-карта — только на карте галактики. В виде системы она врала бы:
+    // рамка «вы здесь» показывала бы прошлый вид карты, к которому камера
+    // сейчас отношения не имеет.
+    if (!state.inSystem) {
+        const float barTop = float(ui.screenHeight()) - (line + unit * 2.6f) - unit;
+        take(minimap(ui, client, state,
+                     barTop, std::min(float(ui.screenHeight()) * 0.22f, line * 11.0f)));
+    }
     take(bottomBar(ui, client, state, now));
     return action;
 }
