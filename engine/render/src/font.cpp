@@ -1,5 +1,8 @@
 #include "pw/render/font.h"
 
+#include <cmath>
+#include <cstdlib>
+
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -155,7 +158,54 @@ bool Font::load(const std::string& jsonPath) {
         error_ = "в описании шрифта нет ни одного глифа";
         return false;
     }
+
+    readMetrics(text);
     return true;
+}
+
+/// Прочитать померенные при выпечке метрики.
+///
+/// Их отсутствие НЕ ошибка: старый манифест без метрик читается как
+/// моноширинный шрифт, и интерфейс на нём работает. Падать из-за того,
+/// что кто-то не перепёк ассеты, — плохой размен.
+void Font::readMetrics(const std::string& text) {
+    size_t cursor = text.find("\"metrics\"");
+    if (cursor == std::string::npos) return;
+
+    float total = 0.0f;
+    size_t counted = 0;
+    for (Glyph& glyph : glyphs_) {
+        const size_t entry = text.find("\"left\"", cursor);
+        if (entry == std::string::npos) break;
+
+        long left = 0, right = 0, advanceValue = 0;
+        // Числа дробные, а numberField читает целые: разбираем вручную.
+        auto readFloat = [&](const char* name, size_t from, float& out) {
+            const std::string key = std::string("\"") + name + "\":";
+            const size_t at = text.find(key, from);
+            if (at == std::string::npos) return false;
+            out = std::strtof(text.c_str() + at + key.size(), nullptr);
+            return true;
+        };
+        (void)left; (void)right; (void)advanceValue;
+
+        float l = 0.0f, r = 1.0f, a = 0.47f;
+        if (!readFloat("left", entry, l) || !readFloat("right", entry, r) ||
+            !readFloat("advance", entry, a)) {
+            break;
+        }
+        glyph.left = l;
+        glyph.right = r;
+        glyph.advance = a;
+        total += a;
+        ++counted;
+
+        cursor = text.find("\"advance\"", entry);
+        if (cursor == std::string::npos) break;
+        cursor += 1;
+    }
+
+    if (counted > 0) averageAdvance_ = total / float(counted);
 }
 
 const Font::Glyph* Font::find(uint32_t code) const {
@@ -165,15 +215,24 @@ const Font::Glyph* Font::find(uint32_t code) const {
     return nullptr;
 }
 
+float Font::advanceOf(uint32_t code, float lineHeight) const {
+    const Glyph* glyph = find(code);
+    return lineHeight * (glyph != nullptr ? glyph->advance : averageAdvance_);
+}
+
 float Font::width(const std::string& utf8, float lineHeight) const {
-    return float(decodeUtf8(utf8).size()) * advance(lineHeight);
+    float total = 0.0f;
+    for (uint32_t code : decodeUtf8(utf8)) {
+        if (code == '\n') break;
+        total += advanceOf(code, lineHeight);
+    }
+    return total;
 }
 
 void Font::layout(const std::string& utf8, float x, float y, float lineHeight,
                   const TextColor& color, std::vector<rhi::SpriteInstance>& out) const {
     if (!valid()) return;
 
-    const float step = advance(lineHeight);
     float cursorX = x;
     float cursorY = y;
 
@@ -187,17 +246,27 @@ void Font::layout(const std::string& utf8, float x, float y, float lineHeight,
         if (glyph == nullptr) {
             // Неизвестный символ занимает место, но ничего не рисует:
             // строка не должна съезжать из-за одной буквы.
-            cursorX += step;
+            cursorX += advance(lineHeight);
             continue;
         }
 
         rhi::SpriteInstance sprite;
         // Клетка глифа квадратная, поэтому спрайт тоже квадратный, а шаг
-        // курсора меньше — так буквы стоят вплотную, а не через пробел.
+        // курсора свой у каждой буквы: краска в клетке занимает лишь часть.
         sprite.halfWidth = lineHeight * 0.5f;
         sprite.halfHeight = lineHeight * 0.5f;
-        sprite.x = cursorX + sprite.halfWidth;
-        sprite.y = cursorY + sprite.halfHeight;
+
+        // БУКВЫ САДЯТСЯ НА ЦЕЛЫЕ ПИКСЕЛИ.
+        //
+        // Глиф печётся клеткой в 48 точек, а рисуется высотой около
+        // семнадцати. При дробной позиции такое уменьшение размазывает
+        // каждый штрих между двумя пикселями, и текст выглядит мыльным —
+        // это и была главная причина «шрифт нечитаемый». Округление
+        // стоит ноль и возвращает штрихам края.
+        const float left = std::round(cursorX - glyph->left * lineHeight);
+        const float top = std::round(cursorY);
+        sprite.x = left + sprite.halfWidth;
+        sprite.y = top + sprite.halfHeight;
         sprite.u0 = glyph->u0;
         sprite.v0 = glyph->v0;
         sprite.u1 = glyph->u1;
@@ -208,7 +277,7 @@ void Font::layout(const std::string& utf8, float x, float y, float lineHeight,
         sprite.a = color.a;
         out.push_back(sprite);
 
-        cursorX += step;
+        cursorX += glyph->advance * lineHeight;
     }
 }
 

@@ -59,6 +59,12 @@ public:
     bool wasReleased(MouseButton b) const {
         return !buttons_[uint8_t(b)] && prevButtons_[uint8_t(b)];
     }
+    /// Положение курсора В ПИКСЕЛЯХ КАДРОВОГО БУФЕРА.
+    ///
+    /// Не в точках окна. На Retina это вдвое разные числа, и интерфейс,
+    /// разложенный в пикселях, промахнётся мимо курсора ровно во столько
+    /// же раз. Пересчёт делает Window::pumpEvents — здесь координаты уже
+    /// в тех единицах, в которых работает всё остальное.
     float mouseX() const { return mouseX_; }
     float mouseY() const { return mouseY_; }
     float mouseDeltaX() const { return mouseX_ - prevMouseX_; }

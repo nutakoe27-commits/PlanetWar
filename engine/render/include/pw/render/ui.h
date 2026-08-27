@@ -82,12 +82,24 @@ struct UiFrame {
 /// различаться и по светлоте: интерфейс, который читается только
 /// по оттенку, не читается при дальтонизме.
 struct UiTheme {
-    TextColor text{0.90f, 0.93f, 0.97f, 1.0f};
-    TextColor textDim{0.60f, 0.65f, 0.73f, 1.0f};
-    TextColor textGood{0.56f, 0.84f, 0.58f, 1.0f};
-    TextColor textWarn{0.94f, 0.76f, 0.36f, 1.0f};
-    TextColor textBad{0.92f, 0.48f, 0.46f, 1.0f};
-    TextColor textAccent{0.56f, 0.78f, 0.98f, 1.0f};
+    // КОНТРАСТ. Первая палитра ставила основному тексту 0.90 и
+    // второстепенному 0.60 на подложке около 0.10 — то есть отношение
+    // яркостей примерно шесть к одному у первого и три к одному
+    // у второго. Три к одному — это порог, ниже которого текст читают
+    // с усилием, и «свободно слотов 4 из 6» на снимке с увеличением
+    // именно так и выглядело: серое на чёрном.
+    //
+    // Теперь основной почти белый, второстепенный поднят до уровня,
+    // на котором его ещё видно как второстепенный, но уже не надо
+    // вглядываться. Разницу между ними держит не только яркость,
+    // но и лёгкий холодный тон у второстепенного: при дальтонизме
+    // остаётся яркость, при плохом мониторе — тон.
+    TextColor text{0.96f, 0.97f, 1.00f, 1.0f};
+    TextColor textDim{0.72f, 0.77f, 0.85f, 1.0f};
+    TextColor textGood{0.60f, 0.89f, 0.62f, 1.0f};
+    TextColor textWarn{0.98f, 0.80f, 0.38f, 1.0f};
+    TextColor textBad{0.96f, 0.53f, 0.50f, 1.0f};
+    TextColor textAccent{0.62f, 0.83f, 1.00f, 1.0f};
 
     /// Базовый шаг сетки. Все отступы кратны ему, и из этого сам собой
     /// получается ритм — то, чем сделанный руками интерфейс отличается
@@ -160,6 +172,12 @@ public:
     /// Полоса: подложка плюс заливка. `value` от нуля до единицы.
     void progress(const Rect& r, float value, const TextColor& color);
 
+    /// Тонкая разделительная линия во всю ширину прямоугольника.
+    ///
+    /// Нужна там, где список строк иначе висит в пустоте: глаз группирует
+    /// то, что разделено, охотнее того, что просто расставлено с отступами.
+    void separator(const Rect& r);
+
     /// Ширина строки в пикселях.
     float textWidth(const std::string& value) const;
 
@@ -215,6 +233,8 @@ private:
     UiBatch& batchFor(UiTexture texture);
     void quad(const Rect& r, const UiSprite& sprite, const TextColor& tint);
     ButtonResult behaviour(uint32_t id, const Rect& r, bool enabled);
+    /// Разбить строку по словам на строки не шире заданной.
+    std::vector<std::string> wrap(const std::string& value, float maxWidth) const;
     const char* stylePlate(ButtonStyle style, bool hovered, bool held,
                            bool enabled) const;
 };

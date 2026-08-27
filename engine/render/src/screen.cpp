@@ -215,6 +215,53 @@ const char* planetClassName(uint8_t planetClass) {
     }
 }
 
+const char* starHint(uint8_t starClass) {
+    switch (sim::StarClass(starClass)) {
+        case sim::StarClass::Red:
+            return "красный карлик: планет мало, зато и соседям он неинтересен";
+        case sim::StarClass::Yellow:
+            return "жёлтая звезда: обычная система, планет до шести";
+        case sim::StarClass::Blue:
+            return "голубой гигант: много планет и много слотов — за такие воюют";
+        case sim::StarClass::Neutron:
+            return "нейтронная: планет мало, но система редкая";
+        case sim::StarClass::BlackHole:
+            return "чёрная дыра: планет нет, только станция — но станция стоит дорого";
+        default:
+            return "";
+    }
+}
+
+/// Что сказать про планету при наведении.
+///
+/// НЕ ПОВТОРЯТЬ ТО, ЧТО ВИДНО. Длину полосы обороны игрок видит и так;
+/// подсказка отвечает на другой вопрос — что это значит и что теперь
+/// делать. Подсказка, дублирующая надпись рядом, — это шум, который учит
+/// игрока не наводить курсор вообще.
+std::string planetHint(const game::Client::PlanetInfo& planet, uint8_t mine) {
+    if (planet.siegeEmpire != 0xFF) {
+        return "идёт осада: " + number(planet.siegeProgress) +
+               "% обороны сбито · приведите флот или потеряете планету";
+    }
+    if (planet.owner == 0xFF) {
+        return std::string(planetClassName(planet.planetClass)) + " · ничья · слотов " +
+               number(planet.slots) + " · приведите сюда флот, и она станет вашей";
+    }
+    if (planet.owner != mine) {
+        return std::string(planetClassName(planet.planetClass)) + " · чужая · слотов " +
+               number(planet.slots) + " · оборона " + number(planet.readiness) +
+               "% — её надо сбить флотом, прежде чем планета перейдёт к вам";
+    }
+    if (planet.building()) {
+        return std::string("строится ") + buildingNameAccusative(planet.buildBuilding) +
+               ", готово на " + number(planet.buildPercent) + "% · оборона " +
+               number(planet.readiness) + "%";
+    }
+    return std::string("ваша · слотов ") + number(planet.slots) + ", свободно " +
+           number(planet.freeSlots()) + " · оборона " + number(planet.readiness) +
+           "% из 100 — упадёт до нуля, и планету заберут";
+}
+
 const char* stageHint(sim::SeasonStage stage) {
     switch (stage) {
         case sim::SeasonStage::Expansion:
@@ -400,12 +447,25 @@ ScreenAction Screen::topBar(Ui& ui, const game::Client& client) const {
         const char* name;
         int64_t value;
     };
+    // Подсказка отвечает на «зачем оно мне», а не называет ресурс.
+    // Название игрок и так угадает по значку со второго раза; чего он
+    // не угадает никогда — на что этот ресурс тратится и откуда берётся.
     const Entry entries[] = {
-        {"res_minerals", "минералы — на постройки", empire.minerals.floorToInt()},
-        {"res_alloys", "сплавы — на корабли", empire.alloys.floorToInt()},
-        {"res_energy", "энергия — на содержание", empire.energy.floorToInt()},
-        {"res_research", "исследования", empire.research.floorToInt()},
-        {"res_influence", "влияние", empire.influence.floorToInt()},
+        {"res_minerals",
+         "МИНЕРАЛЫ · платят за здания · дают шахты",
+         empire.minerals.floorToInt()},
+        {"res_alloys",
+         "СПЛАВЫ · платят за корабли · дают ТОЛЬКО литейные, из минералов",
+         empire.alloys.floorToInt()},
+        {"res_energy",
+         "ЭНЕРГИЯ · уходит на содержание зданий и флота · дают электростанции",
+         empire.energy.floorToInt()},
+        {"res_research",
+         "ИССЛЕДОВАНИЯ · счёт науки в престиже · дают лаборатории",
+         empire.research.floorToInt()},
+        {"res_influence",
+         "ВЛИЯНИЕ · счёт дипломатии в престиже · дают торговые узлы",
+         empire.influence.floorToInt()},
     };
 
     const float iconSize = line * 1.25f;
@@ -520,15 +580,29 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
     const char* ownership = view.owner == 0xFF     ? "ничья"
                             : view.owner == mine   ? "ваша"
                                                    : "чужая";
-    ui.textRight(textLine(titleRow, line),
-                 number(view.ownedPlanets) + " / " + number(view.totalPlanets),
+    const std::string counter =
+        number(view.ownedPlanets) + " / " + number(view.totalPlanets);
+    const Rect counterBox{titleRow.right() - ui.textWidth(counter) - unit * 0.5f,
+                          titleRow.y, ui.textWidth(counter) + unit, titleRow.h};
+    ui.textRight(textLine(titleRow, line), counter,
                  ownerTint(ui.theme(), view.owner, mine));
+    if (ui.hotspot(uiId("system-count"), counterBox).hovered) {
+        // «4 / 4» само по себе не значит ничего: игрок обязан узнать,
+        // что это, ровно один раз и больше не вспоминать.
+        ui.tooltip("ваших планет в системе " + number(view.ownedPlanets) + " из " +
+                   number(view.totalPlanets) +
+                   " · система принадлежит тому, у кого их больше");
+    }
 
     const Rect subRow = column.next();
-    ui.text(subRow.x, subRow.y,
-            std::string(starName(client.galaxy().starClass(state.system))) + " · " +
-                ownership,
-            ui.theme().textDim);
+    const std::string subtitle =
+        std::string(starName(client.galaxy().starClass(state.system))) + " · " + ownership;
+    ui.text(subRow.x, subRow.y, subtitle, ui.theme().textDim);
+    if (ui.hotspot(uiId("system-star"),
+                   Rect{subRow.x, subRow.y, ui.textWidth(subtitle), subRow.h})
+            .hovered) {
+        ui.tooltip(starHint(client.galaxy().starClass(state.system)));
+    }
 
     // --- строки планет ---
     //
@@ -540,6 +614,11 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
         const bool selected = index == state.planetIndex;
         const Rect box = column.next();
         const Rect card{box.x, box.y, box.w, box.h - 2.0f};
+
+        // Тонкая линия между строками. Глаз группирует то, что разделено,
+        // охотнее того, что просто расставлено с отступами: без линии
+        // список планет висел в пустоте.
+        if (index > 0) ui.separator(Rect{card.x + unit, card.y - 1.0f, card.w - unit * 2.0f, 1.0f});
 
         if (selected) ui.panel(card, "button_accent", 0.55f);
         const ButtonResult hit = ui.hotspot(uiId("planet-row", uint32_t(index)), card);
@@ -562,9 +641,12 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
         const float barWidth = unit * 5.0f;
         const float textX = card.x + unit * 1.0f + iconSize;
 
+        // Имя планеты ярче её состояния ВСЕГДА, а не только у выбранной.
+        // Первая версия гасила всю невыбранную строку целиком, и список
+        // из шести планет читался как шесть одинаковых серых полос.
         ui.text(textX, card.y + unit * 0.15f,
                 number(int64_t(index) + 1) + ". " + planetClassName(planet.planetClass),
-                selected ? ui.theme().text : ui.theme().textDim);
+                ui.theme().text);
 
         // Вторая строка карточки — состояние: что строится, идёт ли осада,
         // цела ли оборона. Именно это решает, стоит ли сюда лезть.
@@ -588,11 +670,15 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
 
         if (planet.owner != 0xFF) {
             const Rect bar{card.right() - unit * 0.8f - barWidth,
-                           card.y + card.h * 0.5f - 3.0f, barWidth, 5.0f};
+                           card.y + card.h * 0.5f - 3.0f, barWidth, 6.0f};
             const float value = float(planet.readiness) / 100.0f;
             ui.progress(bar, value, barTint(value));
-            if (hit.hovered) ui.tooltip("оборона " + number(planet.readiness) + "%");
         }
+
+        // ПОДСКАЗКА ОБЪЯСНЯЕТ, А НЕ ПОВТОРЯЕТ. «Оборона 78%» игрок и так
+        // видит по длине полосы; знать ему надо, ЧТО ЭТО ЗНАЧИТ и что
+        // с этим делать.
+        if (hit.hovered) ui.tooltip(planetHint(planet, mine));
     }
 
     // --- вход в систему ---
@@ -754,12 +840,16 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
             // величину пять плюсов подряд кричат громче самих построек,
             // ради которых игрок сюда смотрит.
             if (empty && own) {
-                const float mark = cell * 0.3f;
+                // Плюс приглушён, но ВИДЕН. В прошлой правке я увёл его
+                // в 0.55 прозрачности, и на снимке он почти исчез: игрок
+                // видел шесть тёмных квадратов, то есть ровно то, от чего
+                // плюс и должен был спасти.
+                const float mark = cell * 0.34f;
                 ui.icon(Rect{box.x + (cell - mark) * 0.5f, box.y + (cell - mark) * 0.5f,
                              mark, mark},
                         "icon_plus",
-                        hit.hovered ? TextColor{0.72f, 0.84f, 0.98f, 0.95f}
-                                    : TextColor{0.52f, 0.60f, 0.72f, 0.55f});
+                        hit.hovered ? TextColor{0.80f, 0.90f, 1.00f, 1.0f}
+                                    : TextColor{0.60f, 0.70f, 0.84f, 0.80f});
             }
             if (hit.clicked) {
                 action.kind = ActionKind::SelectSlot;
@@ -967,14 +1057,14 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
                 ui.text(hx, card.y + (card.h - line) * 0.5f, more, ui.theme().textDim);
                 hx -= unit * 0.7f;
             }
-            for (size_t index = shown; index-- > 0;) {
-                const std::string value = number(present[index].first);
+            for (size_t slot = shown; slot-- > 0;) {
+                const std::string value = number(present[slot].first);
                 hx -= ui.textWidth(value);
                 ui.text(hx, card.y + (card.h - line) * 0.5f, value,
                         selected ? ui.theme().text : ui.theme().textDim);
                 hx -= mark + unit * 0.15f;
                 ui.icon(Rect{hx, card.y + (card.h - mark) * 0.5f, mark, mark},
-                        hullIcon(present[index].second));
+                        hullIcon(present[slot].second));
                 hx -= unit * 0.7f;
             }
             if (hit.hovered && !full.empty()) ui.tooltip(full);
@@ -991,7 +1081,12 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
             ui.iconButton(uiId("order-move"), move, armed ? "icon_close" : "icon_enter",
                           armed ? "Отмена — укажите цель" : "Отправить флот",
                           armed ? ButtonStyle::Danger : ButtonStyle::Accent, picked);
-        if (hit.hovered && !picked) ui.tooltip("сначала выберите флот в списке");
+        if (hit.hovered) {
+            ui.tooltip(!picked ? "сначала выберите флот в списке выше"
+                       : armed  ? "отменить приказ · пока он взведён, щелчок по карте задаёт цель"
+                                : "нажмите, потом щёлкните систему на карте — флот пойдёт "
+                                  "туда и начнёт занимать её планеты");
+        }
         if (hit.clicked) action.kind = armed ? ActionKind::CancelMove : ActionKind::BeginMove;
     }
 
@@ -1100,7 +1195,8 @@ ScreenAction Screen::messagePanel(Ui& ui, int64_t now, float top, float left,
             const ButtonResult hit = ui.hotspot(uiId("message", uint32_t(index)), box);
             if (hit.hovered) {
                 ui.panel(box, "slot_hover", 0.5f);
-                ui.tooltip("показать систему " + number(entry.system));
+                ui.tooltip("щёлкните — камера перейдёт к системе " +
+                           number(entry.system) + ", где это случилось");
             }
             if (hit.clicked) {
                 action.kind = ActionKind::FocusSystem;
@@ -1143,7 +1239,11 @@ ScreenAction Screen::bottomBar(Ui& ui, const game::Client& client,
     const Rect reset{unit * 1.5f, bar.y + unit * 0.6f, line * 9.0f, height - unit * 1.2f};
     const ButtonResult fit = ui.iconButton(uiId("reset-view"), reset, "icon_planet",
                                            state.inSystem ? "Вся система" : "Вся галактика");
-    if (fit.hovered) ui.tooltip("вернуть камеру так, чтобы было видно всё");
+    if (fit.hovered) {
+        ui.tooltip(state.inSystem
+                       ? "отвести камеру так, чтобы стали видны все орбиты"
+                       : "показать галактику целиком — вы увидите, где чьи владения");
+    }
     if (fit.clicked) action.kind = ActionKind::ResetView;
 
     // Выход — тоже мышью. Второй щелчок подтверждает: выход по одному

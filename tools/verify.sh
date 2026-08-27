@@ -205,6 +205,20 @@ elif ! cmake --build build/client -j"$JOBS" >/tmp/pw_client_build.log 2>&1; then
     fail "клиент не собрался"; tail -25 /tmp/pw_client_build.log
 else
     ok "клиент собран"
+    # Предупреждения В КЛИЕНТЕ проверяются отдельно.
+    #
+    # Раньше проверялась только сборка ядра, и два перекрытия имён в слое
+    # Vulkan жили в дереве, ничего не нарушая: на Linux их не показывал
+    # gcc, а на маке их показывал clang — но уже в той части прогона,
+    # где никто предупреждений не считал.
+    CLIENT_WARNINGS=$(grep -ci "warning:" /tmp/pw_client_build.log || true)
+    if [ "$CLIENT_WARNINGS" -eq 0 ]; then
+        ok "предупреждений в клиенте нет"
+    else
+        printf '  %sвнимание%s предупреждений в клиенте: %s\n' \
+            "$YELLOW" "$OFF" "$CLIENT_WARNINGS"
+        grep -i "warning:" /tmp/pw_client_build.log | head -5 | sed 's/^/       /'
+    fi
     if ./build/client/bin/pw_render_tests >/tmp/pw_render.log 2>&1; then
         ok "$(grep 'test cases:' /tmp/pw_render.log | tr -s ' ')"
         if ./build/client/bin/pw_render_view_tests >/tmp/pw_mapview.log 2>&1; then

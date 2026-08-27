@@ -150,6 +150,8 @@ const char* hullNameAccusative(uint8_t hull);
 const char* hullHint(uint8_t hull);
 const char* hullIcon(uint8_t hull);
 const char* starName(uint8_t starClass);
+/// Чем этот класс светила ценен. Одна строка для подсказки.
+const char* starHint(uint8_t starClass);
 const char* planetClassName(uint8_t planetClass);
 /// Что означает стадия сезона. Одна строка для подсказки.
 const char* stageHint(sim::SeasonStage stage);

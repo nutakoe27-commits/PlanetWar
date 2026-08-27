@@ -82,7 +82,11 @@ Window::Window(const WindowDesc& desc)
 
     int pw = 0, ph = 0;
     SDL_GetWindowSizeInPixels(static_cast<SDL_Window*>(handle_), &pw, &ph);
-    PW_LOG_INFO("window", "окно %dx%d, кадровый буфер %dx%d", desc.width, desc.height, pw, ph);
+    // Масштаб печатается намеренно: если координаты мыши однажды снова
+    // разъедутся с интерфейсом, первое, что надо увидеть, — это число.
+    PW_LOG_INFO("window", "окно %dx%d, кадровый буфер %dx%d, масштаб %.2f",
+                desc.width, desc.height, pw, ph,
+                desc.width > 0 ? double(pw) / double(desc.width) : 1.0);
 }
 
 Window::~Window() {
@@ -109,6 +113,25 @@ bool Window::pumpEvents(Input& input) {
     int fbWidth = 0, fbHeight = 0;
     framebufferSize(fbWidth, fbHeight);
 
+    // ТОЧКИ ОКНА -> ПИКСЕЛИ КАДРОВОГО БУФЕРА.
+    //
+    // Весь игровой код работает в пикселях кадра: в них задан интерфейс,
+    // в них же приходит его размер. SDL отдаёт координаты мыши в ТОЧКАХ
+    // окна, а это не одно и то же: с SDL_WINDOW_HIGH_PIXEL_DENSITY
+    // на Retina кадровый буфер вдвое крупнее окна.
+    //
+    // Без этого пересчёта курсор промахивается ровно во столько раз,
+    // каков масштаб экрана: человек наводит на одну кнопку, подсвечивается
+    // другая. На обычном мониторе масштаб единица, и ошибки не видно
+    // вовсе — поэтому она и прожила до первого запуска на маке.
+    //
+    // Касания ниже переводятся в пиксели с самого начала, и это тот же
+    // самый уговор: единицы у мыши и у пальца обязаны совпадать.
+    int winWidth = 0, winHeight = 0;
+    SDL_GetWindowSize(static_cast<SDL_Window*>(handle_), &winWidth, &winHeight);
+    const float pointScaleX = winWidth > 0 ? float(fbWidth) / float(winWidth) : 1.0f;
+    const float pointScaleY = winHeight > 0 ? float(fbHeight) / float(winHeight) : 1.0f;
+
     bool keepRunning = true;
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -128,19 +151,23 @@ bool Window::pumpEvents(Input& input) {
                 }
                 break;
 
-            case SDL_EVENT_MOUSE_MOTION:
-                input.setMouse(event.motion.x, event.motion.y);
-                input.setPointer(-1, event.motion.x, event.motion.y,
-                                 input.isDown(MouseButton::Left));
+            case SDL_EVENT_MOUSE_MOTION: {
+                const float x = event.motion.x * pointScaleX;
+                const float y = event.motion.y * pointScaleY;
+                input.setMouse(x, y);
+                input.setPointer(-1, x, y, input.isDown(MouseButton::Left));
                 break;
+            }
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_UP: {
                 const MouseButton button = translateButton(event.button.button);
+                const float x = event.button.x * pointScaleX;
+                const float y = event.button.y * pointScaleY;
                 input.setButton(button, event.button.down);
-                input.setMouse(event.button.x, event.button.y);
+                input.setMouse(x, y);
                 if (button == MouseButton::Left) {
-                    input.setPointer(-1, event.button.x, event.button.y, event.button.down);
+                    input.setPointer(-1, x, y, event.button.down);
                 }
                 break;
             }

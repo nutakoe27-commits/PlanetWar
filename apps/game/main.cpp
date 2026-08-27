@@ -121,6 +121,8 @@ void printUsage() {
         "  --validation     слои проверки Vulkan\n"
         "  --shot <файл>    без окна: подключиться, отрисовать и выйти\n"
         "  --shot-after <с> сколько секунд поиграть до снимка\n"
+        "  --shot-cursor <x> <y>  поставить курсор перед снимком —\n"
+        "                   так на снимок попадают подсветка и подсказка\n"
         "  --shot-zoom <k>  приблизить перед снимком\n"
         "  --shot-system    снимок ВИДА СИСТЕМЫ, а не карты галактики\n"
         "\nВСЁ УПРАВЛЕНИЕ — МЫШЬЮ. Ни одно действие не требует клавиши:\n"
@@ -146,6 +148,14 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int shotAfterSeconds = 3;
     float shotZoom = 1.0f;
+    // Куда поставить курсор перед снимком.
+    //
+    // Без этого состояния наведения — подсветка строки, подсказка,
+    // объясняющая «что и зачем», — нельзя увидеть на снимке ВООБЩЕ.
+    // Проверять их оставалось только запуском игры руками, то есть
+    // не проверять: правило проекта «снимки ловят замысел» на половину
+    // интерфейса просто не распространялось.
+    float shotCursorX = -1.0f, shotCursorY = -1.0f;
     bool shotSystem = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -159,6 +169,10 @@ int main(int argc, char** argv) {
         else if (arg == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (arg == "--shot-after" && i + 1 < argc) shotAfterSeconds = std::atoi(argv[++i]);
         else if (arg == "--shot-zoom" && i + 1 < argc) shotZoom = float(std::atof(argv[++i]));
+        else if (arg == "--shot-cursor" && i + 2 < argc) {
+            shotCursorX = float(std::atof(argv[++i]));
+            shotCursorY = float(std::atof(argv[++i]));
+        }
         else if (arg == "--shot-system") shotSystem = true;
         else {
             printUsage();
@@ -424,6 +438,10 @@ int main(int argc, char** argv) {
         render::UiInput uiInput;
         uiInput.mouseX = input.mouseX();
         uiInput.mouseY = input.mouseY();
+        if (headless && shotCursorX >= 0.0f) {
+            uiInput.mouseX = shotCursorX;
+            uiInput.mouseY = shotCursorY;
+        }
         uiInput.down = input.isDown(MouseButton::Left);
         uiInput.pressed = input.wasPressed(MouseButton::Left);
         uiInput.released = input.wasReleased(MouseButton::Left);

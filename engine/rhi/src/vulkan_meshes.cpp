@@ -284,11 +284,15 @@ bool Device::createGlowPipeline(const std::vector<uint8_t>& vertexSpirv,
 
 void Device::setCamera3D(const Camera3D& camera) { impl_->camera3d = camera; }
 
-void Device::Impl::drawMeshesWith(VkPipeline pipeline, VkPipelineLayout layout,
+// Параметры названы НЕ как поля Impl (`pipeline`, `layout`): метод берёт
+// конвейер аргументом, а у Impl есть свои одноимённые поля, и перекрытие
+// здесь читается как «а какой из двух имеется в виду». Компилятор на маке
+// сообщает об этом (-Wshadow), gcc на Linux молчит.
+void Device::Impl::drawMeshesWith(VkPipeline usePipeline, VkPipelineLayout useLayout,
                                   MeshHandle handle, const MeshInstance* instances,
                                   size_t count, TextureHandle texture) {
     Impl& d = *this;
-    if (!d.frameOpen || pipeline == VK_NULL_HANDLE) return;
+    if (!d.frameOpen || usePipeline == VK_NULL_HANDLE) return;
     if (instances == nullptr || count == 0) return;
     if (handle == kInvalidMesh || handle > d.meshes.size()) return;
     if (texture == kInvalidTexture || texture > d.textures.size()) return;
@@ -319,11 +323,11 @@ void Device::Impl::drawMeshesWith(VkPipeline pipeline, VkPipelineLayout layout,
     push.lightColor[1] = d.camera3d.lightG;
     push.lightColor[2] = d.camera3d.lightB;
 
-    vkCmdBindPipeline(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdPushConstants(d.cmd, layout,
+    vkCmdBindPipeline(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, usePipeline);
+    vkCmdPushConstants(d.cmd, useLayout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(push), &push);
-    vkCmdBindDescriptorSets(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
+    vkCmdBindDescriptorSets(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, useLayout, 0, 1,
                             &d.textures[texture - 1].set, 0, nullptr);
 
     const VkBuffer buffers[] = {mesh.vertices, d.meshBuffer.buffer};

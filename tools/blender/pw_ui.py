@@ -280,10 +280,16 @@ def glyph_icon(kind: str, name: str):
     if kind == "plus":
         # Плюс в пустой ячейке застройки. Без него шесть тёмных квадратов
         # читаются как рамка, а не как «сюда можно нажать».
+        #
+        # Перекладины ТОЛСТЫЕ. Значок рисуется размером в треть ячейки,
+        # то есть пикселей в двадцать; при толщине в 0,15 от значка это
+        # три пикселя на штрих, и после уменьшения плюс превращался
+        # в синеватое пятно. Пятая часть — минимум, при котором крест
+        # ещё читается крестом.
         for rotation in (0.0, math.pi * 0.5):
             bpy.ops.mesh.primitive_cube_add(size=1.0, rotation=(0.0, 0.0, rotation))
             obj = add(bpy.context.object)
-            obj.scale = (0.62, 0.15, 0.15)
+            obj.scale = (0.78, 0.22, 0.22)
     elif kind == "close":
         for sign in (1.0, -1.0):
             bpy.ops.mesh.primitive_cube_add(size=1.0, rotation=(0.0, 0.0,
@@ -349,15 +355,26 @@ def glyph_icon(kind: str, name: str):
         bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.12, 0.0, 0.1))
         obj = add(bpy.context.object)
         obj.scale = (0.24, 0.08, 0.08)
-    else:  # demolish — молоток
-        bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.0, 0.0, 0.28),
-                                        rotation=(0.0, 0.0, 0.5))
-        obj = add(bpy.context.object)
-        obj.scale = (0.56, 0.22, 0.22)
-        bpy.ops.mesh.primitive_cylinder_add(vertices=12, radius=0.09, depth=0.8,
-                                            location=(0.0, 0.0, -0.16),
-                                            rotation=(0.0, 0.4, 0.0))
+    else:  # demolish — мусорный бак
+        # БЫЛ МОЛОТОК, и на кнопке размером в строку он читался как цифра
+        # «7»: длинная ручка наискось и короткий боёк. Значок, который
+        # можно спутать с цифрой, хуже отсутствующего — игрок видит
+        # «7 Снести шахту» и решает, что чего-то не понимает.
+        #
+        # Бак узнаётся силуэтом: трапеция, крышка шире корпуса, ручка
+        # сверху. Ни на что другое в наборе не похож.
+        bpy.ops.mesh.primitive_cone_add(vertices=4, radius1=0.30, radius2=0.38,
+                                        depth=0.62, location=(0.0, 0.0, -0.06),
+                                        rotation=(0.0, 0.0, math.pi * 0.25))
         add(bpy.context.object)
+        # Крышка: шире корпуса, чтобы силуэт имел уступ.
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.0, 0.0, 0.28))
+        obj = add(bpy.context.object)
+        obj.scale = (0.62, 0.62, 0.11)
+        # Ручка на крышке.
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.0, 0.0, 0.40))
+        obj = add(bpy.context.object)
+        obj.scale = (0.24, 0.24, 0.14)
 
     bpy.ops.object.select_all(action="DESELECT")
     for part in parts:

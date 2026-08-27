@@ -58,8 +58,23 @@ void Ui::end() {
     // Подсказка рисуется последней, поверх всего: объявленная в момент
     // вызова, она оказывалась бы под панелями, которые пришли позже.
     const float pad = theme_.unit;
-    const float width = textWidth(tooltipText_) + pad * 2.0f;
-    const float height = lineHeight_ + pad * 1.5f;
+
+    // ПЕРЕНОС ПО СЛОВАМ. Подсказка в одну строку тянулась во всю ширину
+    // экрана: «ваша · слотов 9, свободно 7 · оборона 100% из 100 — упадёт
+    // до нуля, и планету заберут» — это тысяча с лишним пикселей текста,
+    // который глаз обязан пройти слева направо целиком. Строка длиннее
+    // примерно шестидесяти знаков перестаёт читаться с одного взгляда,
+    // и подсказка из помощи превращается в работу.
+    const float maxWidth = std::min(float(width_) * 0.26f, lineHeight_ * 26.0f);
+    const std::vector<std::string> lines = wrap(tooltipText_, maxWidth);
+    if (lines.empty()) return;
+
+    float widest = 0.0f;
+    for (const std::string& line : lines) widest = std::max(widest, textWidth(line));
+
+    const float step = lineHeight_ * 1.25f;
+    const float width = widest + pad * 2.0f;
+    const float height = step * float(lines.size()) + pad * 1.2f;
 
     // Уводим от края экрана: подсказка, наполовину вылезшая за монитор, —
     // это подсказка, которую не прочитать.
@@ -72,7 +87,38 @@ void Ui::end() {
 
     const Rect box{x, y, width, height};
     panel(box, "panel_light");
-    text(x + pad, y + pad * 0.75f, tooltipText_, theme_.text);
+    for (size_t index = 0; index < lines.size(); ++index) {
+        text(x + pad, y + pad * 0.6f + step * float(index), lines[index], theme_.text);
+    }
+}
+
+/// Разбить строку на строки не шире `maxWidth`.
+///
+/// По пробелам: рвать слово посередине хуже, чем вылезти за границу
+/// на одно длинное слово. Границы предложений тут нет — подсказки
+/// пишутся короткими и разделяются точкой-разделителем.
+std::vector<std::string> Ui::wrap(const std::string& value, float maxWidth) const {
+    std::vector<std::string> lines;
+    std::string current;
+
+    size_t at = 0;
+    while (at <= value.size()) {
+        const size_t space = value.find(' ', at);
+        const std::string word = value.substr(at, space - at);
+
+        const std::string candidate = current.empty() ? word : current + " " + word;
+        if (!current.empty() && textWidth(candidate) > maxWidth) {
+            lines.push_back(current);
+            current = word;
+        } else {
+            current = candidate;
+        }
+
+        if (space == std::string::npos) break;
+        at = space + 1;
+    }
+    if (!current.empty()) lines.push_back(current);
+    return lines;
 }
 
 const UiSprite* Ui::lookup(const char* name) {
@@ -201,14 +247,28 @@ void Ui::textCentered(const Rect& r, const std::string& value, const TextColor& 
 }
 
 void Ui::progress(const Rect& r, float value, const TextColor& color) {
-    panel(r, "bar_back");
+    // Полоса рисуется НЕ ТОНЬШЕ трёх пикселей и всегда с подложкой.
+    //
+    // Первая версия брала высоту из вызывающего кода, и полоса обороны
+    // выходила в пять пикселей на подложке того же цвета, что панель:
+    // на снимке она читалась как чёрточка, а не как индикатор. Полоса
+    // без видимого жёлоба не сообщает, сколько ОСТАЛОСЬ, — а именно это
+    // от неё и нужно.
+    const Rect track{r.x, r.y, r.w, std::max(r.h, 4.0f)};
+    panel(track, "bar_back");
+
     const float filled = std::clamp(value, 0.0f, 1.0f);
     if (filled <= 0.0f) return;
 
-    const Rect inner = r.inset(2.0f);
+    const float pad = track.h > 8.0f ? 2.0f : 1.0f;
+    const Rect inner = track.inset(pad);
     const UiSprite* sprite = lookup("bar_fill");
-    quad(Rect{inner.x, inner.y, inner.w * filled, inner.h},
+    quad(Rect{inner.x, inner.y, std::max(1.0f, inner.w * filled), inner.h},
          sprite != nullptr ? *sprite : fallbackSprite(), color);
+}
+
+void Ui::separator(const Rect& r) {
+    fill(Rect{r.x, std::round(r.y), r.w, 1.0f}, TextColor{1.0f, 1.0f, 1.0f, 0.07f});
 }
 
 // ---------------------------------------------------------------------------

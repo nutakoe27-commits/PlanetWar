@@ -89,7 +89,19 @@ def build_font_atlas(scene, out_path: str, cell: int = 48, samples: int = 16) ->
         text = bpy.context.active_object
         text.data.body = character
         text.data.font = font
-        text.data.size = 0.78
+        # Кегль в клетке.
+        #
+        # Было 0,78 — и при высоте строки в семнадцать пикселей прописная
+        # выходила девять, а сама буква пять пикселей в ширину. На снимке
+        # с двукратным увеличением это видно сразу: между буквами воздуха
+        # больше, чем краски. Клетка квадратная и рисуется высотой в строку,
+        # поэтому кегль — это ПРЯМО доля высоты строки, которую занимает
+        # буква, и 0,78 для неё мало.
+        #
+        # 0,92 оставляет запас на надстрочные знаки («й», «ё») и на нижние
+        # выносы: полная высота шрифта равна кеглю, а центрируется он
+        # по клетке.
+        text.data.size = 0.92
         text.data.align_x = "CENTER"
         text.data.align_y = "CENTER"
         text.data.materials.append(material)
@@ -119,4 +131,86 @@ def build_font_atlas(scene, out_path: str, cell: int = 48, samples: int = 16) ->
         "width": width,
         "height": height,
         "texture": os.path.basename(out_path),
+        "metrics": measure_glyphs(out_path, cell, rows),
     }
+
+
+def measure_glyphs(png_path: str, cell: int, rows: int) -> list[dict]:
+    """Померить, сколько места на самом деле занимает каждая буква.
+
+    ЗАЧЕМ. Атлас — это сетка одинаковых клеток, и первая версия рисовала
+    каждую букву целой клеткой с одинаковым шагом. Получался моноширинный
+    шрифт: у «ш» и у «i» одна и та же ширина, и половина строки уходила
+    в пустоту. Цифры от этого выигрывают — столбик чисел не дёргается, —
+    а связный текст проигрывает: подсказка на две строки читается как
+    телеграмма.
+
+    Меряем НЕ по метрикам TTF, а по самому отрендеренному атласу: между
+    шрифтом и пикселями стоит Blender со своим растеризатором, и верить
+    надо тому, что получилось, а не тому, что было задумано.
+
+    Возвращаем на каждый глиф долю клетки: где начинается краска, где
+    заканчивается и на сколько сдвигать курсор.
+    """
+    image = bpy.data.images.load(png_path)
+    width, height = image.size
+    # Пиксели идут снизу вверх, по четыре числа на точку.
+    pixels = list(image.pixels)
+
+    metrics = []
+    for index, character in enumerate(CHARSET):
+        column = index % COLUMNS
+        row = index // COLUMNS
+
+        x0 = column * cell
+        # Строка 0 сетки — верхняя, а у изображения снизу. Переворачиваем.
+        y0 = (rows - 1 - row) * cell
+
+        left, right = cell, -1
+        for y in range(y0, min(y0 + cell, height)):
+            base = y * width * 4
+            for x in range(x0, min(x0 + cell, width)):
+                if pixels[base + x * 4 + 3] > 0.02:
+                    local = x - x0
+                    if local < left: left = local
+                    if local > right: right = local
+
+        if right < left:
+            # Пробел: краски нет, мерить нечего — ширину задаём.
+            #
+            # Моноширинный шрифт даёт пробелу ту же ширину, что и букве,
+            # и в связном тексте это читается как разрядка: «жёлтая
+            # звезда · ваша» разъезжается на полстроки. Набирают пробел
+            # примерно в треть кегля — вчетверо шире межбуквенного
+            # просвета, и этого хватает, чтобы слова не слипались.
+            metrics.append({"char": character, "left": 0.0, "right": 0.0,
+                            "advance": 0.28})
+            continue
+
+        # Полпикселя с каждой стороны — это край растра, а не буква.
+        ink_left = left / cell
+        ink_right = (right + 1) / cell
+        # Боковые поля: одинаковые слева и справа, восьмая часть кегля.
+        # Без них буквы слипаются, с большими — строка разъезжается.
+        side = 0.045
+        metrics.append({
+            "char": character,
+            "left": round(ink_left, 4),
+            "right": round(ink_right, 4),
+            "advance": round(ink_right - ink_left + side * 2.0, 4),
+        })
+
+    # ЦИФРЫ ОСТАЮТСЯ МОНОШИРИННЫМИ. Это не непоследовательность, а то же
+    # правило, что в наборе таблиц: столбик чисел, где «1» уже «8», рябит
+    # при каждом изменении значения, а счётчик ресурсов меняется постоянно.
+    digits = [m for m in metrics if m["char"].isdigit()]
+    if digits:
+        widest = max(m["advance"] for m in digits)
+        for m in digits:
+            # Сдвигаем краску в середину общей ширины.
+            m["left"] -= (widest - m["advance"]) * 0.5
+            m["right"] -= (widest - m["advance"]) * 0.5
+            m["advance"] = widest
+
+    bpy.data.images.remove(image)
+    return metrics

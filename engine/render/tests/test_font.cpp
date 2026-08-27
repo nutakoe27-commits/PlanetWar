@@ -1,5 +1,7 @@
 #include "doctest.h"
 
+#include <cmath>
+
 #include "assets_path.h"
 
 #include <string>
@@ -122,9 +124,15 @@ TEST_CASE("шрифт: глифы не перекрываются в атлас�
     CHECK((a[0].u0 != b[0].u0 || a[0].v0 != b[0].v0));
 }
 
-TEST_CASE("шрифт: строка растёт вправо ровным шагом") {
-    // Шрифт моноширинный: на этом держится и вёрстка панелей, и то,
-    // что счётчики ресурсов не дёргаются при смене цифры.
+TEST_CASE("шрифт: одинаковые буквы идут ровным шагом") {
+    // Шрифт пропорциональный, но ОДНА И ТА ЖЕ буква обязана иметь один
+    // и тот же шаг — иначе повторяющийся текст дрожит.
+    //
+    // Буквы при этом садятся на ЦЕЛЫЕ пиксели: глиф печётся клеткой
+    // в сорок восемь точек, а рисуется высотой в семнадцать, и дробная
+    // позиция размазывает каждый штрих между двумя пикселями. Отсюда
+    // допуск в пиксель: шаг ровный с точностью до округления, и это
+    // не небрежность, а плата за резкость.
     Font font;
     if (!loadFont(font)) return;
 
@@ -132,13 +140,17 @@ TEST_CASE("шрифт: строка растёт вправо ровным ша�
     font.layout("ААААА", 100.0f, 50.0f, 20.0f, TextColor{}, sprites);
     REQUIRE(sprites.size() == 5);
 
-    const float step = sprites[1].x - sprites[0].x;
-    CHECK(step > 0.0f);
-    for (size_t i = 2; i < sprites.size(); ++i) {
-        CHECK(sprites[i].x - sprites[i - 1].x == doctest::Approx(step));
+    const float exact = font.advanceOf(u'А', 20.0f);
+    CHECK(exact > 0.0f);
+    for (size_t i = 1; i < sprites.size(); ++i) {
+        CAPTURE(i);
+        CHECK(std::abs((sprites[i].x - sprites[i - 1].x) - exact) <= 1.0f);
         CHECK(sprites[i].y == doctest::Approx(sprites[0].y));
     }
-    CHECK(font.width("ААААА", 20.0f) == doctest::Approx(step * 5.0f));
+
+    // Ширина строки считается ТОЧНО, без округления: по ней размечаются
+    // панели, и накопленная ошибка в пиксель на букву развалила бы вёрстку.
+    CHECK(font.width("ААААА", 20.0f) == doctest::Approx(exact * 5.0f));
 }
 
 TEST_CASE("шрифт: перевод строки опускает курсор и возвращает влево") {

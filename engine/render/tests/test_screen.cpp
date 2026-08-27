@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "pw/game/server.h"
+#include "pw/render/font.h"
 #include "pw/render/screen.h"
 
 using namespace pw;
@@ -615,4 +616,78 @@ TEST_CASE("атлас интерфейса: пропажа спрайта не �
     ui.panel(Rect{0.0f, 0.0f, 100.0f, 40.0f}, "panel");
     ui.end();
     CHECK(ui.missing().empty());
+}
+
+TEST_CASE("подсказка: длинный текст переносится по словам") {
+    // Подсказка в одну строку тянулась во всю ширину экрана, и глаз был
+    // обязан пройти её слева направо целиком. Подсказка, которую читают
+    // как абзац, — это работа, а не помощь.
+    Ui ui;
+    UiInput input;
+    input.mouseX = 40.0f;
+    input.mouseY = 40.0f;
+
+    const std::string longText =
+        "ваша · слотов 9, свободно 7 · оборона 100% из 100 — "
+        "упадёт до нуля, и планету заберут";
+
+    ui.begin(input, 1600, 900);
+    ui.tooltip(longText);
+    ui.end();
+
+    const std::vector<std::string>& lines = ui.frame().lines;
+    REQUIRE(lines.size() >= 2);
+
+    // Ни одна строка не шире четверти экрана.
+    for (const std::string& line : lines) {
+        CAPTURE(line);
+        CHECK(ui.textWidth(line) <= 1600.0f * 0.27f);
+    }
+
+    // Слова не разорваны: склейка строк через пробел даёт исходный текст.
+    std::string joined;
+    for (const std::string& line : lines) {
+        if (!joined.empty()) joined += ' ';
+        joined += line;
+    }
+    CHECK(joined == longText);
+}
+
+TEST_CASE("подсказка: короткая остаётся одной строкой") {
+    Ui ui;
+    UiInput input;
+    ui.begin(input, 1600, 900);
+    ui.tooltip("снести шахту");
+    ui.end();
+    REQUIRE(ui.frame().lines.size() == 1);
+    CHECK(ui.frame().lines.front() == "снести шахту");
+}
+
+TEST_CASE("шрифт: пробел уже буквы, цифры одной ширины") {
+    // Два правила набора, которые легко потерять при перепечке шрифта.
+    // Широкий пробел разряжает текст до нечитаемости, разная ширина цифр
+    // заставляет счётчик ресурсов рябить при каждом изменении.
+    const std::string manifest = testing::findAsset("assets/build/font.json");
+    if (manifest.empty()) {
+        MESSAGE("шрифт не собран — пропускаю");
+        return;
+    }
+    Font font;
+    REQUIRE_MESSAGE(font.load(manifest), font.error());
+
+    const float line = 100.0f;
+    const float space = font.advanceOf(' ', line);
+    const float letter = font.advanceOf(u'ш', line);
+    CHECK(space > 0.0f);
+    CHECK(space < letter);
+
+    // Все цифры одной ширины — иначе столбик чисел дёргается.
+    const float zero = font.advanceOf('0', line);
+    for (char digit = '1'; digit <= '9'; ++digit) {
+        CAPTURE(digit);
+        CHECK(font.advanceOf(uint32_t(digit), line) == doctest::Approx(zero));
+    }
+
+    // Пропорциональность: не все буквы одной ширины.
+    CHECK(font.advanceOf('i', line) != doctest::Approx(font.advanceOf('W', line)));
 }
