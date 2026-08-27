@@ -33,6 +33,7 @@ import pw_atlas  # noqa: E402
 import pw_bake  # noqa: E402
 import pw_hulls  # noqa: E402
 import pw_planets  # noqa: E402
+import pw_ui  # noqa: E402
 import pw_font  # noqa: E402
 import pw_stars  # noqa: E402
 
@@ -213,6 +214,11 @@ def build(quality: str, keep_frames: bool) -> int:
     print("  планеты...")
     build_planets(samples=max(8, samples // 2))
 
+    # --- интерфейс ---
+    print()
+    print("  интерфейс...")
+    build_ui(samples=max(16, samples // 2))
+
     if not keep_frames and os.path.isdir(WORK_DIR):
         shutil.rmtree(WORK_DIR)
 
@@ -389,6 +395,167 @@ def build_planets(samples: int) -> None:
 
     with open(os.path.join(BUILD_DIR, "planets.json"), "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+
+def build_ui(samples: int) -> None:
+    """Атлас интерфейса: рамки, кнопки, полосы, слоты и иконки.
+
+    Всё снимается как настоящие предметы: у панели есть фаска, у иконки —
+    объём и тень. Нарисованный прямоугольник с градиентом глаз читает
+    как рисунок поверх игры, а снятый предмет — как её часть.
+
+    Иконка здания и иконка корабля — рендеры ТЕХ ЖЕ моделей, что стоят
+    на планете и летают по карте. Значит они физически не могут разойтись
+    с тем, что игрок видит в мире.
+    """
+    scene = pw_bake.reset_scene()
+    pw_ui.setup_icon_scene(scene)
+
+    work = os.path.join(ROOT, "assets", "cache", "ui")
+    if os.path.isdir(work):
+        shutil.rmtree(work)
+    os.makedirs(work, exist_ok=True)
+
+    entries: list[tuple[str, int, str]] = []
+    borders: dict[str, int] = {}
+
+    def snapshot(obj, name: str, size: int, ortho: float, elevation: float):
+        camera = pw_ui.setup_camera(scene, ortho_scale=ortho, elevation_deg=elevation)
+        path = os.path.join(work, f"{name}.png")
+        pw_ui.render_to(scene, path, size=size, samples=samples)
+        entries.append((name, 0, path))
+        bpy.data.objects.remove(camera, do_unlink=True)
+
+    # --- рамки и кнопки ---
+    #
+    # Снимаются строго сверху: рамка растягивается по девяти частям, и
+    # наклон камеры сделал бы её края непохожими друг на друга — растянутая
+    # панель поехала бы вбок.
+    plates = [
+        # имя,            цвет подложки,          прозрачность, фаска
+        ("panel",         (0.09, 0.11, 0.16),     0.92, 0.10),
+        ("panel_light",   (0.14, 0.17, 0.24),     0.94, 0.10),
+        ("panel_dark",    (0.05, 0.06, 0.10),     0.88, 0.08),
+        ("button",        (0.17, 0.21, 0.30),     1.00, 0.13),
+        ("button_hover",  (0.25, 0.33, 0.46),     1.00, 0.13),
+        ("button_down",   (0.12, 0.16, 0.23),     1.00, 0.06),
+        ("button_accent", (0.20, 0.42, 0.36),     1.00, 0.13),
+        ("button_danger", (0.42, 0.19, 0.20),     1.00, 0.13),
+        ("slot",          (0.07, 0.09, 0.13),     0.95, 0.08),
+        ("slot_hover",    (0.14, 0.20, 0.28),     1.00, 0.10),
+        ("bar_back",      (0.05, 0.06, 0.09),     0.95, 0.05),
+    ]
+    for name, color, alpha, bevel in plates:
+        obj = pw_ui.rounded_plate(f"pw_ui_{name}", width=2.0, height=2.0,
+                                  radius=0.42, bevel=bevel)
+        obj.data.materials.append(pw_ui.flat_material(f"pw_ui_mat_{name}", color, alpha))
+        snapshot(obj, name, size=pw_ui.PANEL_SIZE, ortho=2.02, elevation=90.0)
+        borders[name] = pw_ui.PANEL_BORDER
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    # Заливка индикатора — без скругления по краям: она обрезается
+    # по длине, и скруглённый край при обрезке выглядел бы обломанным.
+    for name, color in (("bar_fill", (0.42, 0.72, 0.52)),
+                        ("bar_fill_warn", (0.85, 0.66, 0.28)),
+                        ("bar_fill_bad", (0.82, 0.34, 0.34)),
+                        ("white", (1.0, 1.0, 1.0))):
+        obj = pw_ui.rounded_plate(f"pw_ui_{name}", width=2.0, height=2.0,
+                                  radius=0.06, bevel=0.03)
+        obj.data.materials.append(pw_ui.flat_material(f"pw_ui_mat_{name}", color, 1.0))
+        snapshot(obj, name, size=32, ortho=2.02, elevation=90.0)
+        borders[name] = 4
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    # --- иконки ресурсов ---
+    resources = [
+        ("res_energy",    "energy",    (0.98, 0.82, 0.34)),
+        ("res_minerals",  "minerals",  (0.62, 0.78, 0.92)),
+        ("res_alloys",    "alloys",    (0.88, 0.62, 0.42)),
+        ("res_research",  "research",  (0.58, 0.84, 0.72)),
+        ("res_influence", "influence", (0.78, 0.66, 0.92)),
+    ]
+    for name, kind, color in resources:
+        obj = pw_ui.resource_icon(kind, f"pw_ui_{name}")
+        obj.data.materials.clear()
+        obj.data.materials.append(pw_ui.metal_material(f"pw_ui_mat_{name}", color))
+        snapshot(obj, name, size=pw_ui.ICON_SIZE,
+                 ortho=pw_ui.fit_object(obj), elevation=32.0)
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    # --- иконки зданий: те же модели, что стоят на планете ---
+    building_colors = {
+        "mine":     (0.78, 0.72, 0.60),
+        "power":    (0.62, 0.82, 0.94),
+        "foundry":  (0.90, 0.66, 0.44),
+        "lab":      (0.68, 0.88, 0.78),
+        "trade":    (0.86, 0.80, 0.56),
+        "fortress": (0.74, 0.76, 0.82),
+        "shipyard": (0.70, 0.78, 0.90),
+    }
+    for kind in pw_planets.STRUCTURE_IDS:
+        obj = pw_planets.build_structure(kind, f"pw_ui_bld_{kind}")
+        obj.data.materials.clear()
+        obj.data.materials.append(
+            pw_ui.metal_material(f"pw_ui_mat_bld_{kind}", building_colors[kind]))
+        snapshot(obj, f"bld_{kind}", size=pw_ui.ICON_SIZE,
+                 ortho=pw_ui.fit_object(obj), elevation=34.0)
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    # --- иконки корпусов: те же модели, что летают по карте ---
+    hull_materials = pw_hulls.build_materials()
+    for spec in load_specs():
+        obj = pw_hulls.build_hull_object(spec, hull_materials)
+        bpy.context.view_layer.update()
+        snapshot(obj, f"hull_{spec.id}", size=pw_ui.ICON_SIZE,
+                 ortho=pw_bake.fit_ortho_scale(obj) * 1.15, elevation=34.0)
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    # --- служебные значки ---
+    glyphs = [
+        ("icon_close",    "close",    (0.92, 0.62, 0.62)),
+        ("icon_back",     "back",     (0.82, 0.86, 0.94)),
+        ("icon_enter",    "enter",    (0.82, 0.90, 0.98)),
+        ("icon_siege",    "siege",    (0.94, 0.52, 0.44)),
+        ("icon_defense",  "defense",  (0.62, 0.86, 0.72)),
+        ("icon_planet",   "planet",   (0.72, 0.84, 0.96)),
+        ("icon_fleet",    "fleet",    (0.86, 0.88, 0.94)),
+        ("icon_clock",    "clock",    (0.88, 0.84, 0.66)),
+        ("icon_demolish", "demolish", (0.90, 0.72, 0.58)),
+        ("icon_plus",     "plus",     (0.62, 0.74, 0.90)),
+    ]
+    for name, kind, color in glyphs:
+        obj = pw_ui.glyph_icon(kind, f"pw_ui_{name}")
+        obj.data.materials.clear()
+        obj.data.materials.append(pw_ui.metal_material(f"pw_ui_mat_{name}", color))
+        snapshot(obj, name, size=pw_ui.ICON_SIZE,
+                 ortho=pw_ui.fit_object(obj), elevation=40.0)
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    atlas_png = os.path.join(BUILD_DIR, "ui.png")
+    frames, atlas_size = pw_atlas.pack(entries, atlas_png)
+
+    manifest = {
+        "version": 1,
+        "note": "Сгенерировано tools/blender/build_assets.py. Не редактировать руками.",
+        "generator": f"blender {bpy.app.version_string}",
+        "texture": os.path.basename(atlas_png),
+        "atlas_size": atlas_size,
+        "sprites": [
+            {
+                "name": frame.hull,
+                "x": frame.x, "y": frame.y, "w": frame.w, "h": frame.h,
+                # Поле растяжки: столько пикселей у края НЕ тянется.
+                # Ноль означает обычный спрайт, который тянется целиком.
+                "border": borders.get(frame.hull, 0),
+            }
+            for frame in frames
+        ],
+    }
+    with open(os.path.join(BUILD_DIR, "ui.json"), "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+    shutil.rmtree(work, ignore_errors=True)
+    print(f"  интерфейс   {atlas_size}x{atlas_size}, спрайтов {len(frames)}")
 
 
 def main() -> int:

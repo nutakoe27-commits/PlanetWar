@@ -51,6 +51,14 @@ public:
     bool wasPressed(MouseButton b) const {
         return buttons_[uint8_t(b)] && !prevButtons_[uint8_t(b)];
     }
+    /// Отпущена именно в этом кадре.
+    ///
+    /// Интерфейсу нужно именно отпускание: кнопка обязана срабатывать
+    /// по нему, а не по нажатию, иначе промахнуться после нажатия нельзя
+    /// и любое случайное нажатие становится необратимым.
+    bool wasReleased(MouseButton b) const {
+        return !buttons_[uint8_t(b)] && prevButtons_[uint8_t(b)];
+    }
     float mouseX() const { return mouseX_; }
     float mouseY() const { return mouseY_; }
     float mouseDeltaX() const { return mouseX_ - prevMouseX_; }

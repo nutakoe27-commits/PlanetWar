@@ -11,7 +11,9 @@ add_library(pw_render STATIC
     src/mesh.cpp
     src/system_view.cpp
     src/font.cpp
-    src/hud.cpp)
+    src/ui_atlas.cpp
+    src/ui.cpp
+    src/screen.cpp)
 
 target_include_directories(pw_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(pw_render PUBLIC pw_game pw_rhi)

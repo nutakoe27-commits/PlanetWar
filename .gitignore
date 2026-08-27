@@ -40,6 +40,9 @@ __pycache__/
 .DS_Store
 compile_commands.json
 
+# Каталог, который CTest создаёт в корне, если его запустить оттуда.
+Testing/
+
 # Кадры, отрисованные проверочными запусками
 triangle.png
 galaxy_map.png
