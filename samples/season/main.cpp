@@ -91,15 +91,20 @@ void reportLosses(World& world, const std::vector<Snapshot>& before, int64_t tic
         }
         if (same) continue;
 
-        std::string before, after;
+        // Имена НЕ `before`/`after`: параметр функции уже зовётся `before`,
+        // и локальная строка его перекрывала. Компилятор на маке это
+        // заметил (-Wshadow), gcc на Linux промолчал. Перекрытие тут было
+        // безобидным, но именно так и выглядит начало настоящей ошибки:
+        // строчкой ниже кто-то читает `before`, думая про список снимков.
+        std::string was_, now_;
         for (size_t hull = 0; hull < kHullClasses; ++hull) {
-            if (hull > 0) { before += '/'; after += '/'; }
-            before += std::to_string(was.fleet.ships[hull]);
-            after += std::to_string(left.ships[hull]);
+            if (hull > 0) { was_ += '/'; now_ += '/'; }
+            was_ += std::to_string(was.fleet.ships[hull]);
+            now_ += std::to_string(left.ships[hull]);
         }
         std::printf("[бой t=%lld] система %u, империя %u: %s -> %s\n",
                     static_cast<long long>(tick), was.system, was.empire,
-                    before.c_str(), after.c_str());
+                    was_.c_str(), now_.c_str());
     }
 }
 
