@@ -103,6 +103,11 @@ public:
     /// выводится из сида и по сети не ездит; застройка приходит снапшотом.
     std::vector<PlanetInfo> planetsAt(uint32_t system) const;
 
+    /// Имя, под которым игрок вошёл. Экран показывает его рядом с гербом:
+    /// в MMO игрок обязан видеть, за кого играет, — на сервере тысяча
+    /// таких же гербов, и цвет отличает его только от соседей.
+    const std::string& name() const { return name_; }
+
 private:
     net::Connection connection_;
     SnapshotReader snapshots_;

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "note": "Сгенерировано tools/blender/build_assets.py. Не редактировать руками.",
-  "generator": "blender 5.0.1",
+  "generator": "blender 5.2.1 LTS",
   "texture": "ui.png",
   "atlas_size": 1024,
   "sprites": [
@@ -99,7 +99,7 @@
       "y": 96,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_panel",
@@ -107,7 +107,7 @@
       "y": 96,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_panel_deep",
@@ -115,7 +115,7 @@
       "y": 96,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_header",
@@ -123,7 +123,7 @@
       "y": 96,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_row",
@@ -131,7 +131,7 @@
       "y": 96,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_row_hover",
@@ -139,7 +139,7 @@
       "y": 96,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_row_active",
@@ -147,7 +147,7 @@
       "y": 96,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_button",
@@ -155,7 +155,7 @@
       "y": 96,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_button_hover",
@@ -163,7 +163,7 @@
       "y": 96,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_button_down",
@@ -171,7 +171,7 @@
       "y": 192,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_button_accent",
@@ -179,7 +179,7 @@
       "y": 192,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_button_danger",
@@ -187,7 +187,7 @@
       "y": 192,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_slot",
@@ -195,7 +195,7 @@
       "y": 192,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_slot_hover",
@@ -203,7 +203,7 @@
       "y": 192,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "hud_group",
@@ -211,7 +211,7 @@
       "y": 192,
       "w": 96,
       "h": 96,
-      "border": 14
+      "border": 12
     },
     {
       "name": "bar_fill",

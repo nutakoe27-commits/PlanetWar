@@ -407,15 +407,6 @@ private:
     float x_ = 0.0f, y_ = 0.0f, width_ = 0.0f;
 };
 
-/// Прямоугольник, сдвинутый вниз до базовой линии текста.
-///
-/// Надпись рисуется от левого верхнего угла, а строки в панели заданы
-/// как полосы. Без этой поправки текст липнет к верхней границе полосы,
-/// и строки идут неровно — глаз это ловит, даже не понимая, что не так.
-Rect textLine(const Rect& r, float lineHeight) {
-    return Rect{r.x, r.y + (r.h - lineHeight) * 0.5f, r.w, lineHeight};
-}
-
 /// Цвет владельца: свой — зелёный, чужой — красный, ничей — серый.
 TextColor ownerTint(const UiTheme& theme, uint8_t owner, uint8_t mine) {
     if (owner == 0xFF) return theme.textDim;
@@ -478,11 +469,34 @@ ScreenAction Screen::topBar(Ui& ui, const game::Client& client) const {
     const EmpireColor& mineColor = empireColor(client.empire());
     ui.icon(Rect{x, (height - crest) * 0.5f, crest, crest}, "icon_crest",
             TextColor{mineColor.r, mineColor.g, mineColor.b, 1.0f});
-    if (ui.hotspot(uiId("crest"), Rect{x, 0.0f, crest + unit, height}).hovered) {
-        ui.tooltip("ваша империя · цвет герба совпадает с цветом ваших систем "
-                   "на карте");
+    x += crest + unit * 0.8f;
+
+    // Имя рядом с гербом. Обрезается по ширине, а не растягивает полосу:
+    // длинное имя не имеет права сдвинуть ресурсы, ради которых сюда
+    // и смотрят.
+    const float nameLimit = line * 7.5f;
+    std::string title = client.name();
+    if (ui.textWidth(title) > nameLimit) {
+        while (title.size() > 1 && ui.textWidth(title + "…") > nameLimit) {
+            // По байтам с оглядкой на UTF-8: обрубить середину буквы
+            // значит нарисовать мусор.
+            do {
+                title.pop_back();
+            } while (!title.empty() && (uint8_t(title.back()) & 0xC0u) == 0x80u);
+        }
+        title += "…";
     }
-    x += crest + unit * 1.2f;
+    const float nameWidth = std::min(nameLimit, ui.textWidth(title));
+    ui.text(x, (height - line) * 0.5f, title, ui.theme().text);
+    if (ui.hotspot(uiId("crest"),
+                   Rect{unit, 0.0f, crest + nameWidth + unit * 2.0f, height})
+            .hovered) {
+        ui.tooltip(client.name() + " · ваша империя · цвет герба совпадает "
+                   "с цветом ваших систем на карте");
+    }
+    x += nameWidth + unit * 1.6f;
+    ui.fill(Rect{x - unit, height * 0.22f, 1.0f, height * 0.56f}, ui.theme().edgeDim);
+    x += unit * 0.2f;
 
     // --- ресурсы ---
     struct Entry {
@@ -576,6 +590,61 @@ ScreenAction Screen::topBar(Ui& ui, const game::Client& client) const {
         x += box.w;
     }
 
+    // --- сводка по империи ---
+    //
+    // Систем, планет, тоннажа. Три числа, которых нет больше нигде: они
+    // отвечают на «насколько я вообще большой» — вопрос, который игрок
+    // задаёт себе раз в несколько минут и на который до сих пор мог
+    // ответить только пересчитав список вручную.
+    //
+    // Место — середина полосы, между ресурсами и таймером. Ресурсы
+    // меняются каждую секунду, сводка каждые несколько минут, стадия раз
+    // в час: слева направо по убыванию частоты, и глаз сам запоминает,
+    // куда смотреть за чем.
+    {
+        const uint8_t mine = uint8_t(client.empire() & 0xFFu);
+        uint32_t systems = 0;
+        uint32_t planets = 0;
+        for (const auto& system : client.view().systems) {
+            if (system.owner == mine) ++systems;
+            planets += system.owner == mine ? system.ownedPlanets : 0;
+        }
+        uint32_t tonnage = 0;
+        for (const auto& [id, fleet] : client.view().fleets) {
+            if (fleet.empire == mine) tonnage += sim::fleetTonnage(fleet.composition);
+        }
+
+        struct Fact {
+            const char* icon;
+            std::string value;
+            const char* hint;
+        };
+        const Fact facts[] = {
+            {"icon_star", number(systems),
+             "систем под вашим контролем · система считается вашей, пока в ней "
+             "есть хоть одна ваша планета"},
+            {"icon_planet", number(planets),
+             "ваших планет · именно планеты, а не системы, дают ресурсы "
+             "и очки территории"},
+            {"icon_fleet", number(tonnage) + " т",
+             "весь ваш тоннаж · содержание флота растёт вместе с ним"},
+        };
+        const float factIcon = line * 1.25f;
+        for (size_t i = 0; i < sizeof(facts) / sizeof(facts[0]); ++i) {
+            const float factWidth = factIcon + unit * 0.5f + ui.textWidth(facts[i].value);
+            const Rect cell{x, 0.0f, factWidth + unit, height};
+            if (ui.hotspot(uiId("fact", uint32_t(i)), cell).hovered) {
+                ui.fill(cell.inset(unit * 0.3f), ui.theme().rowHover);
+                ui.tooltip(facts[i].hint);
+            }
+            ui.icon(Rect{x, (height - factIcon) * 0.5f, factIcon, factIcon},
+                    facts[i].icon);
+            ui.text(x + factIcon + unit * 0.5f, (height - line) * 0.5f, facts[i].value,
+                    ui.theme().textDim);
+            x += factWidth + unit * 1.6f;
+        }
+    }
+
     // --- правый край: стадия сезона и престиж ---
     //
     // Стадия — единственное число на экране, одинаковое у всех игроков
@@ -657,7 +726,7 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
         column.place(panel);
 
         const Rect titleRow = column.next();
-        ui.text(titleRow.x, titleRow.y, "Система не выбрана", ui.theme().text);
+        ui.panelTitle(panel, titleRow.bottom() - panel.y, "Система не выбрана");
         const Rect hintRow = column.next();
         ui.text(hintRow.x, hintRow.y, "щёлкните звезду на карте", ui.theme().textDim);
 
@@ -683,17 +752,17 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
 
     // --- шапка ---
     const Rect titleRow = column.next();
-    ui.text(titleRow.x, titleRow.y, "Система " + number(state.system), ui.theme().text);
-
     const char* ownership = view.owner == 0xFF     ? "ничья"
                             : view.owner == mine   ? "ваша"
                                                    : "чужая";
     const std::string counter =
         number(view.ownedPlanets) + " / " + number(view.totalPlanets);
-    const Rect counterBox{titleRow.right() - ui.textWidth(counter) - unit * 0.5f,
-                          titleRow.y, ui.textWidth(counter) + unit, titleRow.h};
-    ui.textRight(textLine(titleRow, line), counter,
-                 ownerTint(ui.theme(), view.owner, mine));
+    const TextColor counterTint = ownerTint(ui.theme(), view.owner, mine);
+    const Rect band = ui.panelTitle(panel, titleRow.bottom() - panel.y,
+                                    "Система " + number(state.system), counter,
+                                    &counterTint);
+    const Rect counterBox{band.right() - ui.textWidth(counter) - unit * 1.5f, band.y,
+                          ui.textWidth(counter) + unit * 2.0f, band.h};
     if (ui.hotspot(uiId("system-count"), counterBox).hovered) {
         // «4 / 4» само по себе не значит ничего: игрок обязан узнать,
         // что это, ровно один раз и больше не вспоминать.
@@ -875,10 +944,9 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
 
     // --- шапка ---
     const Rect titleRow = column.next();
-    ui.text(titleRow.x, titleRow.y,
-            "Планета " + number(int64_t(state.planetIndex) + 1) + " · " +
-                planetClassName(planet.planetClass),
-            ui.theme().text);
+    ui.panelTitle(panel, titleRow.bottom() - panel.y,
+                  "Планета " + number(int64_t(state.planetIndex) + 1),
+                  planetClassName(planet.planetClass));
 
     // --- состояние ---
     const Rect statusRow = column.next();
@@ -1017,9 +1085,8 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
         pal.place(box);
 
         const Rect head = pal.next();
-        ui.text(head.x, head.y + (head.h - line) * 0.5f,
-                "Что построить в слоте " + number(int64_t(state.slot) + 1),
-                ui.theme().textAccent);
+        ui.panelTitle(box, head.bottom() - box.y,
+                      "Что построить в слоте " + number(int64_t(state.slot) + 1));
 
         for (int paletteRow = 0; paletteRow < palRows; ++paletteRow) {
             const Rect strip = pal.next();
@@ -1138,7 +1205,7 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
     column.place(panel);
 
     const Rect titleRow = column.next();
-    ui.text(titleRow.x, titleRow.y, "Флот в системе", ui.theme().text);
+    ui.panelTitle(panel, titleRow.bottom() - panel.y, "Флот в системе");
 
     if (fleets.empty()) {
         const Rect empty = column.next();
@@ -1280,26 +1347,36 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
 
 ScreenAction Screen::messagePanel(Ui& ui, int64_t now, float top, float left,
                                   float right) const {
+    // СТОПКА КАРТОЧЕК СПРАВА, а не журнал посреди экрана.
+    //
+    // Журнал стоял по центру над картой, гас целиком и в последние секунды
+    // выглядел как призрак: полупрозрачный текст поверх звёзд, который
+    // уже не прочесть, но ещё видно. Хуже того, он занимал середину —
+    // самое дорогое место экрана — ради сообщений, которые игрок обычно
+    // просто провожает взглядом.
+    //
+    // Теперь это стопка отдельных карточек под верхней полосой, слева
+    // от списка. Так же устроены оповещения в Stellaris, и по той же
+    // причине: у новости должна быть своя карточка с подложкой, иначе
+    // на пёстром фоне её не прочитать, а середина экрана нужна карте.
     ScreenAction action;
     if (messages_ == nullptr || messages_->entries().empty()) return action;
 
     const float unit = ui.unit();
     const float line = ui.lineHeight();
-    const float rowHeight = line * 1.7f;
+    const float rowHeight = line * 2.0f;
 
     float widest = line * 12.0f;
     for (const MessageLog::Entry& entry : messages_->entries()) {
         const std::string full =
             entry.count > 1 ? entry.text + "  ×" + number(entry.count) : entry.text;
-        widest = std::max(widest, ui.textWidth(full) + line * 3.0f);
+        widest = std::max(widest, ui.textWidth(full) + line * 3.4f);
     }
-    // Между столбцами, а не по центру экрана: журнал, наехавший на панель
-    // системы, закрывает именно то, ради чего игрок туда смотрит.
     widest = std::min(widest, std::max(line * 12.0f, right - left - unit * 2.0f));
 
-    // Подложка гаснет вместе с содержимым. Иначе последние секунды жизни
-    // журнала выглядят как пустая тёмная коробка посреди экрана: текст уже
-    // прозрачный, а рамка ещё нет.
+    // Гаснет только текст и только в последнюю треть жизни, а подложка
+    // держится почти до конца. Карточка, у которой подложка гаснет
+    // вместе с текстом, последние секунды выглядит грязным пятном.
     auto fade = [&](const MessageLog::Entry& entry) {
         const int64_t age = now - entry.bornAt;
         const int64_t fadeFrom = MessageLog::kLifetime * 2 / 3;
@@ -1308,30 +1385,31 @@ ScreenAction Screen::messagePanel(Ui& ui, int64_t now, float top, float left,
                               float(MessageLog::kLifetime - fadeFrom),
                           0.0f, 1.0f);
     };
-    float strongest = 0.0f;
-    for (const MessageLog::Entry& entry : messages_->entries()) {
-        strongest = std::max(strongest, fade(entry));
-    }
 
-    const float height = rowHeight * float(messages_->entries().size()) + unit;
-    const Rect panel{(left + right - widest) * 0.5f, top, widest, height};
-    ui.panel(panel, "hud_panel_deep", 0.92f * strongest);
-
-    float y = panel.y + unit * 0.5f;
+    float y = top;
     size_t index = 0;
     for (const MessageLog::Entry& entry : messages_->entries()) {
-        // Гаснет к концу жизни: угасающая строка не отвлекает, но ещё
-        // читается, если игрок обернулся.
-        TextColor color = entry.color;
-        color.a *= fade(entry);
+        const float alpha = fade(entry);
+        const Rect card{right - widest, y, widest, rowHeight - 2.0f};
 
-        const Rect box{panel.x + unit * 0.5f, y, panel.w - unit, rowHeight - 2.0f};
+        // Подложка отдельной карточкой: новость обязана читаться поверх
+        // звёздного неба, а небо местами светлее любой панели.
+        ui.panel(card, "hud_panel", std::min(1.0f, 0.55f + alpha * 0.45f));
+        // Цветная полоска слева отвечает на «плохая новость или нет»
+        // раньше, чем игрок прочтёт текст.
+        TextColor mark = entry.color;
+        mark.a = std::max(0.5f, alpha);
+        ui.fill(Rect{card.x, card.y, std::max(2.0f, unit * 0.3f), card.h}, mark);
+
+        TextColor color = entry.color;
+        color.a *= alpha;
+
         if (entry.system != kNoSystem) {
             // Новость о том, что где-то идёт осада, бесполезна, если до
             // этого «где-то» надо ещё доскроллить вручную.
-            const ButtonResult hit = ui.hotspot(uiId("message", uint32_t(index)), box);
+            const ButtonResult hit = ui.hotspot(uiId("message", uint32_t(index)), card);
             if (hit.hovered) {
-                ui.fill(box, ui.theme().rowHover);
+                ui.fill(card, ui.theme().rowHover);
                 ui.tooltip("щёлкните — камера перейдёт к системе " +
                            number(entry.system) + ", где это случилось");
             }
@@ -1341,13 +1419,13 @@ ScreenAction Screen::messagePanel(Ui& ui, int64_t now, float top, float left,
             }
         }
 
-        const float iconSize = rowHeight * 0.7f;
+        const float iconSize = rowHeight * 0.62f;
         if (entry.icon != nullptr) {
-            ui.icon(Rect{box.x + unit * 0.5f, y + (rowHeight - iconSize) * 0.5f, iconSize,
-                         iconSize},
+            ui.icon(Rect{card.x + unit * 0.8f, card.y + (card.h - iconSize) * 0.5f,
+                         iconSize, iconSize},
                     entry.icon, color);
         }
-        ui.text(box.x + unit + iconSize, y + (rowHeight - line) * 0.5f,
+        ui.text(card.x + unit * 1.3f + iconSize, card.y + (card.h - line) * 0.5f,
                 entry.count > 1 ? entry.text + "  ×" + number(entry.count) : entry.text,
                 color);
         y += rowHeight;

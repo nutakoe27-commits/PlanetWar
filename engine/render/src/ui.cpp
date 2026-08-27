@@ -290,6 +290,25 @@ void Ui::listRow(const Rect& r, bool hovered, bool selected) {
     }
 }
 
+Rect Ui::panelTitle(const Rect& panel, float height, const std::string& title,
+                    const std::string& note, const TextColor* noteColor) {
+    // Полоса рисуется ОТ КРАЯ ДО КРАЯ панели, заходя под её поля: заголовок
+    // с отступами по бокам читается как ещё одна строка содержимого,
+    // а не как шапка.
+    const Rect band{panel.x + 1.0f, panel.y + 1.0f, panel.w - 2.0f, height};
+    fill(band, theme_.headerFill);
+    fill(Rect{band.x, band.bottom() - 1.0f, band.w, 1.0f}, theme_.edgeDim);
+
+    const float pad = theme_.unit;
+    text(band.x + pad, band.y + (band.h - lineHeight_) * 0.5f, title, theme_.text);
+    if (!note.empty()) {
+        textRight(Rect{band.x, band.y + (band.h - lineHeight_) * 0.5f, band.w - pad,
+                       lineHeight_},
+                  note, noteColor != nullptr ? *noteColor : theme_.textDim);
+    }
+    return band;
+}
+
 void Ui::sectionHeader(const Rect& r) {
     fill(r, theme_.headerFill);
     // Черта снизу: заголовок обязан читаться как крышка над строками,
