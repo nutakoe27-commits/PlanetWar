@@ -81,9 +81,20 @@ private:
         // их по порядку, а завалить канал сотней приказов в первый же тик
         // значит проверить не игру, а переполнение очереди.
         for (uint32_t system = 0; system < client.galaxy().systemCount(); ++system) {
-            if (client.view().systems[system].owner != uint8_t(client.empire())) continue;
-
             for (const auto& planet : client.planetsAt(system)) {
+                // Владение проверяется у ПЛАНЕТЫ: захватывают их, а не
+                // системы, и в чужой системе у бота вполне может стоять
+                // собственный анклав.
+                if (planet.owner != uint8_t(client.empire())) continue;
+
+                // Пока идёт стройка, новый заказ на эту планету не нужен.
+                //
+                // Без этой проверки бот каждый цикл повторял заказ в тот же
+                // слот: слот считается пустым, пока здание не достроено,
+                // и очередь набивалась пятью копиями одного здания.
+                // Поймали разбором того, куда уходят минералы.
+                if (planet.building()) continue;
+
                 for (uint8_t slot = 0; slot < planet.slots; ++slot) {
                     if (planet.buildings[slot] != uint8_t(sim::Building::None)) continue;
                     const size_t index = slot % (sizeof(kBuildOrder) / sizeof(kBuildOrder[0]));
@@ -107,21 +118,40 @@ private:
         }
     }
 
+    /// Осталось ли в системе что захватывать.
+    ///
+    /// Владелец системы на этот вопрос больше не отвечает: захватывают
+    /// планеты, и система считается вашей уже по большинству. Флот, который
+    /// смотрел на владельца системы, улетал, взяв ОДНУ планету из четырёх,
+    /// и половина системы оставалась чужой навсегда.
+    static bool worthTaking(const Client& client, uint32_t system) {
+        const auto& view = client.view().systems[system];
+        if (view.totalPlanets == 0) return false;
+        return view.owner != uint8_t(client.empire()) ||
+               view.ownedPlanets < view.totalPlanets;
+    }
+
     void expand(Client& client) {
         if (ticks_ % 5 != 0) return;
 
-        // Ищем свои системы и стоящие в них флоты; шлём флот к ближайшей
-        // ничьей системе.
         for (uint32_t system = 0; system < client.galaxy().systemCount(); ++system) {
-            if (client.view().systems[system].owner != uint8_t(client.empire())) continue;
-
             const auto fleets = client.fleetsAt(system);
             if (fleets.empty()) continue;
+
+            // Здесь ещё есть работа — флот остаётся и доделывает её.
+            if (worthTaking(client, system)) continue;
 
             int32_t best = -1;
             int32_t bestHops = 1 << 20;
             for (uint32_t target = 0; target < client.galaxy().systemCount(); ++target) {
-                if (client.view().systems[target].owner != 0xFF) continue;
+                if (target == system) continue;
+                if (!worthTaking(client, target)) continue;
+                // Своё сначала: доделать наполовину взятую систему дешевле,
+                // чем начинать новую, а брошенный анклав кормит соседа.
+                if (client.view().systems[target].owner != 0xFF &&
+                    client.view().systems[target].owner != uint8_t(client.empire())) {
+                    continue;
+                }
                 const int32_t hops = client.galaxy().hopDistance(system, target);
                 if (hops < 0 || hops >= bestHops) continue;
                 bestHops = hops;

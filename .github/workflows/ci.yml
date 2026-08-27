@@ -175,14 +175,31 @@ jobs:
           ./build/render/bin/pw_game_client --port 27099 --name ci \
             --shot galaxy_map.png --shot-after 4 --width 1280 --height 720
           kill $SERVER
+
+      # Вид системы проверяется ОТДЕЛЬНЫМ снимком, а не заодно с картой.
+      # Это другой конвейер целиком: буфер глубины, сетки, свет, свечение.
+      # Карта галактики зелёная не говорит о нём ничего.
+      - name: "Живая игра: вид системы в PNG"
+        run: |
+          ./build/render/bin/pw_server --port 27098 --systems 80 --report 0 &
+          SERVER=$!
+          sleep 1
+          ./build/render/bin/pw_game_client --port 27098 --name ci \
+            --shot system_view.png --shot-system --shot-after 4 \
+            --width 1280 --height 720
+          kill $SERVER
+
       - name: Отрисовать кадр в файл
         run: ./build/render/bin/pw_triangle --out triangle.png --size 640 360 --validation
 
-      - name: Выгрузить кадр
+      - name: Выгрузить кадры
         uses: actions/upload-artifact@v4
         with:
-          name: triangle-frame
-          path: triangle.png
+          name: frames
+          path: |
+            triangle.png
+            galaxy_map.png
+            system_view.png
           retention-days: 7
 
   # ---------------------------------------------------------------------------
@@ -297,9 +314,36 @@ jobs:
 
           if fresh == committed:
               print("раскладка совпадает: кадров", len(fresh["frames"]))
+          else:
+              print("::error::закоммиченные ассеты разошлись с моделями —"
+                    " перепеките: tools/blender/build_assets.py --quality ci")
+              sys.exit(1)
+
+          # Планеты: сверяем СОСТАВ манифеста. Класс планеты — это индекс
+          # в списке, и движок адресует им и сетку, и текстуру. Разойдись
+          # порядок — океанический мир получит поверхность выжженного
+          # камня, и заметить это можно будет только глазами.
+          def planets(text):
+              data = json.loads(text)
+              return {
+                  "planets": [(p["class"], p["id"], p["mesh"], p["texture"])
+                              for p in data["planets"]],
+                  "stars": [(s["class"], s["id"]) for s in data.get("stars", [])],
+                  "structures": [(b["building"], b["id"])
+                                 for b in data.get("structures", [])],
+              }
+
+          fresh = planets(open("assets/build/planets.json", encoding="utf-8").read())
+          committed = planets(subprocess.run(
+              ["git", "show", "HEAD:assets/build/planets.json"],
+              capture_output=True, text=True, check=True).stdout)
+
+          if fresh == committed:
+              print("планеты совпадают:", len(fresh["planets"]), "классов,",
+                    len(fresh["structures"]), "построек")
               sys.exit(0)
 
-          print("::error::закоммиченные ассеты разошлись с моделями —"
+          print("::error::манифест планет разошёлся с моделями —"
                 " перепеките: tools/blender/build_assets.py --quality ci")
           only_fresh = set(fresh["frames"]) - set(committed["frames"])
           only_committed = set(committed["frames"]) - set(fresh["frames"])

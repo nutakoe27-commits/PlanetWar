@@ -3,7 +3,8 @@ add_executable(pw_render_view_tests
     test_atlas.cpp
     test_map_view.cpp
     test_font.cpp
-    test_hud.cpp)
+    test_hud.cpp
+    test_system_view.cpp)
 
 target_link_libraries(pw_render_view_tests PRIVATE pw_render doctest)
 pw_configure_target(pw_render_view_tests)

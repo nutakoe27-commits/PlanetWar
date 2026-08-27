@@ -144,14 +144,17 @@ rhi::MeshInstance makeInstance(float x, float y, float z, float scale) {
 }
 
 MeshBatch& batchFor(SystemFrame& frame, rhi::MeshHandle mesh, rhi::TextureHandle texture,
-                    bool glow = false) {
+                    MeshKind kind, bool glow = false) {
     // Ищем с конца: пакеты идут в порядке отрисовки, и склеивать можно
     // только с последним — иначе непрозрачное уедет поверх прозрачного.
     if (!frame.batches.empty()) {
         MeshBatch& last = frame.batches.back();
-        if (last.mesh == mesh && last.texture == texture && last.glow == glow) return last;
+        if (last.mesh == mesh && last.texture == texture && last.kind == kind &&
+            last.glow == glow) {
+            return last;
+        }
     }
-    frame.batches.push_back(MeshBatch{mesh, texture, glow, {}});
+    frame.batches.push_back(MeshBatch{mesh, texture, kind, glow, {}});
     return frame.batches.back();
 }
 
@@ -470,7 +473,8 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
         // Небо приглушено: оно фон, а не предмет разглядывания. Яркое небо
         // спорит с планетами за внимание и делает кадр плоским.
         sky.r = sky.g = sky.b = 0.85f;
-        batchFor(out, assets_->sphereMesh(), assets_->spaceTexture()).instances.push_back(sky);
+        batchFor(out, assets_->sphereMesh(), assets_->spaceTexture(), MeshKind::Sky)
+            .instances.push_back(sky);
     }
 
     // --- светило ---
@@ -485,7 +489,8 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
         star.b = light.b;
         star.emissive = 1.0f;
         star.gloss = 0.0f;
-        batchFor(out, assets_->sphereMesh(), starTexture).instances.push_back(star);
+        batchFor(out, assets_->sphereMesh(), starTexture, MeshKind::Star)
+            .instances.push_back(star);
     }
 
     // --- планеты ---
@@ -524,7 +529,7 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
             track.b = colour.b;
             track.a = selected ? 0.85f : (owner == 0xFF ? 0.22f : 0.45f);
             track.emissive = 1.0f;
-            batchFor(out, assets_->orbitMesh(), assets_->blankTexture())
+            batchFor(out, assets_->orbitMesh(), assets_->blankTexture(), MeshKind::Orbit)
                 .instances.push_back(track);
         }
 
@@ -543,7 +548,8 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
             body.r = body.g = body.b = 0.9f;
         }
         if (selected) body.rim = 0.55f;
-        batchFor(out, entry.meshHandle, entry.textureHandle).instances.push_back(body);
+        batchFor(out, entry.meshHandle, entry.textureHandle, MeshKind::Planet)
+            .instances.push_back(body);
 
         // Кольцо газового гиганта.
         if (entry.ring && assets_->ringMesh() != rhi::kInvalidMesh) {
@@ -566,7 +572,7 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
                      assets_->ringTexture() != rhi::kInvalidTexture
                          ? assets_->ringTexture()
                          : assets_->blankTexture(),
-                     /*glow=*/true)
+                     MeshKind::Ring, /*glow=*/true)
                 .instances.push_back(ring);
         }
 
@@ -576,8 +582,7 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
         // и крепостью или голый камень. Список в панели этого не даёт —
         // цифры читаются, а не узнаются, и на десятке тел взгляд по ним
         // не пробежит.
-        if (!assets_->structures().empty() &&
-            assets_->structureTexture() != rhi::kInvalidTexture) {
+        if (!assets_->structures().empty()) {
             const auto found = world.planets.find(entity.index);
             if (found != world.planets.end()) {
                 const game::PlanetView& live = found->second;
@@ -601,7 +606,6 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
                     const uint32_t index = uint32_t(building) - 1u;
                     if (index >= assets_->structures().size()) continue;
                     const rhi::MeshHandle mesh = assets_->structures()[index].meshHandle;
-                    if (mesh == rhi::kInvalidMesh) continue;
 
                     float nx = 0.0f, ny = 0.0f, nz = 0.0f;
                     surfacePoint(slot, limit, nx, ny, nz);
@@ -636,7 +640,7 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
                         instance.b = 0.95f;
                         instance.emissive = 0.15f;
                     }
-                    batchFor(out, mesh, assets_->structureTexture())
+                    batchFor(out, mesh, assets_->structureTexture(), MeshKind::Structure)
                         .instances.push_back(instance);
                 }
             }
@@ -681,7 +685,8 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
         // светлее середины. Один этот эффект отличает шар от круга.
         shell.rim = 1.6f;
         shell.gloss = 0.0f;
-        batchFor(out, assets_->sphereMesh(), assets_->blankTexture(), /*glow=*/true)
+        batchFor(out, assets_->sphereMesh(), assets_->blankTexture(), MeshKind::Atmosphere,
+                 /*glow=*/true)
             .instances.push_back(shell);
     }
 
@@ -712,7 +717,8 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
             // Спад к краю оболочки: без него получаются три чётких кольца
             // вместо свечения.
             halo.halo = layer[2];
-            batchFor(out, assets_->sphereMesh(), assets_->blankTexture(), /*glow=*/true)
+            batchFor(out, assets_->sphereMesh(), assets_->blankTexture(), MeshKind::Corona,
+                     /*glow=*/true)
                 .instances.push_back(halo);
         }
     }

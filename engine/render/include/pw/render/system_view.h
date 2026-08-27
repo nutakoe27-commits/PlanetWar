@@ -162,10 +162,28 @@ struct SystemCamera {
     uint32_t focusOrbit = 0xFFFFFFFFu;
 };
 
+/// Что именно рисует пакет.
+///
+/// Нужно не отрисовке — ей хватает сетки и текстуры, — а ПРОВЕРКАМ.
+/// Без вида пакета тест не может отличить постройку от планеты иначе
+/// как по дескрипторам, а дескрипторы выдаёт устройство, которого
+/// в тесте нет. Заодно порядок сборки кадра становится читаемым.
+enum class MeshKind : uint8_t {
+    Sky,
+    Star,
+    Orbit,
+    Planet,
+    Ring,
+    Structure,
+    Atmosphere,
+    Corona,
+};
+
 /// Один вызов отрисовки: сетка, текстура и её экземпляры.
 struct MeshBatch {
     rhi::MeshHandle mesh = rhi::kInvalidMesh;
     rhi::TextureHandle texture = rhi::kInvalidTexture;
+    MeshKind kind = MeshKind::Planet;
     /// Рисовать конвейером СВЕЧЕНИЯ: цвет складывается, глубина не пишется.
     /// Так идут корона звезды и атмосферы — всё, что светится, а не заслоняет.
     bool glow = false;
