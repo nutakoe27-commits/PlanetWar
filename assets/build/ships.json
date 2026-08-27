@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generator": "blender 5.2.1 LTS",
+  "generator": "blender 5.0.1",
   "note": "Сгенерировано tools/blender/build_assets.py. Не редактировать руками.",
-  "atlas_size": 1024,
-  "rotation_steps": 8,
+  "atlas_size": 4096,
+  "rotation_steps": 16,
   "camera": {
     "projection": "orthographic",
     "elevation_deg": 62.0
@@ -16,298 +16,1066 @@
     {
       "hull": "corvette",
       "rotation": 0,
-      "x": 856,
-      "y": 288,
-      "w": 40,
-      "h": 40
-    },
-    {
-      "hull": "corvette",
-      "rotation": 1,
-      "x": 896,
-      "y": 288,
-      "w": 40,
-      "h": 40
-    },
-    {
-      "hull": "corvette",
-      "rotation": 2,
-      "x": 936,
-      "y": 288,
-      "w": 40,
-      "h": 40
-    },
-    {
-      "hull": "corvette",
-      "rotation": 3,
-      "x": 976,
-      "y": 288,
-      "w": 40,
-      "h": 40
-    },
-    {
-      "hull": "corvette",
-      "rotation": 4,
-      "x": 0,
-      "y": 376,
-      "w": 40,
-      "h": 40
-    },
-    {
-      "hull": "corvette",
-      "rotation": 5,
-      "x": 40,
-      "y": 376,
-      "w": 40,
-      "h": 40
-    },
-    {
-      "hull": "corvette",
-      "rotation": 6,
-      "x": 80,
-      "y": 376,
-      "w": 40,
-      "h": 40
-    },
-    {
-      "hull": "corvette",
-      "rotation": 7,
       "x": 120,
-      "y": 376,
-      "w": 40,
-      "h": 40
+      "y": 2528,
+      "w": 72,
+      "h": 72
     },
     {
-      "hull": "destroyer",
-      "rotation": 0,
-      "x": 344,
-      "y": 288,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "destroyer",
+      "hull": "corvette",
       "rotation": 1,
+      "x": 192,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 2,
+      "x": 264,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 3,
+      "x": 336,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 4,
       "x": 408,
-      "y": 288,
-      "w": 64,
-      "h": 64
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 5,
+      "x": 480,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 6,
+      "x": 552,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 7,
+      "x": 624,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 8,
+      "x": 696,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 9,
+      "x": 768,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 10,
+      "x": 840,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 11,
+      "x": 912,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 12,
+      "x": 984,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 13,
+      "x": 1056,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 14,
+      "x": 1128,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "corvette",
+      "rotation": 15,
+      "x": 1200,
+      "y": 2528,
+      "w": 72,
+      "h": 72
+    },
+    {
+      "hull": "tender",
+      "rotation": 0,
+      "x": 328,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 1,
+      "x": 448,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 2,
+      "x": 568,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 3,
+      "x": 688,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 4,
+      "x": 808,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 5,
+      "x": 928,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 6,
+      "x": 1048,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 7,
+      "x": 1168,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 8,
+      "x": 1288,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 9,
+      "x": 1408,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 10,
+      "x": 1528,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 11,
+      "x": 1648,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 12,
+      "x": 1768,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 13,
+      "x": 1888,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 14,
+      "x": 2008,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "tender",
+      "rotation": 15,
+      "x": 2128,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 0,
+      "x": 2248,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 1,
+      "x": 2368,
+      "y": 2360,
+      "w": 120,
+      "h": 120
     },
     {
       "hull": "destroyer",
       "rotation": 2,
-      "x": 472,
-      "y": 288,
-      "w": 64,
-      "h": 64
+      "x": 2488,
+      "y": 2360,
+      "w": 120,
+      "h": 120
     },
     {
       "hull": "destroyer",
       "rotation": 3,
-      "x": 536,
-      "y": 288,
-      "w": 64,
-      "h": 64
+      "x": 2608,
+      "y": 2360,
+      "w": 120,
+      "h": 120
     },
     {
       "hull": "destroyer",
       "rotation": 4,
-      "x": 600,
-      "y": 288,
-      "w": 64,
-      "h": 64
+      "x": 2728,
+      "y": 2360,
+      "w": 120,
+      "h": 120
     },
     {
       "hull": "destroyer",
       "rotation": 5,
-      "x": 664,
-      "y": 288,
-      "w": 64,
-      "h": 64
+      "x": 2848,
+      "y": 2360,
+      "w": 120,
+      "h": 120
     },
     {
       "hull": "destroyer",
       "rotation": 6,
-      "x": 728,
-      "y": 288,
-      "w": 64,
-      "h": 64
+      "x": 2968,
+      "y": 2360,
+      "w": 120,
+      "h": 120
     },
     {
       "hull": "destroyer",
       "rotation": 7,
-      "x": 792,
-      "y": 288,
-      "w": 64,
-      "h": 64
+      "x": 3088,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 8,
+      "x": 3208,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 9,
+      "x": 3328,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 10,
+      "x": 3448,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 11,
+      "x": 3568,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 12,
+      "x": 3688,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 13,
+      "x": 3808,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 14,
+      "x": 3928,
+      "y": 2360,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 15,
+      "x": 0,
+      "y": 2528,
+      "w": 120,
+      "h": 120
+    },
+    {
+      "hull": "carrier",
+      "rotation": 0,
+      "x": 1512,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 1,
+      "x": 1720,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 2,
+      "x": 1928,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 3,
+      "x": 2136,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 4,
+      "x": 2344,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 5,
+      "x": 2552,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 6,
+      "x": 2760,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 7,
+      "x": 2968,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 8,
+      "x": 3176,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 9,
+      "x": 3384,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 10,
+      "x": 3592,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 11,
+      "x": 3800,
+      "y": 1936,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 12,
+      "x": 0,
+      "y": 2152,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 13,
+      "x": 208,
+      "y": 2152,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 14,
+      "x": 416,
+      "y": 2152,
+      "w": 208,
+      "h": 208
+    },
+    {
+      "hull": "carrier",
+      "rotation": 15,
+      "x": 624,
+      "y": 2152,
+      "w": 208,
+      "h": 208
     },
     {
       "hull": "cruiser",
       "rotation": 0,
-      "x": 496,
-      "y": 144,
-      "w": 88,
-      "h": 88
+      "x": 1248,
+      "y": 2152,
+      "w": 176,
+      "h": 176
     },
     {
       "hull": "cruiser",
       "rotation": 1,
-      "x": 584,
-      "y": 144,
-      "w": 88,
-      "h": 88
+      "x": 1424,
+      "y": 2152,
+      "w": 176,
+      "h": 176
     },
     {
       "hull": "cruiser",
       "rotation": 2,
-      "x": 672,
-      "y": 144,
-      "w": 88,
-      "h": 88
+      "x": 1600,
+      "y": 2152,
+      "w": 176,
+      "h": 176
     },
     {
       "hull": "cruiser",
       "rotation": 3,
-      "x": 760,
-      "y": 144,
-      "w": 88,
-      "h": 88
+      "x": 1776,
+      "y": 2152,
+      "w": 176,
+      "h": 176
     },
     {
       "hull": "cruiser",
       "rotation": 4,
-      "x": 848,
-      "y": 144,
-      "w": 88,
-      "h": 88
+      "x": 1952,
+      "y": 2152,
+      "w": 176,
+      "h": 176
     },
     {
       "hull": "cruiser",
       "rotation": 5,
-      "x": 936,
-      "y": 144,
-      "w": 88,
-      "h": 88
+      "x": 2128,
+      "y": 2152,
+      "w": 176,
+      "h": 176
     },
     {
       "hull": "cruiser",
       "rotation": 6,
-      "x": 0,
-      "y": 288,
-      "w": 88,
-      "h": 88
+      "x": 2304,
+      "y": 2152,
+      "w": 176,
+      "h": 176
     },
     {
       "hull": "cruiser",
       "rotation": 7,
-      "x": 88,
-      "y": 288,
-      "w": 88,
-      "h": 88
+      "x": 2480,
+      "y": 2152,
+      "w": 176,
+      "h": 176
     },
     {
-      "hull": "battleship",
+      "hull": "cruiser",
+      "rotation": 8,
+      "x": 2656,
+      "y": 2152,
+      "w": 176,
+      "h": 176
+    },
+    {
+      "hull": "cruiser",
+      "rotation": 9,
+      "x": 2832,
+      "y": 2152,
+      "w": 176,
+      "h": 176
+    },
+    {
+      "hull": "cruiser",
+      "rotation": 10,
+      "x": 3008,
+      "y": 2152,
+      "w": 176,
+      "h": 176
+    },
+    {
+      "hull": "cruiser",
+      "rotation": 11,
+      "x": 3184,
+      "y": 2152,
+      "w": 176,
+      "h": 176
+    },
+    {
+      "hull": "cruiser",
+      "rotation": 12,
+      "x": 3360,
+      "y": 2152,
+      "w": 176,
+      "h": 176
+    },
+    {
+      "hull": "cruiser",
+      "rotation": 13,
+      "x": 3536,
+      "y": 2152,
+      "w": 176,
+      "h": 176
+    },
+    {
+      "hull": "cruiser",
+      "rotation": 14,
+      "x": 3712,
+      "y": 2152,
+      "w": 176,
+      "h": 176
+    },
+    {
+      "hull": "cruiser",
+      "rotation": 15,
+      "x": 3888,
+      "y": 2152,
+      "w": 176,
+      "h": 176
+    },
+    {
+      "hull": "monitor",
       "rotation": 0,
-      "x": 0,
-      "y": 0,
-      "w": 144,
-      "h": 144
+      "x": 1960,
+      "y": 1656,
+      "w": 216,
+      "h": 216
     },
     {
-      "hull": "battleship",
+      "hull": "monitor",
       "rotation": 1,
-      "x": 144,
-      "y": 0,
-      "w": 144,
-      "h": 144
+      "x": 2176,
+      "y": 1656,
+      "w": 216,
+      "h": 216
     },
     {
-      "hull": "battleship",
+      "hull": "monitor",
       "rotation": 2,
-      "x": 288,
-      "y": 0,
-      "w": 144,
-      "h": 144
+      "x": 2392,
+      "y": 1656,
+      "w": 216,
+      "h": 216
     },
     {
-      "hull": "battleship",
+      "hull": "monitor",
       "rotation": 3,
+      "x": 2608,
+      "y": 1656,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 4,
+      "x": 2824,
+      "y": 1656,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 5,
+      "x": 3040,
+      "y": 1656,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 6,
+      "x": 3256,
+      "y": 1656,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 7,
+      "x": 3472,
+      "y": 1656,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 8,
+      "x": 3688,
+      "y": 1656,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 9,
+      "x": 0,
+      "y": 1936,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 10,
+      "x": 216,
+      "y": 1936,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 11,
       "x": 432,
-      "y": 0,
-      "w": 144,
-      "h": 144
+      "y": 1936,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 12,
+      "x": 648,
+      "y": 1936,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 13,
+      "x": 864,
+      "y": 1936,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 14,
+      "x": 1080,
+      "y": 1936,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "monitor",
+      "rotation": 15,
+      "x": 1296,
+      "y": 1936,
+      "w": 216,
+      "h": 216
+    },
+    {
+      "hull": "battleship",
+      "rotation": 0,
+      "x": 1392,
+      "y": 1104,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 1,
+      "x": 1672,
+      "y": 1104,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 2,
+      "x": 1952,
+      "y": 1104,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 3,
+      "x": 2232,
+      "y": 1104,
+      "w": 280,
+      "h": 280
     },
     {
       "hull": "battleship",
       "rotation": 4,
-      "x": 576,
-      "y": 0,
-      "w": 144,
-      "h": 144
+      "x": 2512,
+      "y": 1104,
+      "w": 280,
+      "h": 280
     },
     {
       "hull": "battleship",
       "rotation": 5,
-      "x": 720,
-      "y": 0,
-      "w": 144,
-      "h": 144
+      "x": 2792,
+      "y": 1104,
+      "w": 280,
+      "h": 280
     },
     {
       "hull": "battleship",
       "rotation": 6,
-      "x": 864,
-      "y": 0,
-      "w": 144,
-      "h": 144
+      "x": 3072,
+      "y": 1104,
+      "w": 280,
+      "h": 280
     },
     {
       "hull": "battleship",
       "rotation": 7,
+      "x": 3352,
+      "y": 1104,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 8,
+      "x": 3632,
+      "y": 1104,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 9,
       "x": 0,
-      "y": 144,
-      "w": 144,
-      "h": 144
+      "y": 1656,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 10,
+      "x": 280,
+      "y": 1656,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 11,
+      "x": 560,
+      "y": 1656,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 12,
+      "x": 840,
+      "y": 1656,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 13,
+      "x": 1120,
+      "y": 1656,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 14,
+      "x": 1400,
+      "y": 1656,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "battleship",
+      "rotation": 15,
+      "x": 1680,
+      "y": 1656,
+      "w": 280,
+      "h": 280
+    },
+    {
+      "hull": "titan",
+      "rotation": 0,
+      "x": 0,
+      "y": 0,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 1,
+      "x": 552,
+      "y": 0,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 2,
+      "x": 1104,
+      "y": 0,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 3,
+      "x": 1656,
+      "y": 0,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 4,
+      "x": 2208,
+      "y": 0,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 5,
+      "x": 2760,
+      "y": 0,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 6,
+      "x": 3312,
+      "y": 0,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 7,
+      "x": 0,
+      "y": 552,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 8,
+      "x": 552,
+      "y": 552,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 9,
+      "x": 1104,
+      "y": 552,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 10,
+      "x": 1656,
+      "y": 552,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 11,
+      "x": 2208,
+      "y": 552,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 12,
+      "x": 2760,
+      "y": 552,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 13,
+      "x": 3312,
+      "y": 552,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 14,
+      "x": 0,
+      "y": 1104,
+      "w": 552,
+      "h": 552
+    },
+    {
+      "hull": "titan",
+      "rotation": 15,
+      "x": 552,
+      "y": 1104,
+      "w": 552,
+      "h": 552
     },
     {
       "hull": "star_red",
       "rotation": 0,
-      "x": 264,
-      "y": 288,
-      "w": 80,
-      "h": 80
+      "x": 168,
+      "y": 2360,
+      "w": 160,
+      "h": 160
     },
     {
       "hull": "star_yellow",
       "rotation": 0,
-      "x": 288,
-      "y": 144,
-      "w": 104,
-      "h": 104
+      "x": 832,
+      "y": 2152,
+      "w": 208,
+      "h": 208
     },
     {
       "hull": "star_blue",
       "rotation": 0,
-      "x": 144,
-      "y": 144,
-      "w": 144,
-      "h": 144
+      "x": 1104,
+      "y": 1104,
+      "w": 288,
+      "h": 288
     },
     {
       "hull": "star_neutron",
       "rotation": 0,
-      "x": 176,
-      "y": 288,
-      "w": 88,
-      "h": 88
+      "x": 0,
+      "y": 2360,
+      "w": 168,
+      "h": 168
     },
     {
       "hull": "star_blackhole",
       "rotation": 0,
-      "x": 392,
-      "y": 144,
-      "w": 104,
-      "h": 104
+      "x": 1040,
+      "y": 2152,
+      "w": 208,
+      "h": 208
     }
   ]
 }

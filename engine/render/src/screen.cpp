@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "pw/sim/production.h"
+#include "pw/sim/season.h"
 
 namespace pw::render {
 
@@ -55,6 +57,11 @@ const char* buildingName(uint8_t building) {
         case sim::Building::TradeHub:   return "торговый узел";
         case sim::Building::Fortress:   return "крепость";
         case sim::Building::Shipyard:   return "верфь";
+        case sim::Building::SupplyDepot:     return "узел снабжения";
+        case sim::Building::ShieldGenerator: return "планетарный щит";
+        case sim::Building::Drydock:         return "ремонтный док";
+        case sim::Building::Habitat:         return "хабитат";
+        case sim::Building::Garrison:        return "гарнизон";
         default:                        return "?";
     }
 }
@@ -69,6 +76,11 @@ const char* buildingNameAccusative(uint8_t building) {
         case sim::Building::TradeHub:   return "торговый узел";
         case sim::Building::Fortress:   return "крепость";
         case sim::Building::Shipyard:   return "верфь";
+        case sim::Building::SupplyDepot:     return "узел снабжения";
+        case sim::Building::ShieldGenerator: return "планетарный щит";
+        case sim::Building::Drydock:         return "ремонтный док";
+        case sim::Building::Habitat:         return "хабитат";
+        case sim::Building::Garrison:        return "гарнизон";
         default:                        return "?";
     }
 }
@@ -82,6 +94,11 @@ const char* buildingIcon(uint8_t building) {
         case sim::Building::TradeHub:   return "bld_trade";
         case sim::Building::Fortress:   return "bld_fortress";
         case sim::Building::Shipyard:   return "bld_shipyard";
+        case sim::Building::SupplyDepot:     return "bld_depot";
+        case sim::Building::ShieldGenerator: return "bld_shield";
+        case sim::Building::Drydock:         return "bld_drydock";
+        case sim::Building::Habitat:         return "bld_habitat";
+        case sim::Building::Garrison:        return "bld_garrison";
         default:                        return nullptr;
     }
 }
@@ -95,6 +112,16 @@ const char* buildingHint(uint8_t building) {
         case sim::Building::TradeHub:   return "энергия и влияние";
         case sim::Building::Fortress:   return "поднимает потолок обороны ЭТОЙ планеты";
         case sim::Building::Shipyard:   return "без неё система не строит флот";
+        case sim::Building::SupplyDepot:
+            return "дешевле содержать флот — плата за дальнюю экспансию";
+        case sim::Building::ShieldGenerator:
+            return "растягивает осаду ЭТОЙ планеты, а не поднимает оборону";
+        case sim::Building::Drydock:
+            return "чинит ваш флот в бою здесь, открывает титанов";
+        case sim::Building::Habitat:
+            return "+2 слота застройки на этой планете";
+        case sim::Building::Garrison:
+            return "оборона возвращается втрое быстрее после осады";
         default:                        return "";
     }
 }
@@ -102,19 +129,64 @@ const char* buildingHint(uint8_t building) {
 const char* hullName(uint8_t hull) {
     switch (sim::Hull(hull)) {
         case sim::Hull::Corvette:   return "корвет";
+        case sim::Hull::Tender:     return "тендер";
         case sim::Hull::Destroyer:  return "эсминец";
+        case sim::Hull::Carrier:    return "носитель";
         case sim::Hull::Cruiser:    return "крейсер";
+        case sim::Hull::Monitor:    return "монитор";
         case sim::Hull::Battleship: return "линкор";
+        case sim::Hull::Titan:      return "титан";
         default:                    return "?";
+    }
+}
+
+const char* hullNameAccusative(uint8_t hull) {
+    switch (sim::Hull(hull)) {
+        case sim::Hull::Corvette:   return "корвет";
+        case sim::Hull::Tender:     return "тендер";
+        case sim::Hull::Destroyer:  return "эсминец";
+        case sim::Hull::Carrier:    return "носитель";
+        case sim::Hull::Cruiser:    return "крейсер";
+        case sim::Hull::Monitor:    return "монитор";
+        case sim::Hull::Battleship: return "линкор";
+        case sim::Hull::Titan:      return "титан";
+        default:                    return "?";
+    }
+}
+
+const char* hullHint(uint8_t hull) {
+    switch (sim::Hull(hull)) {
+        case sim::Hull::Corvette:
+            return "дёшев и быстр, принимает потери на себя";
+        case sim::Hull::Tender:
+            return "не стреляет, но весь отряд теряет меньше кораблей";
+        case sim::Hull::Destroyer:
+            return "рабочая лошадь линии";
+        case sim::Hull::Carrier:
+            return "машины бьют с любой дистанции, но их сбивает ПРО";
+        case sim::Hull::Cruiser:
+            return "тяжёлый корабль линии";
+        case sim::Hull::Monitor:
+            return "в бою посредственен, осаду ломает вдвое быстрее";
+        case sim::Hull::Battleship:
+            return "концентрация огня в одной цели";
+        case sim::Hull::Titan:
+            return "венец сезона: нужна верфь И ремонтный док";
+        default:
+            return "";
     }
 }
 
 const char* hullIcon(uint8_t hull) {
     switch (sim::Hull(hull)) {
         case sim::Hull::Corvette:   return "hull_corvette";
+        case sim::Hull::Tender:     return "hull_tender";
         case sim::Hull::Destroyer:  return "hull_destroyer";
+        case sim::Hull::Carrier:    return "hull_carrier";
         case sim::Hull::Cruiser:    return "hull_cruiser";
+        case sim::Hull::Monitor:    return "hull_monitor";
         case sim::Hull::Battleship: return "hull_battleship";
+        case sim::Hull::Titan:      return "hull_titan";
         default:                    return nullptr;
     }
 }
@@ -140,6 +212,21 @@ const char* planetClassName(uint8_t planetClass) {
         case sim::PlanetClass::AsteroidBelt: return "пояс астероидов";
         case sim::PlanetClass::Station:      return "станция";
         default:                             return "?";
+    }
+}
+
+const char* stageHint(sim::SeasonStage stage) {
+    switch (stage) {
+        case sim::SeasonStage::Expansion:
+            return "Расширение: чужие дома неприкосновенны, занимайте ничьи планеты";
+        case sim::SeasonStage::Conflict:
+            return "Конфликт: воевать можно со всеми и везде";
+        case sim::SeasonStage::Crisis:
+            return "Кризис: из ядра галактики идёт общий враг, и чем вы крупнее, тем сильнее";
+        case sim::SeasonStage::Final:
+            return "Финал: захваты заморожены, считается престиж";
+        default:
+            return "";
     }
 }
 
@@ -340,6 +427,29 @@ ScreenAction Screen::topBar(Ui& ui, const game::Client& client) const {
         ui.text(x + iconSize + unit * 0.6f, (height - line) * 0.5f, value,
                 ui.theme().text);
         x += width + unit * 2.0f;
+    }
+
+    // --- стадия сезона ---
+    //
+    // По центру верхней полосы, а не в углу: это единственное число
+    // на экране, которое одинаково у всех игроков сервера, и вокруг него
+    // строится вся подготовка. «До Конфликта сорок минут» меняет то,
+    // что игрок строит прямо сейчас, сильнее любой другой цифры здесь.
+    const auto stage = sim::SeasonStage(empire.stage);
+    const TextColor stageColor = stage == sim::SeasonStage::Expansion ? ui.theme().textGood
+                                 : stage == sim::SeasonStage::Crisis  ? ui.theme().textBad
+                                 : stage == sim::SeasonStage::Final   ? ui.theme().textWarn
+                                                                      : ui.theme().textAccent;
+    const std::string stageText =
+        std::string(sim::stageName(stage)) +
+        (empire.stageSecondsLeft > 0 ? " · " + duration(empire.stageSecondsLeft)
+                                     : std::string());
+    const float stageWidth = ui.textWidth(stageText);
+    const Rect stageBox{(float(ui.screenWidth()) - stageWidth) * 0.5f, 0.0f, stageWidth,
+                        height};
+    ui.textCentered(stageBox, stageText, stageColor);
+    if (ui.hotspot(uiId("season"), stageBox.inset(-unit)).hovered) {
+        ui.tooltip(stageHint(stage));
     }
 
     // Связь. Показывается всегда: в MMO игрок обязан отличать «сервер
@@ -829,27 +939,45 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
                     number(sim::fleetTonnage(fleet.composition)) + " т",
                     selected ? ui.theme().text : ui.theme().textDim);
 
-            // Состав — значками корпусов, а не строкой «8/2/0/0». Четыре
-            // числа через косые игрок обязан расшифровывать каждый раз,
-            // а корвет от линкора отличает силуэт.
-            const uint16_t counts[4] = {
-                fleet.composition.corvettes, fleet.composition.destroyers,
-                fleet.composition.cruisers, fleet.composition.battleships};
+            // Состав — значками корпусов, а не строкой «8/2/0/0/…». Восемь
+            // чисел через косые игрок обязан расшифровывать каждый раз,
+            // а корвет от титана отличает силуэт.
+            //
+            // Показываем ТРИ САМЫХ МНОГОЧИСЛЕННЫХ класса. Все восемь в узкой
+            // строке не помещаются, а список «чего во флоте больше всего»
+            // и есть ответ на вопрос, зачем этот отряд собран.
+            std::vector<std::pair<uint32_t, uint8_t>> present;
+            std::string full;
+            for (uint8_t hull = 1; hull < uint8_t(sim::Hull::Count); ++hull) {
+                const uint32_t count = fleet.composition[sim::Hull(hull)];
+                if (count == 0) continue;
+                present.emplace_back(count, hull);
+                if (!full.empty()) full += ", ";
+                full += std::string(hullName(hull)) + " " + number(count);
+            }
+            std::sort(present.begin(), present.end(),
+                      [](const auto& a, const auto& b) { return a.first > b.first; });
+
             const float mark = card.h * 0.55f;
             float hx = card.right() - unit * 0.5f;
-            for (int hull = 3; hull >= 0; --hull) {
-                if (counts[hull] == 0) continue;
-                const std::string value = number(counts[hull]);
-                const float valueWidth = ui.textWidth(value);
-                hx -= valueWidth;
+            const size_t shown = std::min<size_t>(present.size(), 3);
+            if (present.size() > shown) {
+                const std::string more = "+" + number(int64_t(present.size() - shown));
+                hx -= ui.textWidth(more);
+                ui.text(hx, card.y + (card.h - line) * 0.5f, more, ui.theme().textDim);
+                hx -= unit * 0.7f;
+            }
+            for (size_t index = shown; index-- > 0;) {
+                const std::string value = number(present[index].first);
+                hx -= ui.textWidth(value);
                 ui.text(hx, card.y + (card.h - line) * 0.5f, value,
                         selected ? ui.theme().text : ui.theme().textDim);
                 hx -= mark + unit * 0.15f;
                 ui.icon(Rect{hx, card.y + (card.h - mark) * 0.5f, mark, mark},
-                        hullIcon(uint8_t(hull + 1)));
+                        hullIcon(present[index].second));
                 hx -= unit * 0.7f;
             }
-            if (hit.hovered) ui.tooltip("корветы, эсминцы, крейсеры, линкоры");
+            if (hit.hovered && !full.empty()) ui.tooltip(full);
         }
 
         // Приказ движения: нажали — следующий щелчок по карте задаёт цель.
@@ -895,10 +1023,13 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
                 const int64_t cost = int64_t(sim::hullCost(sim::Hull(hull)));
                 const bool affordable = alloys >= cost;
                 const ButtonResult hit = ui.iconButton(
-                    uiId("ship", hull), box, hullIcon(hull), number(cost),
+                    uiId("ship", hull), box, hullIcon(hull), hullName(hull),
                     affordable ? ButtonStyle::Normal : ButtonStyle::Quiet, affordable);
+                // Имя на кнопке, цена — при наведении. Восемь корпусов с одними
+                // числами вместо названий читаются как прайс-лист, а игрок
+                // выбирает не цену, а роль.
                 if (hit.hovered) {
-                    ui.tooltip(std::string(hullName(hull)) + " · " + number(cost) +
+                    ui.tooltip(std::string(hullHint(hull)) + " · " + number(cost) +
                                " сплавов" + (affordable ? "" : " · не хватает сплавов"));
                 }
                 if (hit.clicked) {
@@ -1034,6 +1165,24 @@ ScreenAction Screen::bottomBar(Ui& ui, const game::Client& client,
         }
     }
 
+    // Престиж — между кнопками, слева от подсказки. Это счёт за сезон,
+    // и он обязан быть на виду постоянно: игра, в которой не видно, за что
+    // играешь, читается как бесцельная возня. Пять треков в подсказке,
+    // сумма на полосе — потому что решение принимают по сумме, а разбирают
+    // по трекам.
+    const auto& empire = client.view().empire;
+    const std::string score = "престиж " + grouped(empire.prestigeTotal());
+    const float scoreWidth = ui.textWidth(score) + unit * 2.0f;
+    const Rect scoreBox{reset.right() + unit * 1.5f, bar.y, scoreWidth, height};
+    ui.textCentered(scoreBox, score, ui.theme().textAccent);
+    if (ui.hotspot(uiId("prestige"), scoreBox).hovered) {
+        ui.tooltip("территория " + number(empire.prestigeTerritory) +
+                   " · экономика " + number(empire.prestigeEconomy) +
+                   " · наука " + number(empire.prestigeScience) +
+                   " · война " + number(empire.prestigeWar) +
+                   " · дипломатия " + number(empire.prestigeDiplomacy));
+    }
+
     // Строка состояния: что игра ждёт от игрока прямо сейчас. Одна,
     // короткая и всегда на одном месте — чтобы её не приходилось искать.
     std::string hint;
@@ -1053,7 +1202,7 @@ ScreenAction Screen::bottomBar(Ui& ui, const game::Client& client,
         hint = "правая кнопка вращает вид, колесо приближает";
         hintColor = ui.theme().textDim;
     }
-    ui.textCentered(Rect{reset.right(), bar.y, quit.x - reset.right(), height}, hint,
+    ui.textCentered(Rect{scoreBox.right(), bar.y, quit.x - scoreBox.right(), height}, hint,
                     hintColor);
     return action;
 }

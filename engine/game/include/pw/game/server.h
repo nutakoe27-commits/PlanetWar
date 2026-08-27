@@ -26,6 +26,7 @@
 #include "pw/sim/control.h"
 #include "pw/sim/economy.h"
 #include "pw/sim/galaxy.h"
+#include "pw/sim/season.h"
 #include "pw/sim/production.h"
 #include "pw/sim/schedule.h"
 #include "pw/sim/world.h"
@@ -42,7 +43,15 @@ struct ServerConfig {
     int64_t startingMinerals = 300;
     int64_t startingAlloys = 500;
     /// Стартовый флот.
-    sim::Fleet startingFleet{8, 2, 0, 0};
+    sim::Fleet startingFleet =
+        sim::makeFleet({{sim::Hull::Corvette, 8}, {sim::Hull::Destroyer, 2}});
+
+    /// Длительность стадий сезона.
+    ///
+    /// По умолчанию сезон длится два часа игрового времени — столько же,
+    /// сколько ночной прогон в CI. Живой сервер ставит `scale` в несколько
+    /// сотен и получает те самые 8–12 недель из docs/01.
+    sim::SeasonConfig season;
 
     /// Во сколько раз игровое время быстрее реального.
     ///
@@ -111,6 +120,7 @@ private:
     sim::Ledger ledger_;
     sim::Commands commands_;
     sim::Presence presence_;
+    sim::Season season_;
 
     std::map<net::Address, Player> players_;
     std::vector<bool> homeTaken_;

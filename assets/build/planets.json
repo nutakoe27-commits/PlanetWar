@@ -138,6 +138,31 @@
       "building": 7,
       "id": "shipyard",
       "mesh": "meshes/build_shipyard.pwm"
+    },
+    {
+      "building": 8,
+      "id": "depot",
+      "mesh": "meshes/build_depot.pwm"
+    },
+    {
+      "building": 9,
+      "id": "shield",
+      "mesh": "meshes/build_shield.pwm"
+    },
+    {
+      "building": 10,
+      "id": "drydock",
+      "mesh": "meshes/build_drydock.pwm"
+    },
+    {
+      "building": 11,
+      "id": "habitat",
+      "mesh": "meshes/build_habitat.pwm"
+    },
+    {
+      "building": 12,
+      "id": "garrison",
+      "mesh": "meshes/build_garrison.pwm"
     }
   ],
   "structure_texture": "structures.png",
@@ -149,18 +174,38 @@
     },
     {
       "hull": 2,
+      "id": "tender",
+      "mesh": "meshes/hull_tender.pwm"
+    },
+    {
+      "hull": 3,
       "id": "destroyer",
       "mesh": "meshes/hull_destroyer.pwm"
     },
     {
-      "hull": 3,
+      "hull": 4,
+      "id": "carrier",
+      "mesh": "meshes/hull_carrier.pwm"
+    },
+    {
+      "hull": 5,
       "id": "cruiser",
       "mesh": "meshes/hull_cruiser.pwm"
     },
     {
-      "hull": 4,
+      "hull": 6,
+      "id": "monitor",
+      "mesh": "meshes/hull_monitor.pwm"
+    },
+    {
+      "hull": 7,
       "id": "battleship",
       "mesh": "meshes/hull_battleship.pwm"
+    },
+    {
+      "hull": 8,
+      "id": "titan",
+      "mesh": "meshes/hull_titan.pwm"
     }
   ],
   "hull_texture": "hulls.png",

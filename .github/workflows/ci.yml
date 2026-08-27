@@ -339,6 +339,46 @@ jobs:
                   "hulls": [(h["hull"], h["id"]) for h in data.get("hulls", [])],
               }
 
+          # Порядок корпусов и построек в манифесте — это ИНДЕКС в sim::Hull
+          # и sim::Building. Переставленная строка выдала бы линкору модель
+          # тендера, а шахте силуэт верфи, и заметно это было бы только
+          # глазами. Сверяем с перечислениями в коде, а не только между
+          # двумя сборками манифеста.
+          def enum_names(path, enum, first_is_none):
+              text = open(path, encoding="utf-8").read()
+              body = text.split(f"enum class {enum} : uint8_t {{", 1)[1]
+              body = body.split("};", 1)[0]
+              names = []
+              for line in body.splitlines():
+                  line = line.split("//")[0].strip().rstrip(",")
+                  if not line or line in ("Count",):
+                      continue
+                  name = line.split("=")[0].strip()
+                  if name:
+                      names.append(name)
+              return names[1:] if first_is_none else names
+
+          hull_enum = enum_names("engine/sim/include/pw/sim/fleet.h", "Hull", True)
+          building_enum = enum_names("engine/sim/include/pw/sim/economy.h", "Building", True)
+          if len(hull_enum) != len(fresh["hulls"]):
+              print(f"::error::корпусов в sim::Hull {len(hull_enum)},"
+                    f" а в манифесте {len(fresh['hulls'])}")
+              sys.exit(1)
+          if len(building_enum) != len(fresh["structures"]):
+              print(f"::error::зданий в sim::Building {len(building_enum)},"
+                    f" а построек в манифесте {len(fresh['structures'])}")
+              sys.exit(1)
+          for index, (number, _) in enumerate(fresh["hulls"]):
+              if number != index + 1:
+                  print(f"::error::корпус {index} в манифесте помечен номером {number}")
+                  sys.exit(1)
+          for index, (number, _) in enumerate(fresh["structures"]):
+              if number != index + 1:
+                  print(f"::error::постройка {index} помечена номером {number}")
+                  sys.exit(1)
+          print("порядок совпадает:", len(hull_enum), "корпусов,",
+                len(building_enum), "зданий")
+
           fresh = planets(open("assets/build/planets.json", encoding="utf-8").read())
           committed = planets(subprocess.run(
               ["git", "show", "HEAD:assets/build/planets.json"],

@@ -116,15 +116,16 @@ TEST_CASE("png: атлас из Blender читается") {
     // кодами Хаффмана и построчными фильтрами. Наш writePng пишет
     // несжатые блоки без фильтров, поэтому проверка «туда и обратно»
     // покрывает лишь половину декодера. Этот тест — вторая половина.
-    const char* candidates[] = {"assets/build/ships_albedo.png",
-                                "../assets/build/ships_albedo.png",
-                                "../../assets/build/ships_albedo.png"};
-
+    // Путь ищем ПОДЪЁМОМ ВВЕРХ, а не фиксированным числом «..».
+    // Тремя точками из каталога, где ctest запускает бинарь, до корня
+    // не дотянуться — и тест годами «проходил», ничего не прочитав.
     std::vector<Rgba8> pixels;
     int width = 0, height = 0;
     bool found = false;
-    for (const char* path : candidates) {
-        if (readPng(path, pixels, width, height)) { found = true; break; }
+    std::string prefix;
+    for (int depth = 0; depth < 8 && !found; ++depth) {
+        found = readPng(prefix + "assets/build/ships_albedo.png", pixels, width, height);
+        prefix += "../";
     }
     if (!found) {
         // Атласы собираются отдельным шагом и в свежем клоне их нет.
@@ -133,11 +134,19 @@ TEST_CASE("png: атлас из Blender читается") {
         return;
     }
 
-    CHECK(width == 1024);
-    CHECK(height == 1024);
+    // Проверяем СВОЙСТВА декодера, а не размер конкретной сборки.
+    //
+    // Раньше здесь стояло «1024 на 1024». Атлас растёт от числа корпусов
+    // и от качества сборки, и это число ломалось при каждом добавлении
+    // корабля — причём выглядело это как «сломался разбор PNG», хотя
+    // разбор был в порядке. Тест не о размере атласа.
+    CHECK(width > 0);
+    CHECK(height > 0);
+    CHECK(width == height);                       // атлас квадратный
+    CHECK((width & (width - 1)) == 0);            // и сторона — степень двойки
     CHECK(pixels.size() == size_t(width) * size_t(height));
 
-    // Атлас не может быть полностью пустым: на нём тридцать два кадра.
+    // Атлас не может быть полностью пустым: на нём десятки кадров.
     size_t opaque = 0;
     for (const Rgba8& pixel : pixels) {
         if (pixel.a > 0) ++opaque;

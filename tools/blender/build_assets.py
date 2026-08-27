@@ -491,6 +491,11 @@ def build_ui(samples: int) -> None:
         "trade":    (0.86, 0.80, 0.56),
         "fortress": (0.74, 0.76, 0.82),
         "shipyard": (0.70, 0.78, 0.90),
+        "depot":    (0.82, 0.76, 0.52),
+        "shield":   (0.60, 0.86, 0.94),
+        "drydock":  (0.72, 0.80, 0.86),
+        "habitat":  (0.88, 0.84, 0.92),
+        "garrison": (0.80, 0.74, 0.66),
     }
     for kind in pw_planets.STRUCTURE_IDS:
         obj = pw_planets.build_structure(kind, f"pw_ui_bld_{kind}")

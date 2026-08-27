@@ -1,6 +1,8 @@
 #include "doctest.h"
 
 #include "pw/sim/control.h"
+#include "pw/sim/economy.h"
+#include "pw/sim/season.h"
 #include "pw/sim/fleet.h"
 #include "pw/sim/galaxy.h"
 #include "pw/sim/production.h"
@@ -86,6 +88,24 @@ struct Realm {
             systemControlRollup(world, context);
             systemPresence(world, context);
             systemSiege(world, context);
+        }
+    }
+
+    /// Поставить на планету застройку. Экономику тесты осады не гоняют,
+    /// но щит, гарнизон и док читаются именно из неё.
+    void develop(uint32_t system, uint32_t orbit,
+                 std::initializer_list<Building> buildings) {
+        const Entity planet = planetAt(system, orbit);
+        REQUIRE(planet.valid());
+        PlanetDevelopment development{};
+        uint8_t slot = 0;
+        for (Building building : buildings) {
+            development.buildings[slot++] = uint8_t(building);
+        }
+        if (PlanetDevelopment* existing = world.get<PlanetDevelopment>(planet)) {
+            *existing = development;
+        } else {
+            world.add<PlanetDevelopment>(planet, development);
         }
     }
 
@@ -187,7 +207,7 @@ TEST_CASE("владение: флот занимает ничью планету
     // и уже менялся — с пяти минут на три, когда захват переехал
     // с систем на планеты.
     Realm realm;
-    realm.garrison(3, /*empire=*/1, Fleet{2, 0, 0, 0});
+    realm.garrison(3, /*empire=*/1, makeFleet({{Hull::Corvette, 2}}));
 
     realm.run(kClaimSeconds * kSecond - 10 * kSecond);
     CHECK(realm.planetOwner(3, 0) == kNoEmpire);  // ещё рано
@@ -205,7 +225,7 @@ TEST_CASE("владение: планеты занимаются по одной
     Realm realm;
     const uint32_t system = realm.systemWithAtLeast(3);
     REQUIRE(system != UINT32_MAX);
-    realm.garrison(system, /*empire=*/1, Fleet{4, 0, 0, 0});
+    realm.garrison(system, /*empire=*/1, makeFleet({{Hull::Corvette, 4}}));
 
     realm.run(kClaimSeconds * kSecond + 10 * kSecond);
     CHECK(realm.planetOwner(system, 0) == 1u);
@@ -229,9 +249,9 @@ TEST_CASE("владение: два своих флота не мешают за
     // блокировала занятие сама себе, и экспансия вставала намертво.
     // Юнит-тесты этого не видели — поймал прогон сезона на ботах.
     Realm realm;
-    realm.garrison(4, /*empire=*/1, Fleet{3, 0, 0, 0});
-    realm.garrison(4, /*empire=*/1, Fleet{5, 0, 0, 0});
-    realm.garrison(4, /*empire=*/1, Fleet{2, 0, 0, 0});
+    realm.garrison(4, /*empire=*/1, makeFleet({{Hull::Corvette, 3}}));
+    realm.garrison(4, /*empire=*/1, makeFleet({{Hull::Corvette, 5}}));
+    realm.garrison(4, /*empire=*/1, makeFleet({{Hull::Corvette, 2}}));
 
     realm.run(kClaimSeconds * kSecond + 10 * kSecond);
     CHECK(realm.planetOwner(4, 0) == 1u);
@@ -239,8 +259,8 @@ TEST_CASE("владение: два своих флота не мешают за
 
 TEST_CASE("владение: два претендента не занимают ничего") {
     Realm realm;
-    realm.garrison(5, /*empire=*/1, Fleet{5, 0, 0, 0});
-    realm.garrison(5, /*empire=*/2, Fleet{5, 0, 0, 0});
+    realm.garrison(5, /*empire=*/1, makeFleet({{Hull::Corvette, 5}}));
+    realm.garrison(5, /*empire=*/2, makeFleet({{Hull::Corvette, 5}}));
 
     realm.run(20 * kMinute);
     // Пока не разобрались между собой, планета остаётся ничьей.
@@ -250,7 +270,7 @@ TEST_CASE("владение: два претендента не занимают
 
 TEST_CASE("владение: ушедший флот не дозанимает планету") {
     Realm realm;
-    const Entity fleet = realm.garrison(7, /*empire=*/1, Fleet{3, 0, 0, 0});
+    const Entity fleet = realm.garrison(7, /*empire=*/1, makeFleet({{Hull::Corvette, 3}}));
 
     realm.run(kClaimSeconds * kSecond / 2);
     // Флот отправился дальше — счётчик занятия обязан обнулиться.
@@ -268,7 +288,7 @@ TEST_CASE("владение: ушедший флот не дозанимает �
 TEST_CASE("осада: чужая планета падает за десятки минут, а не мгновенно") {
     Realm realm;
     realm.setOwner(9, /*empire=*/1, kReadinessMax);
-    realm.garrison(9, /*empire=*/2, Fleet{20, 0, 0, 0});  // тоннаж 20
+    realm.garrison(9, /*empire=*/2, makeFleet({{Hull::Corvette, 20}}));  // тоннаж 20
 
     // Через минуту планета ещё держится. Это и есть главное свойство:
     // мгновенных потерь в игре нет.
@@ -288,7 +308,7 @@ TEST_CASE("осада: укладывается в обещанные дизай
         Realm realm;
         realm.setOwner(11, /*empire=*/1, kReadinessMax);
         // Тоннаж набираем корветами: один корвет — одна единица.
-        realm.garrison(11, /*empire=*/2, Fleet{tonnage, 0, 0, 0});
+        realm.garrison(11, /*empire=*/2, makeFleet({{Hull::Corvette, tonnage}}));
 
         for (int64_t minute = 1; minute <= 240; ++minute) {
             realm.run(kMinute);
@@ -315,14 +335,14 @@ TEST_CASE("осада: укладывается в обещанные дизай
 TEST_CASE("осада: защитники срывают её немедленно") {
     Realm realm;
     realm.setOwner(13, /*empire=*/1, kReadinessMax);
-    realm.garrison(13, /*empire=*/2, Fleet{50, 0, 0, 0});
+    realm.garrison(13, /*empire=*/2, makeFleet({{Hull::Corvette, 50}}));
 
     realm.run(10 * kMinute);
     const fx damaged = realm.readinessOf(13, 0);
     CHECK(damaged < kReadinessMax);
 
     // Деблокирующий удар: пришли свои — осада снята.
-    realm.garrison(13, /*empire=*/1, Fleet{1, 0, 0, 0});
+    realm.garrison(13, /*empire=*/1, makeFleet({{Hull::Corvette, 1}}));
     realm.run(1 * kSecond);
     CHECK(realm.siegeOf(13, 0)->besieger == kNoEmpire);
 
@@ -335,7 +355,7 @@ TEST_CASE("осада: защитники срывают её немедленн
 TEST_CASE("осада: свежий захват слаб") {
     Realm realm;
     realm.setOwner(15, /*empire=*/1, kReadinessMax);
-    realm.garrison(15, /*empire=*/2, Fleet{0, 0, 0, 30});  // тяжёлый флот
+    realm.garrison(15, /*empire=*/2, makeFleet({{Hull::Battleship, 30}}));  // тяжёлый флот
 
     for (int64_t minute = 0; minute < 200 && realm.planetOwner(15, 0) != 2u; ++minute) {
         realm.run(kMinute);
@@ -367,7 +387,7 @@ TEST_CASE("осада: флот в пути не участвует ни в чё
     Realm realm;
     realm.setOwner(19, /*empire=*/1, kReadinessMax);
 
-    const Entity raider = realm.garrison(19, /*empire=*/2, Fleet{50, 0, 0, 0});
+    const Entity raider = realm.garrison(19, /*empire=*/2, makeFleet({{Hull::Corvette, 50}}));
     // Флот вышел из системы: он между узлами и осаждать не может.
     realm.world.get<FleetLocation>(raider)->nextSystem = realm.galaxy.neighbors(19)[0];
 
@@ -379,7 +399,7 @@ TEST_CASE("осада: флот в пути не участвует ни в чё
 TEST_CASE("осада: смена осаждающего обнуляет счётчик") {
     Realm realm;
     realm.setOwner(21, /*empire=*/1, kReadinessMax);
-    const Entity first = realm.garrison(21, /*empire=*/2, Fleet{40, 0, 0, 0});
+    const Entity first = realm.garrison(21, /*empire=*/2, makeFleet({{Hull::Corvette, 40}}));
 
     realm.run(5 * kMinute);
     CHECK(realm.siegeOf(21, 0)->besieger == 2u);
@@ -389,7 +409,7 @@ TEST_CASE("осада: смена осаждающего обнуляет счё
     // Первый ушёл, пришёл третий — счёт осады начинается заново, но
     // повреждения обороны остаются: они уже нанесены.
     realm.world.get<FleetLocation>(first)->nextSystem = realm.galaxy.neighbors(21)[0];
-    realm.garrison(21, /*empire=*/3, Fleet{40, 0, 0, 0});
+    realm.garrison(21, /*empire=*/3, makeFleet({{Hull::Corvette, 40}}));
     realm.run(1 * kSecond);
 
     const SiegeState* siege = realm.siegeOf(21, 0);
@@ -410,7 +430,7 @@ TEST_CASE("осада: анклав в чужом тылу обороняетс�
 
     // Империя 1 стоит в системе своим флотом: её собственная планета
     // защищена, а вот анклав империи 2 — нет.
-    realm.garrison(system, /*empire=*/1, Fleet{60, 0, 0, 0});
+    realm.garrison(system, /*empire=*/1, makeFleet({{Hull::Corvette, 60}}));
 
     realm.run(10 * kMinute);
     CHECK(realm.readinessOf(system, 0) == kReadinessMax);   // своя цела
@@ -426,7 +446,7 @@ TEST_CASE("осада: занятая планета не мешает осаж�
     REQUIRE(system != UINT32_MAX);
 
     realm.setOwner(system, /*empire=*/1, kReadinessMax);
-    realm.garrison(system, /*empire=*/2, Fleet{0, 0, 0, 40});
+    realm.garrison(system, /*empire=*/2, makeFleet({{Hull::Battleship, 40}}));
 
     for (int64_t minute = 0; minute < 400 && realm.planetOwner(system, 1) != 2u; ++minute) {
         realm.run(kMinute);
@@ -441,9 +461,9 @@ TEST_CASE("владение: воспроизводится тик в тик") {
     for (Realm* realm : {&first, &second}) {
         realm->setOwner(4, 1, kReadinessMax);
         realm->setOwner(8, 2, kReadinessMax);
-        realm->garrison(4, 2, Fleet{15, 3, 1, 0});
-        realm->garrison(8, 1, Fleet{9, 2, 0, 1});
-        realm->garrison(12, 3, Fleet{5, 0, 0, 0});
+        realm->garrison(4, 2, makeFleet({{Hull::Corvette, 15}, {Hull::Destroyer, 3}, {Hull::Cruiser, 1}}));
+        realm->garrison(8, 1, makeFleet({{Hull::Corvette, 9}, {Hull::Destroyer, 2}, {Hull::Battleship, 1}}));
+        realm->garrison(12, 3, makeFleet({{Hull::Corvette, 5}}));
     }
     REQUIRE(first.world.hash() == second.world.hash());
 
@@ -453,4 +473,198 @@ TEST_CASE("владение: воспроизводится тик в тик") {
 
     // И что-то действительно произошло, а не просто ничего не менялось.
     CHECK(first.planetOwner(12, 0) == 3u);
+}
+
+// ---------------------------------------------------------------------------
+// Инфраструктура обороны
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Сколько обороны сняли за заданное время при такой застройке планеты.
+fx siegeDamage(std::initializer_list<Building> buildings, const Fleet& attacker,
+               int64_t seconds) {
+    Realm realm(0xD1FE, 60);
+    registerEconomyComponents(realm.world);
+
+    const uint32_t system = realm.systemWith(1);
+    REQUIRE(system != UINT32_MAX);
+    realm.setOwner(system, /*empire=*/1, kReadinessMax);
+    realm.develop(system, 0, buildings);
+    realm.garrison(system, /*empire=*/2, attacker);
+
+    realm.run(seconds * kTicksPerSecond);
+    return kReadinessMax - realm.readinessOf(system);
+}
+
+}  // namespace
+
+TEST_CASE("щит: растягивает осаду, но не отменяет её") {
+    // Крепость поднимает ПОТОЛОК обороны, щит растягивает ВРЕМЯ. Разница
+    // в том, что потолок сбивают большим флотом, а время — не сбить ничем,
+    // кроме осадных кораблей. На этом и держится роль монитора.
+    const Fleet attacker = makeFleet({{Hull::Battleship, 5}});
+
+    const fx bare = siegeDamage({}, attacker, 600);
+    const fx oneShield = siegeDamage({Building::ShieldGenerator}, attacker, 600);
+    const fx twoShields = siegeDamage({Building::ShieldGenerator, Building::ShieldGenerator},
+                                      attacker, 600);
+
+    CHECK(oneShield < bare);
+    CHECK(twoShields < oneShield);
+    // Но осада идёт: обвешанную щитами планету можно взять, просто дольше.
+    CHECK(twoShields > fx::zero());
+}
+
+TEST_CASE("монитор: ломает щит там, где линкоры уже упёрлись") {
+    // Именно ради этого осадный корабль и существует. Если бы щит одинаково
+    // держал любой флот, строить мониторы было бы незачем.
+    const auto shields = {Building::ShieldGenerator, Building::ShieldGenerator};
+
+    // Одинаковый бюджет в сплавах: пять линкоров против десяти мониторов.
+    const fx byLine = siegeDamage(shields, makeFleet({{Hull::Battleship, 5}}), 600);
+    const fx bySiege = siegeDamage(shields, makeFleet({{Hull::Monitor, 10}}), 600);
+
+    CHECK(bySiege > byLine);
+}
+
+TEST_CASE("гарнизон: оборона возвращается быстрее") {
+    // Планета, пережившая осаду, без гарнизона остаётся уязвимой полтора
+    // часа. Гарнизон — ответ на вопрос «как удержать фронт», отдельный
+    // от вопроса «как выдержать удар», на который отвечает крепость.
+    auto regained = [](std::initializer_list<Building> buildings) {
+        Realm realm(0xD1FE, 60);
+        registerEconomyComponents(realm.world);
+        const uint32_t system = realm.systemWith(1);
+        REQUIRE(system != UINT32_MAX);
+        realm.setOwner(system, /*empire=*/1, fx::zero());
+        realm.develop(system, 0, buildings);
+        realm.run(300 * kTicksPerSecond);
+        return realm.readinessOf(system);
+    };
+
+    const fx bare = regained({});
+    const fx withGarrison = regained({Building::Garrison});
+    CHECK(withGarrison > bare);
+    // Втрое: гарнизон даёт удвоение сверх базовой единицы.
+    CHECK(withGarrison.toDouble() > bare.toDouble() * 2.5);
+}
+
+// ---------------------------------------------------------------------------
+// Стадии сезона
+// ---------------------------------------------------------------------------
+
+TEST_CASE("сезон: стадия — чистая функция от тика") {
+    // Не «сервер решил, что пора»: и сервер, и клиент, и реплей считают
+    // стадию из одного числа одинаково, и рассинхрону взяться неоткуда.
+    SeasonConfig config;
+    config.expansionSeconds = 100;
+    config.conflictSeconds = 200;
+    config.crisisSeconds = 50;
+    config.finalSeconds = 25;
+
+    CHECK(stageAt(config, 0) == SeasonStage::Expansion);
+    CHECK(stageAt(config, 99 * kTicksPerSecond) == SeasonStage::Expansion);
+    CHECK(stageAt(config, 100 * kTicksPerSecond) == SeasonStage::Conflict);
+    CHECK(stageAt(config, 299 * kTicksPerSecond) == SeasonStage::Conflict);
+    CHECK(stageAt(config, 300 * kTicksPerSecond) == SeasonStage::Crisis);
+    CHECK(stageAt(config, 350 * kTicksPerSecond) == SeasonStage::Final);
+    // За краем сезона стадия не «сбрасывается» — Финал так и остаётся.
+    CHECK(stageAt(config, 100000 * kTicksPerSecond) == SeasonStage::Final);
+
+    // Обратный отсчёт согласован со стадией.
+    CHECK(secondsLeftInStage(config, 0) == 100);
+    CHECK(secondsLeftInStage(config, 60 * kTicksPerSecond) == 40);
+    CHECK(secondsLeftInStage(config, 100 * kTicksPerSecond) == 200);
+
+    // Масштаб растягивает всё разом, не меняя порядка.
+    config.scale = 10;
+    CHECK(stageAt(config, 999 * kTicksPerSecond) == SeasonStage::Expansion);
+    CHECK(stageAt(config, 1000 * kTicksPerSecond) == SeasonStage::Conflict);
+    CHECK(config.totalSeconds() == 3750);
+}
+
+namespace {
+
+/// Мир с сезоном на нужной стадии.
+struct SeasonRealm : Realm {
+    Season season;
+
+    explicit SeasonRealm(SeasonStage stage) : Realm(0x5EA50, 60) {
+        registerEconomyComponents(world);
+        season.config.expansionSeconds = 1000;
+        season.config.conflictSeconds = 1000;
+        season.config.crisisSeconds = 1000;
+        season.config.finalSeconds = 1000;
+        season.stage = stage;
+        world.setResource(&season);
+    }
+
+    /// Столица империи. Убежище считается от неё.
+    void capital(uint32_t empire, uint32_t system) {
+        const Entity e = world.create();
+        world.add<Empire>(e, Empire{fx::zero(), fx::zero(), fx::zero(), fx::zero(),
+                                    fx::zero(), empire, system});
+    }
+};
+
+}  // namespace
+
+TEST_CASE("сезон: на Расширении чужой дом неприкосновенен") {
+    // Новичок обязан получить свою империю раньше, чем встретит соседа.
+    // Иначе тысяча игроков превращается в тысячу человек, из которых
+    // играет сотня, а остальные выбыли на первом часу.
+    SeasonRealm realm(SeasonStage::Expansion);
+
+    const uint32_t home = realm.systemWithAtLeast(2);
+    REQUIRE(home != UINT32_MAX);
+    realm.capital(/*empire=*/1, home);
+    realm.setOwner(home, /*empire=*/1, kReadinessMax);
+    realm.garrison(home, /*empire=*/2, makeFleet({{Hull::Battleship, 20}}));
+
+    const fx before = realm.readinessOf(home);
+    realm.run(600 * kTicksPerSecond);
+    CHECK(realm.readinessOf(home) == before);
+    CHECK(realm.planetOwner(home, 0) == 1u);
+}
+
+TEST_CASE("сезон: на Конфликте убежища больше нет") {
+    SeasonRealm realm(SeasonStage::Conflict);
+
+    const uint32_t home = realm.systemWithAtLeast(2);
+    REQUIRE(home != UINT32_MAX);
+    realm.capital(/*empire=*/1, home);
+    realm.setOwner(home, /*empire=*/1, kReadinessMax);
+    realm.garrison(home, /*empire=*/2, makeFleet({{Hull::Battleship, 20}}));
+
+    realm.run(600 * kTicksPerSecond);
+    CHECK(realm.readinessOf(home) < kReadinessMax);
+}
+
+TEST_CASE("сезон: на Финале карта заморожена") {
+    // Захват в последнюю минуту не должен решать сезон: иначе вся стратегия
+    // сводится к тому, чтобы не показываться до последнего часа.
+    SeasonRealm realm(SeasonStage::Final);
+
+    const uint32_t system = realm.systemWithAtLeast(2);
+    REQUIRE(system != UINT32_MAX);
+    realm.setOwner(system, /*empire=*/1, kReadinessMax);
+    realm.garrison(system, /*empire=*/2, makeFleet({{Hull::Battleship, 20}}));
+
+    realm.run(600 * kTicksPerSecond);
+    CHECK(realm.readinessOf(system) == kReadinessMax);
+}
+
+TEST_CASE("сезон: на Расширении ничьи планеты занимают свободно") {
+    // Иначе стадия расширения не давала бы расширяться — а она ровно
+    // для этого и есть.
+    SeasonRealm realm(SeasonStage::Expansion);
+
+    const uint32_t system = realm.systemWith(1);
+    REQUIRE(system != UINT32_MAX);
+    realm.capital(/*empire=*/1, realm.systemWithAtLeast(3));
+    realm.garrison(system, /*empire=*/1, makeFleet({{Hull::Corvette, 5}}));
+
+    realm.run((kClaimSeconds + 5) * kTicksPerSecond);
+    CHECK(realm.planetOwner(system, 0) == 1u);
 }

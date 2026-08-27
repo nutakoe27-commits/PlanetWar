@@ -731,9 +731,9 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
 
             // Самый крупный присутствующий корпус: он и определяет силуэт.
             uint32_t hull = 0;
-            if (fleet.composition.battleships > 0)   hull = uint32_t(sim::Hull::Battleship);
-            else if (fleet.composition.cruisers > 0) hull = uint32_t(sim::Hull::Cruiser);
-            else if (fleet.composition.destroyers > 0) hull = uint32_t(sim::Hull::Destroyer);
+            if (fleet.composition[sim::Hull::Battleship] > 0)   hull = uint32_t(sim::Hull::Battleship);
+            else if (fleet.composition[sim::Hull::Cruiser] > 0) hull = uint32_t(sim::Hull::Cruiser);
+            else if (fleet.composition[sim::Hull::Destroyer] > 0) hull = uint32_t(sim::Hull::Destroyer);
             else                                     hull = uint32_t(sim::Hull::Corvette);
 
             const uint32_t index = hull - 1u;

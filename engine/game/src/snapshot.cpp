@@ -5,6 +5,7 @@
 #include "pw/sim/control.h"
 #include "pw/sim/economy.h"
 #include "pw/sim/production.h"
+#include "pw/sim/season.h"
 
 namespace pw::game {
 
@@ -45,10 +46,10 @@ void writeFleet(ByteWriter& writer, const FleetView& fleet) {
     writer.varint(fleet.system);
     writer.varint(fleet.nextSystem);
     writer.fixed(fleet.progress);
-    writer.varint(fleet.composition.corvettes);
-    writer.varint(fleet.composition.destroyers);
-    writer.varint(fleet.composition.cruisers);
-    writer.varint(fleet.composition.battleships);
+    writer.varint(fleet.composition[sim::Hull::Corvette]);
+    writer.varint(fleet.composition[sim::Hull::Destroyer]);
+    writer.varint(fleet.composition[sim::Hull::Cruiser]);
+    writer.varint(fleet.composition[sim::Hull::Battleship]);
 }
 
 bool readFleet(ByteReader& reader, FleetView& fleet) {
@@ -57,10 +58,10 @@ bool readFleet(ByteReader& reader, FleetView& fleet) {
     fleet.system = uint32_t(reader.varint());
     fleet.nextSystem = uint32_t(reader.varint());
     fleet.progress = reader.fixed();
-    fleet.composition.corvettes = uint32_t(reader.varint());
-    fleet.composition.destroyers = uint32_t(reader.varint());
-    fleet.composition.cruisers = uint32_t(reader.varint());
-    fleet.composition.battleships = uint32_t(reader.varint());
+    fleet.composition[sim::Hull::Corvette] = uint32_t(reader.varint());
+    fleet.composition[sim::Hull::Destroyer] = uint32_t(reader.varint());
+    fleet.composition[sim::Hull::Cruiser] = uint32_t(reader.varint());
+    fleet.composition[sim::Hull::Battleship] = uint32_t(reader.varint());
     return !reader.failed();
 }
 
@@ -101,6 +102,13 @@ void writeEmpire(ByteWriter& writer, const EmpireView& empire) {
     writer.fixed(empire.alloys);
     writer.fixed(empire.research);
     writer.fixed(empire.influence);
+    writer.u8(empire.stage);
+    writer.varint(empire.stageSecondsLeft);
+    writer.varint(empire.prestigeTerritory);
+    writer.varint(empire.prestigeEconomy);
+    writer.varint(empire.prestigeScience);
+    writer.varint(empire.prestigeWar);
+    writer.varint(empire.prestigeDiplomacy);
 }
 
 bool readEmpire(ByteReader& reader, EmpireView& empire) {
@@ -109,6 +117,13 @@ bool readEmpire(ByteReader& reader, EmpireView& empire) {
     empire.alloys = reader.fixed();
     empire.research = reader.fixed();
     empire.influence = reader.fixed();
+    empire.stage = reader.u8();
+    empire.stageSecondsLeft = uint32_t(reader.varint());
+    empire.prestigeTerritory = uint32_t(reader.varint());
+    empire.prestigeEconomy = uint32_t(reader.varint());
+    empire.prestigeScience = uint32_t(reader.varint());
+    empire.prestigeWar = uint32_t(reader.varint());
+    empire.prestigeDiplomacy = uint32_t(reader.varint());
     return !reader.failed();
 }
 
@@ -240,14 +255,26 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
         });
 
     out.empire = EmpireView{};
-    world.each<sim::Empire>([&](sim::Entity, sim::Empire& record) {
+    world.each<sim::Empire>([&](sim::Entity entity, sim::Empire& record) {
         if (record.id != empire) return;
         out.empire.energy = record.energy;
         out.empire.minerals = record.minerals;
         out.empire.alloys = record.alloys;
         out.empire.research = record.research;
         out.empire.influence = record.influence;
+        if (const sim::Prestige* prestige = world.get<sim::Prestige>(entity)) {
+            out.empire.prestigeTerritory = prestige->territory;
+            out.empire.prestigeEconomy = prestige->economy;
+            out.empire.prestigeScience = prestige->science;
+            out.empire.prestigeWar = prestige->war;
+            out.empire.prestigeDiplomacy = prestige->diplomacy;
+        }
     });
+
+    if (const sim::Season* season = world.resource<sim::Season>()) {
+        out.empire.stage = uint8_t(season->stage);
+        out.empire.stageSecondsLeft = uint32_t(std::max<int64_t>(0, season->secondsLeft));
+    }
 }
 
 // ---------------------------------------------------------------------------

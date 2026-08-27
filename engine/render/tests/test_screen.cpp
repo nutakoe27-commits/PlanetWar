@@ -1,5 +1,7 @@
 #include "doctest.h"
 
+#include "assets_path.h"
+
 #include <algorithm>
 #include <fstream>
 #include <vector>
@@ -9,6 +11,7 @@
 
 using namespace pw;
 using namespace pw::render;
+using namespace pw::render::testing;
 
 namespace {
 
@@ -228,15 +231,7 @@ namespace {
 /// Тест запускают и из корня репозитория, и из каталога сборки. Искать
 /// в обоих местах дешевле, чем однажды получить «тест зелёный, потому
 /// что он ничего не проверил».
-std::string findUiManifest() {
-    const char* candidates[] = {"assets/build/ui.json", "../assets/build/ui.json",
-                                "../../assets/build/ui.json"};
-    for (const char* path : candidates) {
-        std::ifstream probe(path);
-        if (probe) return path;
-    }
-    return {};
-}
+std::string findUiManifest() { return testing::findAsset("assets/build/ui.json"); }
 
 /// Сервер и клиент в одной памяти, без сокетов и без ожидания.
 ///
@@ -406,27 +401,83 @@ TEST_CASE("экран: ничего не вылезает за пределы о
     LiveFixture fixture;
     REQUIRE(fixture.game.client.ready());
 
-    for (int slot = -1; slot < 3; ++slot) {
-        for (int inSystem = 0; inSystem < 2; ++inSystem) {
-            fixture.state.slot = slot < 0 ? uint8_t(0xFF) : uint8_t(slot);
-            fixture.state.inSystem = inSystem != 0;
-            // Курсор в углу: подсказка тоже обязана уложиться в экран.
-            fixture.frame(float(fixture.screenWidth) - 4.0f,
-                          float(fixture.screenHeight) - 4.0f, false, false, false);
+    // ХУДШИЙ СЛУЧАЙ, А НЕ ПЕРВЫЙ ПОПАВШИЙСЯ. Столбец слева растёт от числа
+    // планет в системе, числа слотов на планете и от открытой палитры
+    // на двенадцать построек. Тест, берущий столицу как есть, проверял бы
+    // случайную систему — и молчал бы ровно до того дня, когда игроку
+    // попадётся система с шестью планетами и газовым гигантом на двенадцать
+    // слотов.
+    // Система обязана быть СВОЕЙ: палитра застройки открывается только
+    // на своей планете, а именно она и делает столбец самым высоким.
+    // Чужая система дала бы зелёный тест, который не проверил ничего.
+    const uint8_t mine = uint8_t(fixture.game.client.empire() & 0xFFu);
+    uint32_t worstSystem = fixture.state.system;
+    size_t mostPlanets = 0;
+    for (uint32_t system = 0; system < fixture.game.client.galaxy().systemCount();
+         ++system) {
+        const auto here = fixture.game.client.planetsAt(system);
+        if (here.empty() || here.front().owner != mine) continue;
+        if (here.size() > mostPlanets) {
+            mostPlanets = here.size();
+            worstSystem = system;
+        }
+    }
+    REQUIRE(mostPlanets > 0);
+    fixture.state.system = worstSystem;
 
-            for (const UiBatch& batch : fixture.ui.frame().batches) {
-                for (const rhi::SpriteInstance& sprite : batch.sprites) {
-                    CAPTURE(slot);
-                    CAPTURE(inSystem);
-                    CHECK(sprite.x - sprite.halfWidth >= -1.0f);
-                    CHECK(sprite.y - sprite.halfHeight >= -1.0f);
-                    CHECK(sprite.x + sprite.halfWidth <= float(fixture.screenWidth) + 1.0f);
-                    CHECK(sprite.y + sprite.halfHeight <=
-                          float(fixture.screenHeight) + 1.0f);
+    // Планета с наибольшим числом слотов — и она же выбрана.
+    const auto planets = fixture.game.client.planetsAt(worstSystem);
+    REQUIRE_FALSE(planets.empty());
+    uint8_t mostSlots = 0;
+    for (size_t index = 0; index < planets.size(); ++index) {
+        if (planets[index].slots <= mostSlots) continue;
+        mostSlots = planets[index].slots;
+        fixture.state.planetIndex = uint32_t(index);
+    }
+    CAPTURE(mostPlanets);
+    CAPTURE(int(mostSlots));
+
+    // Палитра обязана хоть раз открыться за прогон: иначе тест меряет
+    // раскладку без самого высокого своего элемента.
+    bool paletteSeen = false;
+
+    // Размеры окна тоже перебираем, и МАЛЕНЬКОЕ — самое опасное.
+    // Высота строки зажата снизу тринадцатью пикселями, поэтому на окне
+    // в 600 точек интерфейс занимает БОЛЬШУЮ долю экрана, чем на 900:
+    // 13/600 против 17/900. Проверять только «свой» размер значит
+    // проверять самый лёгкий случай.
+    const int sizes[][2] = {{1600, 900}, {1280, 720}, {1024, 600}, {960, 540}};
+
+    for (const auto& size : sizes) {
+        fixture.screenWidth = size[0];
+        fixture.screenHeight = size[1];
+        for (int slot = -1; slot < int(mostSlots); ++slot) {
+            for (int inSystem = 0; inSystem < 2; ++inSystem) {
+                fixture.state.slot = slot < 0 ? uint8_t(0xFF) : uint8_t(slot);
+                fixture.state.inSystem = inSystem != 0;
+                // Курсор в углу: подсказка тоже обязана уложиться в экран.
+                fixture.frame(float(fixture.screenWidth) - 4.0f,
+                              float(fixture.screenHeight) - 4.0f, false, false, false);
+                if (fixture.hasPalette()) paletteSeen = true;
+
+                for (const UiBatch& batch : fixture.ui.frame().batches) {
+                    for (const rhi::SpriteInstance& sprite : batch.sprites) {
+                        CAPTURE(size[0]);
+                        CAPTURE(size[1]);
+                        CAPTURE(slot);
+                        CAPTURE(inSystem);
+                        CHECK(sprite.x - sprite.halfWidth >= -1.0f);
+                        CHECK(sprite.y - sprite.halfHeight >= -1.0f);
+                        CHECK(sprite.x + sprite.halfWidth <=
+                              float(fixture.screenWidth) + 1.0f);
+                        CHECK(sprite.y + sprite.halfHeight <=
+                              float(fixture.screenHeight) + 1.0f);
+                    }
                 }
             }
         }
     }
+    CHECK(paletteSeen);
 }
 
 TEST_CASE("экран: выход требует подтверждения") {

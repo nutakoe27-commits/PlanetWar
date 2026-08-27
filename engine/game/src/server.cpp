@@ -36,6 +36,7 @@ void Server::start(const ServerConfig& config) {
     sim::registerEconomyComponents(world_);
     sim::registerProductionComponents(world_);
     sim::registerBattleComponents(world_);
+    sim::registerSeasonComponents(world_);
 
     galaxy_.generate(world_, config_.galaxy);
     sim::initialiseControl(world_, galaxy_);
@@ -47,6 +48,10 @@ void Server::start(const ServerConfig& config) {
     world_.setResource(&ledger_);
     world_.setResource(&commands_);
     world_.setResource(&presence_);
+
+    season_ = sim::Season{};
+    season_.config = config_.season;
+    world_.setResource(&season_);
 
     homeTaken_.assign(galaxy_.systemCount(), false);
     tick_ = 0;
@@ -186,6 +191,10 @@ void Server::receive(const net::Address& from, const uint8_t* data, size_t size,
                         fx::fromInt(config_.startingMinerals),
                         fx::fromInt(config_.startingAlloys), fx::zero(), fx::zero(),
                         empire, player.home});
+        // Престиж заводится вместе с империей. Отдельным компонентом,
+        // а не полями Empire: счёт за сезон читают и пишут раз в секунду,
+        // а казну — каждый тик, и таскать одно через другое незачем.
+        world_.add<sim::Prestige>(player.empireEntity, sim::Prestige{});
 
         // Столица — это ПЛАНЕТЫ родной системы, все до одной. Владение
         // теперь лежит на них, и отдать игроку одну лишь запись в системе
@@ -360,20 +369,27 @@ void Server::applyBuildShip(Player& player, const BuildShipMessage& message) {
     // и понять почему было неоткуда. Молчаливый отказ — худший вид
     // отказа, потому что человек повторяет одно и то же.
     uint32_t shipyards = 0;
+    uint32_t drydocks = 0;
     world_.each<sim::Planet, sim::Owner, sim::PlanetDevelopment>(
         [&](sim::Entity, sim::Planet& planet, sim::Owner& planetOwner,
             sim::PlanetDevelopment& development) {
             if (planet.system != message.system) return;
             // Верфь на чужом анклаве внутри вашей системы вам не служит.
             if (planetOwner.empire != player.empire) return;
-            const uint8_t limit = std::min<uint8_t>(planet.slots, sim::kMaxSlots);
-            for (uint8_t slot = 0; slot < limit; ++slot) {
-                if (development.buildings[slot] == uint8_t(sim::Building::Shipyard)) {
-                    ++shipyards;
-                }
-            }
+            shipyards += sim::countBuildings(planet, development, sim::Building::Shipyard);
+            drydocks += sim::countBuildings(planet, development, sim::Building::Drydock);
         });
-    if (shipyards == 0) {
+
+    // Титан требует не только верфи, но и ремонтного дока.
+    //
+    // Смысл ворот не в том, чтобы усложнить, а в том, чтобы у титана была
+    // ЦЕНА, отличная от денежной. Иначе он просто самый дорогой корабль,
+    // который берут все, у кого хватило сплавов, и «венец сезона»
+    // превращается в очередную покупку. С воротами империя сначала строит
+    // инфраструктуру в конкретной системе — то есть заявляет, где у неё
+    // главная верфь, и делает эту систему целью для соседей.
+    const bool needsDrydock = sim::Hull(message.hull) == sim::Hull::Titan;
+    if (shipyards == 0 || (needsDrydock && drydocks == 0)) {
         ++rejectedOrders_;
         uint8_t buffer[32];
         net::ByteWriter writer(buffer, sizeof(buffer));
@@ -393,7 +409,9 @@ void Server::applyBuildBuilding(Player& player, const BuildBuildingMessage& mess
         [&](sim::Entity entity, sim::Planet& planet, sim::Owner& owner,
             sim::PlanetDevelopment& development, sim::PlanetConstruction& site) {
             if (entity.index != message.planet) return;
-            if (message.slot >= planet.slots || message.slot >= sim::kMaxSlots) return;
+            // Слоты СЧИТАЮТСЯ: хабитаты добавляют места, и строить в них
+            // должно быть можно.
+            if (message.slot >= sim::usableSlots(planet, development)) return;
 
             // Владение проверяется у САМОЙ ПЛАНЕТЫ, а не у её системы:
             // теперь захватывают планеты, и удержанный в чужом тылу мир
@@ -406,6 +424,20 @@ void Server::applyBuildBuilding(Player& player, const BuildBuildingMessage& mess
             // отменить начатую стройку игрок должен уметь одним действием,
             // и это то же самое действие.
             if (message.building == uint8_t(sim::Building::None)) {
+                // Снос хабитата отбирает у планеты два слота. Если они
+                // заняты, здания в них оказались бы «за краем» планеты:
+                // они не производят, не сносятся и не видны. Отказываем
+                // вслух, а не молча оставляем призраков.
+                if (development.buildings[message.slot] == uint8_t(sim::Building::Habitat)) {
+                    const uint8_t after = sim::usableSlots(planet, development) -
+                                          sim::kHabitatSlots;
+                    for (uint8_t slot = after; slot < sim::kMaxSlots; ++slot) {
+                        if (slot == message.slot) continue;
+                        if (development.buildings[slot] != uint8_t(sim::Building::None)) {
+                            return;  // applied остаётся ложным — игрок получит отказ
+                        }
+                    }
+                }
                 development.buildings[message.slot] = uint8_t(sim::Building::None);
                 if (site.slot == message.slot) {
                     sim::enqueueConstruction(site, sim::PlanetConstruction::kNoSlot,
@@ -445,6 +477,9 @@ void Server::step() {
     // Производное владение системами пересчитывается ПЕРВЫМ: и бой, и
     // присутствие, и поиск цели смотрят на владельца системы, и все они
     // обязаны в одном тике видеть одно и то же.
+    // Стадия сезона считается ПЕРВОЙ: на неё смотрят и осада, и кризис,
+    // и интерфейс, и все обязаны в одном тике видеть одну и ту же.
+    sim::systemSeason(world_, context);
     sim::systemControlRollup(world_, context);
     sim::systemFleetMovement(world_, context);
     sim::systemBattles(world_, context);
@@ -454,6 +489,8 @@ void Server::step() {
     sim::planetDefenceCap(world_, context);
     sim::planetConstructionTick(world_, context);
     sim::systemProduction(world_, context);
+    sim::systemCrisis(world_, context);
+    sim::systemPrestige(world_, context);
     sim::systemMergeFleets(world_, context);
     sim::systemDisbandEmpty(world_, context);
     sim::systemApplyCommands(world_, context);

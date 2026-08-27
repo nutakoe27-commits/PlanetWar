@@ -46,7 +46,14 @@ const sim::Building kBuildOrder[] = {
     sim::Building::Foundry,    sim::Building::Foundry,  sim::Building::Shipyard,
     sim::Building::PowerPlant, sim::Building::PowerPlant,
     sim::Building::Mine,       sim::Building::Foundry,
-    sim::Building::Laboratory, sim::Building::TradeHub,
+    // Инфраструктура идёт ПОСЛЕ производства, но обязательно идёт.
+    // Бот, который её не строит, оставил бы половину зданий игры
+    // непроверенной прогоном — а прогон это единственное место, где
+    // они встречаются с живой экономикой и живой осадой.
+    sim::Building::SupplyDepot, sim::Building::Garrison,
+    sim::Building::Drydock,     sim::Building::ShieldGenerator,
+    sim::Building::Laboratory,  sim::Building::TradeHub,
+    sim::Building::Habitat,
 };
 
 void printUsage() {
@@ -95,25 +102,90 @@ private:
                 // Поймали разбором того, куда уходят минералы.
                 if (planet.building()) continue;
 
-                for (uint8_t slot = 0; slot < planet.slots; ++slot) {
-                    if (planet.buildings[slot] != uint8_t(sim::Building::None)) continue;
-                    const size_t index = slot % (sizeof(kBuildOrder) / sizeof(kBuildOrder[0]));
-                    if (client.orderBuildBuilding(planet.id, slot, kBuildOrder[index])) {
-                        ++built_;
+                // ЧТО СТРОИТЬ — РЕШАЕТСЯ ПО НУЖДЕ, А НЕ ПО НОМЕРУ СЛОТА.
+                //
+                // Раньше здание бралось из списка по индексу слота, и верфь
+                // стояла шестой. Планеты в среднем застраиваются на четыре
+                // слота, до шестого дело не доходило, и бот не строил верфь
+                // НИКОГДА: копил сплавы и не воевал. Прогон сезона показал
+                // три империи из четырёх с нулём верфей и шестьюдесятью
+                // тысячами нетронутых сплавов.
+                //
+                // Считаем по ЗАПОЛНЕННЫМ слотам, а не по номеру пустого:
+                // так планета на четыре слота получает первые четыре здания
+                // списка, а не четвёртое, шестое и десятое.
+                uint8_t free = 0xFF;
+                uint8_t filled = 0;
+                for (uint8_t slot = 0; slot < planet.slots && slot < sim::kMaxSlots;
+                     ++slot) {
+                    if (planet.buildings[slot] == uint8_t(sim::Building::None)) {
+                        if (free == 0xFF) free = slot;
+                    } else {
+                        ++filled;
                     }
-                    return;
                 }
+                if (free == 0xFF) continue;
+
+                const size_t index =
+                    filled % (sizeof(kBuildOrder) / sizeof(kBuildOrder[0]));
+                sim::Building wanted = kBuildOrder[index];
+                // Две верфи на систему: одна осваивает 0.5 сплава в секунду,
+                // а развитая система даёт около 0.75 — одной не хватает
+                // по построению.
+                if (shipyardsIn(client, system) < 2 && filled >= 2) {
+                    wanted = sim::Building::Shipyard;
+                }
+                if (client.orderBuildBuilding(planet.id, free, wanted)) ++built_;
+                return;
             }
         }
     }
 
+    /// Сколько верфей у бота в этой системе, включая строящиеся.
+    ///
+    /// Строящиеся считаются намеренно: без этого бот каждый цикл видит
+    /// «верфей ноль» — она ведь ещё не достроена — и заказывает ещё одну.
+    /// В прогоне сезона это дало по четыре верфи на систему вместо двух.
+    static uint32_t shipyardsIn(const Client& client, uint32_t system) {
+        uint32_t total = 0;
+        for (const auto& planet : client.planetsAt(system)) {
+            if (planet.owner != uint8_t(client.empire())) continue;
+            for (uint8_t slot = 0; slot < planet.slots && slot < sim::kMaxSlots; ++slot) {
+                if (planet.buildings[slot] == uint8_t(sim::Building::Shipyard)) ++total;
+            }
+            if (planet.building() &&
+                planet.buildBuilding == uint8_t(sim::Building::Shipyard)) {
+                ++total;
+            }
+        }
+        return total;
+    }
+
     void orderShips(Client& client) {
         if (ticks_ % 10 != 0) return;
-        if (client.view().empire.alloys < fx::fromInt(sim::kCostDestroyer * 2)) return;
+
+        // Бот собирает СМЕШАННЫЙ флот, а не стопку эсминцев. Это не забота
+        // о красоте: прогон сезона — единственное место, где новые роли
+        // проверяются в бою на живых данных. Бот, покупающий один корпус,
+        // молча оставил бы носители, мониторы и тендеры непроверенными.
+        //
+        // Пропорции — это и есть «нормальный» флот в понимании игры:
+        // на четыре эсминца один носитель, один монитор и один тендер.
+        static constexpr sim::Hull kPattern[] = {
+            sim::Hull::Destroyer, sim::Hull::Destroyer, sim::Hull::Carrier,
+            sim::Hull::Destroyer, sim::Hull::Tender,    sim::Hull::Monitor,
+            sim::Hull::Destroyer, sim::Hull::Cruiser,
+        };
+        const sim::Hull hull =
+            kPattern[(ordered_ / 1) % (sizeof(kPattern) / sizeof(kPattern[0]))];
+
+        // Копим до цены корпуса с запасом: заказ, на который не хватит
+        // сплавов, встанет в очередь и заблокирует верфь.
+        if (client.view().empire.alloys < fx::fromInt(sim::hullCost(hull) * 2)) return;
 
         for (uint32_t system = 0; system < client.galaxy().systemCount(); ++system) {
             if (client.view().systems[system].owner != uint8_t(client.empire())) continue;
-            if (client.orderBuildShip(system, sim::Hull::Destroyer, 1)) ++ordered_;
+            if (client.orderBuildShip(system, hull, 1)) ++ordered_;
             return;
         }
     }

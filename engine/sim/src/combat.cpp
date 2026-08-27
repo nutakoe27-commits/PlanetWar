@@ -20,6 +20,13 @@ struct HullStats {
     int64_t weaponSlots;
     int64_t defenseSlots;
     int64_t utilitySlots;
+    /// Ангары: сколько звеньев ударных машин поднимает корпус.
+    ///
+    /// Отдельный канал урона, а не ещё один тип оружия в FleetArmament.
+    /// Машины несёт КОРПУС, а не выбор игрока в настройке вооружения:
+    /// иначе носителем становился бы любой корабль, и покупать носитель
+    /// было бы незачем.
+    int64_t hangars;
 };
 
 // Прочность выбрана по отношению к урону, а не сама по себе.
@@ -39,13 +46,25 @@ struct HullStats {
 // То есть неверное соотношение двух чисел обнуляло главную скилловую ось
 // игры. Тесты на свойства контр-системы это поймали, тесты на отдельные
 // формулы — не поймали бы.
+//
+// Роли читаются прямо из таблицы. У тендера НОЛЬ оружейных слотов — он
+// покупается вместо пушек, и это его цена. У монитора их втрое меньше,
+// чем у линкора при сравнимой прочности: он самоходная батарея против
+// планеты, а не корабль линии. Носитель почти не стреляет из орудий,
+// зато несёт четыре звена машин.
 constexpr HullStats kHulls[] = {
-    {},                    // Hull::None
-    {200, 2, 1, 1},        // корвет
-    {600, 4, 2, 2},        // эсминец
-    {1600, 6, 4, 3},       // крейсер
-    {4000, 10, 6, 4},      // линкор
+    {},                      // Hull::None
+    {200,    2,  1, 1,  0},  // корвет
+    {260,    0,  1, 3,  0},  // тендер — не стреляет вообще
+    {600,    4,  2, 2,  0},  // эсминец
+    {1300,   2,  3, 4,  4},  // носитель
+    {1600,   6,  4, 3,  0},  // крейсер
+    {2600,   3,  6, 2,  0},  // монитор
+    {4000,  10,  6, 4,  0},  // линкор
+    {14000, 26, 14, 8,  6},  // титан
 };
+static_assert(sizeof(kHulls) / sizeof(kHulls[0]) == size_t(Hull::Count),
+              "таблица корпусов обязана покрывать всё перечисление");
 
 // --- урон за оружейный слот за раунд -------------------------------------
 //
@@ -64,6 +83,18 @@ constexpr HullStats kHulls[] = {
 constexpr int64_t kDamageKinetic = 21;
 constexpr int64_t kDamageEnergy = 28;
 constexpr int64_t kDamageMissile = 12;
+
+/// Урон одного звена ударных машин за раунд.
+///
+/// Машины бьют с любой дистанции, как ракеты, и щиты им тоже не помеха —
+/// но ПРО сбивает их ВДВОЕ ЛУЧШЕ, чем ракеты. Отсюда их место в системе:
+/// носитель наказывает того, кто пренебрёг ПРО, и почти бесполезен против
+/// того, кто на ПРО поставил. То есть это не «ещё одно оружие», а третий
+/// вопрос к разведке — после «чем он бьёт» и «чем закрывается».
+constexpr int64_t kDamageStrikeCraft = 34;
+/// Множитель эффективности ПРО против машин. Пилот — не ракета, но и
+/// не бронированный корпус.
+inline const fx kPointDefenseVsCraft = fx::fromFraction(2, 1);
 
 /// Снижение урона за один защитный слот.
 ///
@@ -156,28 +187,37 @@ void normalise(fx& a, fx& b) {
 struct Aggregate {
     fx hitPoints;
     fx weaponSlots;
+    fx hangars;
     fx defensePerShip;
     fx utilityPerShip;
     fx kinetic, energy, missile;
     fx shields, armour;
     fx pointDefense;
+    /// Доля урона, которую снимает ремонтная служба отряда.
+    fx damageControl;
 };
 
 Aggregate summarise(const BattleSide& side) {
     Aggregate out{};
     int64_t ships = 0, defense = 0, utility = 0;
 
-    const uint32_t counts[] = {0, side.fleet.corvettes, side.fleet.destroyers,
-                               side.fleet.cruisers, side.fleet.battleships};
     for (int hull = 1; hull < int(Hull::Count); ++hull) {
-        const int64_t n = int64_t(counts[hull]);
+        const int64_t n = int64_t(side.fleet[Hull(hull)]);
         if (n == 0) continue;
         out.hitPoints += fx::fromInt(n * kHulls[hull].hitPoints);
         out.weaponSlots += fx::fromInt(n * kHulls[hull].weaponSlots);
+        out.hangars += fx::fromInt(n * kHulls[hull].hangars);
         defense += n * kHulls[hull].defenseSlots;
         utility += n * kHulls[hull].utilitySlots;
         ships += n;
     }
+    // Тендеры чинят в строю, доки — на своей территории. Складываются,
+    // но упираются в общий потолок: иначе оборона у своих доков стала бы
+    // непробиваемой, и война свелась бы к сидению дома.
+    out.damageControl =
+        min(kDamageControlCap,
+            fleetDamageControl(side.fleet) +
+                kDrydockDamageControl * fx::fromInt(int64_t(side.drydocks)));
     if (ships > 0) {
         // Защита — свойство корабля, а не размера флота: тысяча корветов
         // не становится прочнее одного корвета в пересчёте на корабль.
@@ -215,12 +255,21 @@ fx roundDamage(const Aggregate& attacker, const Aggregate& target,
     fx damage = fx::zero();
 
     // Ракеты стреляют с любой дистанции — тем и ценны.
+    const fx pd = clamp(target.utilityPerShip * target.pointDefense * kPointDefensePerSlot,
+                        fx::zero(), kPointDefenseCap);
     {
-        const fx pd = clamp(target.utilityPerShip * target.pointDefense * kPointDefensePerSlot,
-                            fx::zero(), kPointDefenseCap);
         damage += attacker.weaponSlots * attacker.missile *
                   fx::fromInt(kDamageMissile) *
                   throughput(target, countersMissile()) * (fx::one() - pd);
+    }
+
+    // Ударные машины носителей. Тоже с любой дистанции, тоже мимо щитов,
+    // но ПРО режет их вдвое злее — носитель бессилен против того, кто
+    // на ПРО поставил, и страшен против того, кто на ней сэкономил.
+    if (attacker.hangars > fx::zero()) {
+        const fx intercept = clamp(pd * kPointDefenseVsCraft, fx::zero(), kPointDefenseCap);
+        damage += attacker.hangars * fx::fromInt(kDamageStrikeCraft) *
+                  throughput(target, countersMissile()) * (fx::one() - intercept);
     }
     if (band >= 1) {
         damage += attacker.weaponSlots * attacker.kinetic *
@@ -243,6 +292,11 @@ fx roundDamage(const Aggregate& attacker, const Aggregate& target,
     damage *= damageScale(attackerDoctrine);
     damage *= incomingScale(targetDoctrine);
 
+    // Ремонтная служба цели. Тендеры чинят повреждения по ходу боя —
+    // именно поэтому они снижают ПОЛУЧАЕМЫЙ урон, а не повышают прочность:
+    // прочность вернулась бы и мёртвым кораблям.
+    damage *= (fx::one() - target.damageControl);
+
     // Разброс раунда. Свой поток случайности, чтобы порядок вызовов
     // в других подсистемах не влиял на исход боя.
     const fx roll = rng.unit() * (kRoundVariance * fx::fromInt(2)) - kRoundVariance;
@@ -251,8 +305,11 @@ fx roundDamage(const Aggregate& attacker, const Aggregate& target,
 }
 
 Fleet difference(const Fleet& before, const Fleet& after) {
-    return Fleet{before.corvettes - after.corvettes, before.destroyers - after.destroyers,
-                 before.cruisers - after.cruisers, before.battleships - after.battleships};
+    Fleet out{};
+    for (size_t index = 0; index < kHullClasses; ++index) {
+        out.ships[index] = before.ships[index] - after.ships[index];
+    }
+    return out;
 }
 
 }  // namespace
@@ -270,11 +327,9 @@ FleetArmament balancedArmament() {
 }
 
 int64_t fleetHitPoints(const Fleet& fleet) {
-    const uint32_t counts[] = {0, fleet.corvettes, fleet.destroyers,
-                               fleet.cruisers, fleet.battleships};
     int64_t total = 0;
     for (int hull = 1; hull < int(Hull::Count); ++hull) {
-        total += int64_t(counts[hull]) * kHulls[hull].hitPoints;
+        total += int64_t(fleet[Hull(hull)]) * kHulls[hull].hitPoints;
     }
     return total;
 }
@@ -301,11 +356,10 @@ Fleet survivors(const Fleet& initial, fx fraction) {
     fraction = clamp(fraction, fx::zero(), fx::one());
 
     Fleet out = initial;
-    uint32_t* counts[] = {&out.corvettes, &out.destroyers, &out.cruisers, &out.battleships};
 
     int64_t total = 0;
     for (int hull = 1; hull < int(Hull::Count); ++hull) {
-        total += int64_t(*counts[hull - 1]) * kHulls[hull].hitPoints;
+        total += int64_t(out[Hull(hull)]) * kHulls[hull].hitPoints;
     }
     if (total == 0) return out;
 
@@ -317,7 +371,7 @@ Fleet survivors(const Fleet& initial, fx fraction) {
 
     for (int hull = 1; hull < int(Hull::Count); ++hull) {
         const int64_t hp = kHulls[hull].hitPoints;
-        uint32_t& count = *counts[hull - 1];
+        uint32_t& count = out[Hull(hull)];
         while (count > 0 && lost >= hp) {
             lost -= hp;
             --count;
@@ -335,11 +389,11 @@ Fleet survivors(const Fleet& initial, fx fraction) {
 
 
 uint32_t battleStrength(const Fleet& fleet, const FleetArmament&) {
-    const uint32_t counts[] = {0, fleet.corvettes, fleet.destroyers,
-                               fleet.cruisers, fleet.battleships};
     int64_t total = 0;
     for (int hull = 1; hull < int(Hull::Count); ++hull) {
-        total += int64_t(counts[hull]) * (kHulls[hull].hitPoints + kHulls[hull].weaponSlots * 40);
+        const HullStats& stats = kHulls[hull];
+        total += int64_t(fleet[Hull(hull)]) *
+                 (stats.hitPoints + stats.weaponSlots * 40 + stats.hangars * 120);
     }
     return uint32_t(total / 100);
 }

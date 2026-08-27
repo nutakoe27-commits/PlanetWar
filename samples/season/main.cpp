@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include "pw/sim/fleet.h"
 #include "pw/sim/galaxy.h"
 #include "pw/sim/production.h"
+#include "pw/sim/season.h"
 
 using namespace pw;
 using namespace pw::sim;
@@ -38,7 +40,13 @@ const Building kBuildOrder[] = {
     Building::Shipyard,
     Building::PowerPlant, Building::PowerPlant,
     Building::Mine, Building::Foundry,
+    // Инфраструктура обязана попадать в прогон. Она не производит ресурсов,
+    // и бот, застраивающий планеты одними шахтами, оставил бы пять зданий
+    // из двенадцати непроверенными на живой экономике и живой осаде.
+    Building::SupplyDepot, Building::Garrison,
+    Building::Drydock, Building::ShieldGenerator,
     Building::Laboratory, Building::Fortress,
+    Building::Habitat,
 };
 
 struct Bot {
@@ -77,15 +85,21 @@ void reportLosses(World& world, const std::vector<Snapshot>& before, int64_t tic
     for (const Snapshot& was : before) {
         const Fleet* now = world.get<Fleet>(was.entity);
         const Fleet left = now != nullptr ? *now : Fleet{};
-        if (left.corvettes == was.fleet.corvettes && left.destroyers == was.fleet.destroyers &&
-            left.cruisers == was.fleet.cruisers && left.battleships == was.fleet.battleships) {
-            continue;
+        bool same = true;
+        for (size_t hull = 0; hull < kHullClasses && same; ++hull) {
+            same = left.ships[hull] == was.fleet.ships[hull];
         }
-        std::printf("[бой t=%lld] система %u, империя %u: %u/%u/%u/%u -> %u/%u/%u/%u\n",
+        if (same) continue;
+
+        std::string before, after;
+        for (size_t hull = 0; hull < kHullClasses; ++hull) {
+            if (hull > 0) { before += '/'; after += '/'; }
+            before += std::to_string(was.fleet.ships[hull]);
+            after += std::to_string(left.ships[hull]);
+        }
+        std::printf("[бой t=%lld] система %u, империя %u: %s -> %s\n",
                     static_cast<long long>(tick), was.system, was.empire,
-                    was.fleet.corvettes, was.fleet.destroyers, was.fleet.cruisers,
-                    was.fleet.battleships, left.corvettes, left.destroyers, left.cruisers,
-                    left.battleships);
+                    before.c_str(), after.c_str());
     }
 }
 
@@ -102,6 +116,15 @@ struct Stats {
     uint32_t buildings = 0;
     uint32_t tonnage = 0;
     uint32_t fleets = 0;
+    /// Верфи и заказы в очереди.
+    ///
+    /// Появились после прогона, где четыре бота за три часа накопили
+    /// по шестьдесят тысяч сплавов и не построили НИ ОДНОГО корабля.
+    /// По отчёту было видно только следствие («флот 14 т»), а причина —
+    /// есть ли вообще верфь и стоит ли заказ в очереди — не показывалась
+    /// нигде, и её пришлось искать чтением кода.
+    uint32_t shipyards = 0;
+    uint32_t queued = 0;
 };
 
 FleetArmament build(uint8_t k, uint8_t e, uint8_t m, uint8_t sh, uint8_t ar, uint8_t pd,
@@ -193,6 +216,7 @@ int main(int argc, char** argv) {
     Ledger ledger;
     Commands commands;
     Presence presence;
+    Season season;
 
     registerGalaxyComponents(world);
     registerFleetComponents(world);
@@ -200,6 +224,7 @@ int main(int argc, char** argv) {
     registerEconomyComponents(world);
     registerProductionComponents(world);
     registerBattleComponents(world);
+    registerSeasonComponents(world);
 
     GalaxyParams params;
     params.seed = seed;
@@ -214,6 +239,12 @@ int main(int argc, char** argv) {
     world.setResource(&ledger);
     world.setResource(&commands);
     world.setResource(&presence);
+
+    // Сезон растягивается под длину прогона. Прогон на три часа обязан
+    // увидеть ВСЕ ЧЕТЫРЕ стадии, иначе Кризис и Финал не проверяются
+    // вовсе — а именно они меняют правила сильнее всего.
+    season.config.stretchTo(int64_t(hours * 3600));
+    world.setResource(&season);
 
     // --- боты ---
     //
@@ -256,7 +287,7 @@ int main(int argc, char** argv) {
 
         // Стартовый флот.
         const Entity fleet = world.create();
-        world.add<Fleet>(fleet, Fleet{8, 2, 0, 0});
+        world.add<Fleet>(fleet, makeFleet({{Hull::Corvette, 8}, {Hull::Destroyer, 2}}));
         world.add<FleetLocation>(fleet, FleetLocation{bots[i].home, bots[i].home, fx::zero()});
         world.add<MoveOrder>(fleet, MoveOrder{kNoSystem, 0});
         world.add<Owner>(fleet, Owner{bots[i].empire, 0});
@@ -296,6 +327,46 @@ int main(int argc, char** argv) {
                 if (s.index < count) owners[s.index] = o.empire;
             });
 
+            // Что у бота болит прямо сейчас. Считается ОДИН РАЗ на цикл
+            // и до обхода планет: иначе каждый бот пересчитывал бы это
+            // на каждой своей планете.
+            // Верфи считаются ПОШТУЧНО НА СИСТЕМУ, а не «есть или нет».
+            //
+            // Одна верфь осваивает 0.5 сплава в секунду, а развитая система
+            // даёт около 0.75 — то есть одной верфи системе не хватает
+            // по построению (см. kBuildRateShipyard). Бот, строивший одну,
+            // копил сплавы и не воевал: к третьему часу на счетах лежало
+            // по пятьдесят тысяч. Это было видно в отчёте как «сплавы 53666»
+            // рядом с «флот 60 т», и это не жадность бота, а арифметика.
+            std::vector<std::vector<uint32_t>> yardsBySystem(
+                bots.size(), std::vector<uint32_t>(count, 0));
+            std::vector<bool> starving(bots.size(), false);
+            std::vector<bool> blackout(bots.size(), false);
+            world.each<Planet, Owner, PlanetDevelopment, PlanetConstruction>(
+                [&](Entity, Planet& planet, Owner& o, PlanetDevelopment& d,
+                    PlanetConstruction& site) {
+                    if (o.empire >= bots.size() || planet.system >= count) return;
+                    yardsBySystem[o.empire][planet.system] +=
+                        countBuildings(planet, d, Building::Shipyard);
+                    // Верфь, которая СТРОИТСЯ, уже занята: без этого бот
+                    // каждый цикл видел «верфей ноль» — она ведь ещё
+                    // не достроена — и заказывал ещё одну. За два часа
+                    // выходило по четыре верфи на систему вместо двух.
+                    if (site.slot != PlanetConstruction::kNoSlot &&
+                        site.building == uint8_t(Building::Shipyard)) {
+                        ++yardsBySystem[o.empire][planet.system];
+                    }
+                });
+            // Учётная книга заполняется системой экономики, а политика ботов
+            // идёт ДО неё: на первом тике книга ещё пуста. Спрашивать
+            // у пустой книги — это чтение за концом вектора и падение
+            // на первом же запуске.
+            for (size_t i = 0; i < bots.size() && uint32_t(i) < ledger.size(); ++i) {
+                const Ledger::Flow& flow = ledger.at(uint32_t(i));
+                blackout[i] = flow.energy < fx::zero();
+                starving[i] = flow.foundryIdle > fx::zero();
+            }
+
             for (const Bot& bot : bots) {
                 // Сколько в каждой системе планет, ещё не принадлежащих
                 // ЭТОМУ боту. Это и есть «есть ли здесь что захватывать»:
@@ -316,6 +387,22 @@ int main(int argc, char** argv) {
                 // появлялось мгновенно. Теперь он ставит заказ, как игрок,
                 // и ждёт: иначе прогон сезона проверял бы экономику, которой
                 // в игре нет.
+                // ЧТО СТРОИТЬ — РЕШАЕТСЯ ПО НУЖДЕ, А НЕ ПО НОМЕРУ СЛОТА.
+                //
+                // Прежняя версия брала здание из списка по индексу слота:
+                // kBuildOrder[slot]. Верфь стояла шестой, а планеты в среднем
+                // застраивались на четыре слота — и до верфи бот не доходил
+                // НИКОГДА. Прогон показал ровно это: три империи из четырёх
+                // с нулём верфей, шестьдесят тысяч нетронутых сплавов
+                // и ни одного построенного корабля за три часа. Военная
+                // половина игры не проверялась вовсе, и заметно это стало
+                // только когда в отчёт добавили колонку «верфей».
+                //
+                // Теперь бот сначала закрывает дыры: нет верфи в системе —
+                // строит верфь, энергия в минусе — электростанцию, заводы
+                // простаивают без сырья — шахту. И только потом идёт
+                // по списку приоритетов.
+                constexpr uint32_t kYardsPerSystem = 2;
                 world.each<Planet, Owner, PlanetDevelopment, PlanetConstruction>(
                     [&](Entity, Planet& planet, Owner& planetOwner,
                         PlanetDevelopment& development, PlanetConstruction& site) {
@@ -323,15 +410,35 @@ int main(int argc, char** argv) {
                         if (planetOwner.empire != bot.empire) return;
                         if (site.slot != PlanetConstruction::kNoSlot) return;  // уже строит
 
-                        const uint8_t limit = std::min<uint8_t>(planet.slots, kMaxSlots);
+                        const uint8_t limit = usableSlots(planet, development);
+                        uint8_t free = kMaxSlots;
+                        uint8_t filled = 0;
                         for (uint8_t slot = 0; slot < limit; ++slot) {
-                            if (development.buildings[slot] != uint8_t(Building::None)) continue;
-                            enqueueConstruction(
-                                site, slot,
-                                kBuildOrder[slot % (sizeof(kBuildOrder) /
-                                                    sizeof(kBuildOrder[0]))]);
-                            return;  // по одному зданию за раз
+                            if (development.buildings[slot] == uint8_t(Building::None)) {
+                                if (free == kMaxSlots) free = slot;
+                            } else {
+                                ++filled;
+                            }
                         }
+                        if (free == kMaxSlots) return;  // места нет
+
+                        Building wanted = kBuildOrder[filled % (sizeof(kBuildOrder) /
+                                                                sizeof(kBuildOrder[0]))];
+                        const uint32_t yardsHere = yardsBySystem[bot.empire][planet.system];
+                        if (yardsHere < kYardsPerSystem && filled >= 2) {
+                            wanted = Building::Shipyard;
+                        } else if (starving[bot.empire] && filled >= 1) {
+                            wanted = Building::Mine;
+                        } else if (blackout[bot.empire] && filled >= 1) {
+                            wanted = Building::PowerPlant;
+                        }
+                        if (wanted == Building::Shipyard) {
+                            // Засчитываем заказ СРАЗУ: иначе все планеты
+                            // системы в одном цикле увидят «верфей мало»
+                            // и закажут по верфи каждая.
+                            ++yardsBySystem[bot.empire][planet.system];
+                        }
+                        enqueueConstruction(site, free, wanted);
                     });
 
                 // 2. Заказать корабль там, где есть верфь и хватает сплавов.
@@ -354,11 +461,22 @@ int main(int argc, char** argv) {
                                     : affordable == kCostCruiser    ? Hull::Cruiser
                                     : affordable == kCostDestroyer  ? Hull::Destroyer
                                                                     : Hull::Corvette;
+                    // Заказываем ПАРТИЮ, а не по одному кораблю.
+                    //
+                    // По одному верфь простаивала между циклами политики,
+                    // и к третьему часу на счетах лежало по пятьдесят тысяч
+                    // сплавов — империя богатела и не воевала. Размер партии
+                    // считается от казны: богатый строит крупнее, бедный
+                    // по одному, и никто не заказывает больше, чем сможет
+                    // оплатить.
+                    const uint32_t batch = std::clamp(
+                        uint32_t(empire->alloys.floorToInt() / int64_t(affordable * 4)),
+                        1u, 8u);
                     world.each<StarSystem, Owner, BuildQueue>(
                         [&](Entity, StarSystem&, Owner& o, BuildQueue& queue) {
                             if (o.empire != bot.empire) return;
                             if (queue.remaining > 0) return;
-                            enqueueBuild(queue, hull, 1);
+                            enqueueBuild(queue, hull, batch);
                         });
                 }
 
@@ -407,6 +525,11 @@ int main(int argc, char** argv) {
         // Производное владение системами — первым: и бой, и присутствие,
         // и поиск цели ботом смотрят на владельца системы и обязаны видеть
         // в одном тике одно и то же.
+        systemSeason(world, context);
+        if (season.stage != season.previousStage) {
+            std::printf("[сезон t=%lld] стадия: %s\n", static_cast<long long>(tick),
+                        stageName(season.stage));
+        }
         systemControlRollup(world, context);
         systemFleetMovement(world, context);
 
@@ -455,6 +578,8 @@ int main(int argc, char** argv) {
         // применяется буфер команд, а там появляются построенные корабли —
         // и более широкая рамка ловила бы производство, а не слияние.
         const uint32_t beforeMerge = check ? totalTonnage(world) : 0;
+        systemCrisis(world, context);
+        systemPrestige(world, context);
         systemMergeFleets(world, context);
         if (check && totalTonnage(world) != beforeMerge) {
             std::printf("НАРУШЕНИЕ t=%lld: слияние изменило тоннаж (%u -> %u)\n",
@@ -492,6 +617,12 @@ int main(int argc, char** argv) {
                     for (uint8_t slot = 0; slot < kMaxSlots; ++slot) {
                         if (d.buildings[slot] != uint8_t(Building::None)) ++stats[who].buildings;
                     }
+                    stats[who].shipyards += countBuildings(planet, d, Building::Shipyard);
+                });
+            world.each<StarSystem, Owner, BuildQueue>(
+                [&](Entity, StarSystem&, Owner& o, BuildQueue& queue) {
+                    if (o.empire >= stats.size()) return;
+                    if (queue.remaining > 0) ++stats[o.empire].queued;
                 });
             world.each<Fleet, Owner>([&](Entity, Fleet& fleet, Owner& o) {
                 if (o.empire >= stats.size()) return;
@@ -511,10 +642,12 @@ int main(int argc, char** argv) {
                         static_cast<long long>(minutes % 60), fighting);
             for (size_t i = 0; i < bots.size(); ++i) {
                 const Empire* empire = world.get<Empire>(bots[i].entity);
-                std::printf("   %-11s систем %3u  планет %3u  зданий %3u  "
-                            "флот %5u т в %2u отрядах  сплавы %6lld  энергия %6lld\n",
+                std::printf("   %-11s систем %3u  планет %3u  зданий %3u  верфей %2u  "
+                            "заказов %2u  флот %5u т в %2u отрядах  "
+                            "сплавы %6lld  энергия %6lld\n",
                             bots[i].name, stats[i].systems, stats[i].planets,
-                            stats[i].buildings, stats[i].tonnage, stats[i].fleets,
+                            stats[i].buildings, stats[i].shipyards, stats[i].queued,
+                            stats[i].tonnage, stats[i].fleets,
                             static_cast<long long>(empire->alloys.floorToInt()),
                             static_cast<long long>(empire->energy.floorToInt()));
             }

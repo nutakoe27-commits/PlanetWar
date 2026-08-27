@@ -1,22 +1,37 @@
 #include "doctest.h"
 
+#include "assets_path.h"
+
 #include <string>
 
 #include "pw/render/atlas.h"
+#include "pw/sim/fleet.h"
 
 using namespace pw;
 using namespace pw::render;
+using namespace pw::render::testing;
 
 namespace {
 
+/// Имя корпуса в ассетах. Совпадает с id в assets/src/hulls.json.
+std::string hullAssetId(sim::Hull hull) {
+    switch (hull) {
+        case sim::Hull::Corvette:   return "corvette";
+        case sim::Hull::Tender:     return "tender";
+        case sim::Hull::Destroyer:  return "destroyer";
+        case sim::Hull::Carrier:    return "carrier";
+        case sim::Hull::Cruiser:    return "cruiser";
+        case sim::Hull::Monitor:    return "monitor";
+        case sim::Hull::Battleship: return "battleship";
+        case sim::Hull::Titan:      return "titan";
+        default:                    return {};
+    }
+}
+
 /// Атлас собирается отдельным шагом и в свежем клоне его нет.
 bool loadShips(Atlas& atlas) {
-    const char* candidates[] = {"assets/build/ships.json", "../assets/build/ships.json",
-                                "../../assets/build/ships.json"};
-    for (const char* path : candidates) {
-        if (atlas.load(path)) return true;
-    }
-    return false;
+    const std::string path = testing::findAsset("assets/build/ships.json");
+    return !path.empty() && atlas.load(path);
 }
 
 }  // namespace
@@ -29,14 +44,41 @@ TEST_CASE("атлас: описание из Blender читается") {
     }
 
     CHECK(atlas.valid());
-    CHECK(atlas.textureWidth() == 1024);
-    CHECK(atlas.textureHeight() == 1024);
-    CHECK(atlas.rotationSteps() == 8);
+    CHECK(atlas.textureWidth() > 0);
+    CHECK(atlas.textureWidth() == atlas.textureHeight());
+    CHECK(atlas.rotationSteps() > 0);
 
-    // Четыре корпуса на восемь направлений плюс пять классов светил.
-    // Звезде хватает одного ракурса: шар одинаков со всех сторон, и печь
-    // для неё восемь поворотов — это восемь одинаковых кадров.
-    CHECK(atlas.frames().size() == 4 * 8 + 5);
+    // СОСТАВ, А НЕ РАЗМЕР. Раньше здесь стояли 1024, 8 поворотов и
+    // «4 корпуса × 8 + 5 звёзд» — числа CI-качества. Тест при этом молча
+    // пропускался из каталога сборки (пути к ассетам искались тремя «..»,
+    // а до корня их четыре), поэтому годами никто не замечал, что он
+    // проверяет конкретный ПРОФИЛЬ сборки, а не пайплайн.
+    //
+    // Проверять надо инвариант: у каждого корпуса ровно столько кадров,
+    // сколько в манифесте поворотов, а у каждой звезды — один. Он верен
+    // при любом качестве, и именно он ломается, когда корпус забыли
+    // добавить в сборку.
+    const size_t steps = size_t(atlas.rotationSteps());
+    for (uint8_t hull = 1; hull < uint8_t(sim::Hull::Count); ++hull) {
+        const std::string id = hullAssetId(sim::Hull(hull));
+        CAPTURE(id);
+        size_t found = 0;
+        for (const AtlasFrame& frame : atlas.frames()) {
+            if (frame.hull == id) ++found;
+        }
+        CHECK(found == steps);
+    }
+    for (const char* star : {"star_red", "star_yellow", "star_blue", "star_neutron",
+                             "star_blackhole"}) {
+        CAPTURE(star);
+        size_t found = 0;
+        for (const AtlasFrame& frame : atlas.frames()) {
+            if (frame.hull == star) ++found;
+        }
+        // Звезде хватает одного ракурса: шар одинаков со всех сторон.
+        CHECK(found == 1);
+    }
+    CHECK(atlas.frames().size() == steps * sim::kHullClasses + 5);
 }
 
 TEST_CASE("атлас: у каждого класса светила есть свой кадр") {
@@ -162,19 +204,24 @@ TEST_CASE("атлас: кадры не перекрываются") {
 TEST_CASE("атлас: поворот приводится к ближайшему испечённому направлению") {
     Atlas atlas;
     if (!loadShips(atlas)) return;
-    REQUIRE(atlas.rotationSteps() == 8);
+    const int steps = atlas.rotationSteps();
+    REQUIRE(steps > 0);
 
-    // Восемь направлений — это по 45 градусов, то есть 1/8 оборота.
-    // Углы между ними обязаны округляться к ближайшему, а не отбрасываться.
+    // Формулируем через ЧИСЛО НАПРАВЛЕНИЙ из манифеста, а не через
+    // восьмёрку: число поворотов задаётся качеством сборки, а правило
+    // округления — нет.
     CHECK(atlas.frame("cruiser", 0.0f)->rotation == 0);
-    CHECK(atlas.frame("cruiser", 0.124f)->rotation == 1);
-    CHECK(atlas.frame("cruiser", 0.126f)->rotation == 1);
-    CHECK(atlas.frame("cruiser", 0.49f)->rotation == 4);
+    CHECK(atlas.frame("cruiser", 0.49f)->rotation == steps / 2);
+
+    // Половина шага округляется вверх, чуть меньше половины — вниз.
+    const float step = 1.0f / float(steps);
+    CHECK(atlas.frame("cruiser", step * 0.49f)->rotation == 0);
+    CHECK(atlas.frame("cruiser", step * 0.51f)->rotation == 1);
 
     // Полный оборот и отрицательный угол — то же направление.
     CHECK(atlas.frame("cruiser", 1.0f)->rotation == 0);
-    CHECK(atlas.frame("cruiser", -0.25f)->rotation == 6);
-    CHECK(atlas.frame("cruiser", 2.5f)->rotation == 4);
+    CHECK(atlas.frame("cruiser", -0.25f)->rotation == steps * 3 / 4);
+    CHECK(atlas.frame("cruiser", 2.5f)->rotation == steps / 2);
 }
 
 TEST_CASE("атлас: несуществующий корпус не роняет") {

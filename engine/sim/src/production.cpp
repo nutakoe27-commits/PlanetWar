@@ -190,7 +190,7 @@ void planetConstructionTick(World& world, const TickContext&) {
             // осада в момент смены владельца, но проверка нужна и здесь, на
             // случай любого другого пути смены хозяина.
             if (owner.empire == kNoEmpire || owner.empire >= empires) return;
-            if (site.slot >= planet.slots || site.slot >= kMaxSlots) {
+            if (site.slot >= usableSlots(planet, development)) {
                 promoteQueued(site);
                 return;
             }
@@ -253,12 +253,8 @@ void systemProduction(World& world, const TickContext& context) {
             if (planet.system >= systemCount) return;
             if (owner.empire == kNoEmpire) return;
             if (owner.empire != systemOwner[planet.system]) return;
-            const uint8_t limit = std::min<uint8_t>(planet.slots, kMaxSlots);
-            for (uint8_t slot = 0; slot < limit; ++slot) {
-                if (development.buildings[slot] == uint8_t(Building::Shipyard)) {
-                    ++shipyards[planet.system];
-                }
-            }
+            shipyards[planet.system] +=
+                countBuildings(planet, development, Building::Shipyard);
         });
 
     // Казна империй копируется в вектор, тратится по ходу обхода систем

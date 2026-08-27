@@ -11,6 +11,7 @@ add_library(pw_sim STATIC
     src/galaxy.cpp
     src/fleet.cpp
     src/control.cpp
+    src/season.cpp
     src/economy.cpp
     src/commands.cpp
     src/production.cpp

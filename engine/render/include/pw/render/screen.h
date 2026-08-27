@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "pw/game/client.h"
+#include "pw/sim/season.h"
 #include "pw/render/map_view.h"
 #include "pw/render/ui.h"
 
@@ -142,9 +143,16 @@ const char* buildingIcon(uint8_t building);
 /// Чем здание полезно. Одна строка: это подсказка, а не справка.
 const char* buildingHint(uint8_t building);
 const char* hullName(uint8_t hull);
+/// Имя корпуса в винительном падеже: «заказан линкор», «строю носитель».
+const char* hullNameAccusative(uint8_t hull);
+/// Чем корпус полезен. Одна строка: у флота из восьми классов игрок обязан
+/// понимать роль каждого, не открывая справочник.
+const char* hullHint(uint8_t hull);
 const char* hullIcon(uint8_t hull);
 const char* starName(uint8_t starClass);
 const char* planetClassName(uint8_t planetClass);
+/// Что означает стадия сезона. Одна строка для подсказки.
+const char* stageHint(sim::SeasonStage stage);
 std::string noticeText(game::NoticeKind kind);
 /// Значок новости. Иконка узнаётся быстрее строки: игрок понимает,
 /// что случилось, ещё не прочитав текст.

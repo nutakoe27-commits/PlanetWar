@@ -1,10 +1,12 @@
 #include "pw/sim/battle_system.h"
 
 #include <algorithm>
+#include <map>
 #include <vector>
 
 #include "pw/core/hash.h"
 #include "pw/sim/control.h"
+#include "pw/sim/economy.h"
 #include "pw/sim/fleet.h"
 #include "pw/sim/galaxy.h"
 
@@ -43,16 +45,16 @@ struct Party {
     // Вооружение усредняется по тоннажу: мнение большого флота весит больше.
     int64_t kinetic = 0, energy = 0, missile = 0;
     int64_t pointDefense = 0, shields = 0, armour = 0;
+    uint32_t drydocks = 0;
     uint8_t doctrine = uint8_t(Doctrine::Line);
     uint32_t doctrineWeight = 0;
     size_t first = 0, last = 0;   // диапазон в списке присутствующих
 };
 
 void absorb(Party& party, const Present& present) {
-    party.fleet.corvettes += present.fleet.corvettes;
-    party.fleet.destroyers += present.fleet.destroyers;
-    party.fleet.cruisers += present.fleet.cruisers;
-    party.fleet.battleships += present.fleet.battleships;
+    for (size_t hull = 0; hull < kHullClasses; ++hull) {
+        party.fleet.ships[hull] += present.fleet.ships[hull];
+    }
     party.tonnage += present.tonnage;
 
     const int64_t weight = int64_t(present.tonnage);
@@ -82,6 +84,7 @@ BattleSide toSide(const Party& party) {
     side.armament.armour = uint8_t(party.armour / weight);
     side.armament.doctrine = party.doctrine;
     side.doctrine = Doctrine(party.doctrine);
+    side.drydocks = party.drydocks;
     return side;
 }
 
@@ -92,21 +95,14 @@ BattleSide toSide(const Party& party) {
 /// распределение воспроизводимо.
 void distribute(World& world, std::vector<Present>& present, size_t first, size_t last,
                 const Fleet& losses) {
-    const uint32_t totals[] = {0, 0, 0, 0, 0};
-    (void)totals;
-
     // Суммы по классам внутри стороны.
-    uint32_t sums[4] = {0, 0, 0, 0};
+    uint32_t sums[kHullClasses] = {};
     for (size_t i = first; i <= last; ++i) {
-        sums[0] += present[i].fleet.corvettes;
-        sums[1] += present[i].fleet.destroyers;
-        sums[2] += present[i].fleet.cruisers;
-        sums[3] += present[i].fleet.battleships;
+        for (size_t hull = 0; hull < kHullClasses; ++hull) {
+            sums[hull] += present[i].fleet.ships[hull];
+        }
     }
-
-    const uint32_t wanted[4] = {losses.corvettes, losses.destroyers,
-                                losses.cruisers, losses.battleships};
-    uint32_t assigned[4] = {0, 0, 0, 0};
+    uint32_t assigned[kHullClasses] = {};
 
     // Крупнейший флот стороны: ему достанется остаток от округления.
     size_t biggest = first;
@@ -118,22 +114,19 @@ void distribute(World& world, std::vector<Present>& present, size_t first, size_
         Fleet* fleet = world.get<Fleet>(present[i].entity);
         if (fleet == nullptr) continue;
 
-        uint32_t* counts[4] = {&fleet->corvettes, &fleet->destroyers,
-                               &fleet->cruisers, &fleet->battleships};
-        const uint32_t owned[4] = {present[i].fleet.corvettes, present[i].fleet.destroyers,
-                                   present[i].fleet.cruisers, present[i].fleet.battleships};
+        for (size_t hull = 0; hull < kHullClasses; ++hull) {
+            const uint32_t wanted = losses.ships[hull];
+            const uint32_t owned = present[i].fleet.ships[hull];
+            if (sums[hull] == 0 || wanted == 0) continue;
 
-        for (int hull = 0; hull < 4; ++hull) {
-            if (sums[hull] == 0 || wanted[hull] == 0) continue;
-            uint32_t take = uint32_t(uint64_t(wanted[hull]) * owned[hull] / sums[hull]);
+            uint32_t take = uint32_t(uint64_t(wanted) * owned / sums[hull]);
             if (i == biggest) {
                 // Остаток от целочисленного деления добираем здесь, иначе
                 // часть потерь потерялась бы при округлении вниз.
-                const uint32_t remainder = wanted[hull] - assigned[hull] - take;
-                take += remainder;
+                take += wanted - assigned[hull] - take;
             }
-            take = std::min(take, *counts[hull]);
-            *counts[hull] -= take;
+            take = std::min(take, fleet->ships[hull]);
+            fleet->ships[hull] -= take;
             assigned[hull] += take;
         }
     }
@@ -192,6 +185,20 @@ void systemBattles(World& world, const TickContext& context) {
         return a.entityIndex < b.entityIndex;
     });
 
+    // --- ремонтные доки: чья территория ---
+    //
+    // Считаем ДО боя и по владельцу ПЛАНЕТЫ, а не системы: система может
+    // быть спорной, а док стоит на конкретной планете конкретного хозяина,
+    // и чинит он только его корабли.
+    std::map<uint64_t, uint32_t> drydocks;
+    world.each<Planet, PlanetDevelopment, Owner>(
+        [&](Entity, Planet& planet, PlanetDevelopment& development, Owner& owner) {
+            if (owner.empire == kNoEmpire || planet.system >= systemCount) return;
+            const uint8_t count = countBuildings(planet, development, Building::Drydock);
+            if (count == 0) return;
+            drydocks[(uint64_t(planet.system) << 32) | owner.empire] += count;
+        });
+
     // --- откат сражений и поиск столкновений ---
     std::vector<BattleState*> states(systemCount, nullptr);
     world.each<StarSystem, BattleState>([&](Entity, StarSystem& system, BattleState& state) {
@@ -221,6 +228,10 @@ void systemBattles(World& world, const TickContext& context) {
             }
             absorb(parties.back(), present[i]);
             parties.back().last = i;
+        }
+        for (Party& party : parties) {
+            const auto found = drydocks.find((uint64_t(system) << 32) | party.empire);
+            party.drydocks = found == drydocks.end() ? 0u : found->second;
         }
 
         const size_t next = systemEnd + 1;

@@ -330,3 +330,111 @@ TEST_CASE("экономика: воспроизводится тик в тик")
     CHECK(first.empire().alloys > fx::zero());
     CHECK(first.empire().research > fx::zero());
 }
+
+// ---------------------------------------------------------------------------
+// Инфраструктура и тормоз снежного кома
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Сколько энергии империя потеряла за секунду при заданном числе планет.
+///
+/// Считаем именно РАСХОД: содержание — это единственное, что зависит
+/// от размера империи, и мерить его надо в отрыве от доходов.
+double fleetUpkeepPerSecond(uint32_t planetCount, uint32_t depots) {
+    Economy world;
+    world.own(1);
+
+    // Планеты БЕЗ застройки: нам нужен только их счёт, а не их доход.
+    for (uint32_t index = 0; index < planetCount; ++index) {
+        world.colonise(1, PlanetClass::Barren, Specialization::None, {});
+    }
+    for (uint32_t index = 0; index < depots; ++index) {
+        world.colonise(1, PlanetClass::Barren, Specialization::None,
+                       {Building::SupplyDepot});
+    }
+    world.garrison(1, makeFleet({{Hull::Battleship, 10}}));
+
+    // Читаем ПОТОК из учётной книги, а не убыль казны: казна обрезается
+    // по нулю, а стартовая энергия у империи как раз ноль — расход был бы
+    // не виден вовсе. Ровно на этом первая версия теста и показала «0 > 0».
+    world.run(1);
+    return -world.ledger.at(0).energy.toDouble();
+}
+
+}  // namespace
+
+TEST_CASE("содержание: большая империя платит за флот дороже") {
+    // ГЛАВНОЕ ЧИСЛО ДЛЯ СЕРВЕРА НА ТЫСЯЧУ ИГРОКОВ. Без него первый, кто
+    // вырвался вперёд, растёт быстрее всех просто потому, что уже впереди:
+    // больше планет — больше дохода — больше флота — больше планет.
+    // К третьей неделе сезона играть остаётся некому.
+    const double small = fleetUpkeepPerSecond(/*планет=*/4, /*узлов=*/0);
+    const double medium = fleetUpkeepPerSecond(/*планет=*/20, /*узлов=*/0);
+    const double huge = fleetUpkeepPerSecond(/*планет=*/40, /*узлов=*/0);
+
+    CHECK(medium > small);
+    CHECK(huge > medium);
+
+    // Первые восемь планет бесплатны: империя нормального размера
+    // не должна чувствовать тормоз вовсе.
+    CHECK(fleetUpkeepPerSecond(4, 0) == doctest::Approx(fleetUpkeepPerSecond(8, 0)));
+
+    // Но и не разорительно: гигант платит вдвое с лишним, а не вдесятеро.
+    // Иначе тормоз превращается в потолок, то есть в тот самый запрет,
+    // от которого мы уходили.
+    CHECK(huge < small * 3.0);
+}
+
+TEST_CASE("узел снабжения: платит за право расти дальше") {
+    // Ограничитель обязан иметь ответ. Иначе он не задача, а стена.
+    const double without = fleetUpkeepPerSecond(/*планет=*/40, /*узлов=*/0);
+    const double withOne = fleetUpkeepPerSecond(/*планет=*/39, /*узлов=*/1);
+    const double withFour = fleetUpkeepPerSecond(/*планет=*/36, /*узлов=*/4);
+
+    CHECK(withOne < without);
+    CHECK(withFour < withOne);
+
+    // Но бесплатным флот не станет никогда.
+    const double withMany = fleetUpkeepPerSecond(/*планет=*/30, /*узлов=*/10);
+    CHECK(withMany > 0.0);
+}
+
+TEST_CASE("хабитат: добавляет слоты, и застройка в них работает") {
+    Economy world;
+    world.own(1);
+
+    // Планета на четыре слота: хабитат, а дальше — три шахты и ещё две
+    // сверх её собственного предела.
+    const Entity planet = world.colonise(
+        1, PlanetClass::Barren, Specialization::None,
+        {Building::Habitat, Building::Mine, Building::Mine, Building::Mine,
+         Building::Mine, Building::Mine});
+    world.world.get<Planet>(planet)->slots = 4;
+
+    const PlanetDevelopment& development = *world.world.get<PlanetDevelopment>(planet);
+    const Planet& data = *world.world.get<Planet>(planet);
+
+    CHECK(usableSlots(data, development) == 4 + kHabitatSlots);
+
+    // Пять шахт работают, а не три: слоты за пределом собственного лимита
+    // планеты открыл хабитат.
+    world.run(kSecond * 100);
+    const double perMine = kOutputMine.toDouble() * 100.0;
+    CHECK(world.empire().minerals.toDouble() > perMine * 4.5);
+}
+
+TEST_CASE("хабитат: без него лишние слоты не работают") {
+    Economy world;
+    world.own(1);
+    const Entity planet = world.colonise(
+        1, PlanetClass::Barren, Specialization::None,
+        {Building::Mine, Building::Mine, Building::Mine, Building::Mine,
+         Building::Mine, Building::Mine});
+    world.world.get<Planet>(planet)->slots = 4;
+
+    world.run(kSecond * 100);
+    // Ровно четыре шахты, а не шесть.
+    const double perMine = kOutputMine.toDouble() * 100.0;
+    CHECK(world.empire().minerals.toDouble() < perMine * 4.5);
+}

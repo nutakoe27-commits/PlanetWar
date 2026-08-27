@@ -91,21 +91,21 @@ double pathDistance(const Galaxy& galaxy, const std::vector<uint32_t>& path) {
 // ---------------------------------------------------------------------------
 
 TEST_CASE("флот: скорость задаёт самый медленный корабль") {
-    CHECK(fleetSpeed(Fleet{10, 0, 0, 0}) == kSpeedCorvette);
-    CHECK(fleetSpeed(Fleet{10, 5, 0, 0}) == kSpeedDestroyer);
-    CHECK(fleetSpeed(Fleet{10, 5, 2, 0}) == kSpeedCruiser);
+    CHECK(fleetSpeed(makeFleet({{Hull::Corvette, 10}})) == kSpeedCorvette);
+    CHECK(fleetSpeed(makeFleet({{Hull::Corvette, 10}, {Hull::Destroyer, 5}})) == kSpeedDestroyer);
+    CHECK(fleetSpeed(makeFleet({{Hull::Corvette, 10}, {Hull::Destroyer, 5}, {Hull::Cruiser, 2}})) == kSpeedCruiser);
     // Один линкор замедляет весь флот — это и делает рейдовые отряды
     // отдельной ролью, а не побочным занятием линейных сил.
-    CHECK(fleetSpeed(Fleet{100, 0, 0, 1}) == kSpeedBattleship);
-    CHECK(fleetSpeed(Fleet{0, 0, 0, 0}) == fx::zero());
+    CHECK(fleetSpeed(makeFleet({{Hull::Corvette, 100}, {Hull::Battleship, 1}})) == kSpeedBattleship);
+    CHECK(fleetSpeed(Fleet{}) == fx::zero());
 }
 
 TEST_CASE("флот: тоннаж и пустота") {
-    CHECK(fleetEmpty(Fleet{0, 0, 0, 0}));
-    CHECK_FALSE(fleetEmpty(Fleet{1, 0, 0, 0}));
-    CHECK(fleetTonnage(Fleet{1, 1, 1, 1}) == 1u + 3u + 8u + 20u);
+    CHECK(fleetEmpty(Fleet{}));
+    CHECK_FALSE(fleetEmpty(makeFleet({{Hull::Corvette, 1}})));
+    CHECK(fleetTonnage(makeFleet({{Hull::Corvette, 1}, {Hull::Destroyer, 1}, {Hull::Cruiser, 1}, {Hull::Battleship, 1}})) == 1u + 3u + 8u + 20u);
     // Линкор весит больше четырёх корветов — потери должны быть ощутимы.
-    CHECK(fleetTonnage(Fleet{4, 0, 0, 0}) < fleetTonnage(Fleet{0, 0, 0, 1}));
+    CHECK(fleetTonnage(makeFleet({{Hull::Corvette, 4}})) < fleetTonnage(makeFleet({{Hull::Battleship, 1}})));
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +191,7 @@ TEST_CASE("путь: первый шаг совпадает со вторым у
 TEST_CASE("движение: флот доходит до цели") {
     Space space;
     const uint32_t target = 90;
-    const Entity fleet = space.spawnFleet(0, Fleet{4, 0, 0, 0});
+    const Entity fleet = space.spawnFleet(0, makeFleet({{Hull::Corvette, 4}}));
     space.world.get<MoveOrder>(fleet)->target = target;
 
     // С запасом: 200 систем, диаметр десятки прыжков, корветы быстрые.
@@ -223,8 +223,8 @@ TEST_CASE("движение: медленный флот идёт дольше �
         return ticks;
     };
 
-    const uint64_t fast = ticksToArrive(Fleet{5, 0, 0, 0});
-    const uint64_t slow = ticksToArrive(Fleet{5, 0, 0, 1});
+    const uint64_t fast = ticksToArrive(makeFleet({{Hull::Corvette, 5}}));
+    const uint64_t slow = ticksToArrive(makeFleet({{Hull::Corvette, 5}, {Hull::Battleship, 1}}));
     CHECK(slow > fast);
     // Отношение времён обязано примерно совпасть с отношением скоростей.
     const double ratio = double(slow) / double(fast);
@@ -239,7 +239,7 @@ TEST_CASE("движение: флот проходит через промежу
     std::vector<uint32_t> path;
     REQUIRE(space.galaxy.findPath(0, target, path) > 1);
 
-    const Entity fleet = space.spawnFleet(0, Fleet{3, 0, 0, 0});
+    const Entity fleet = space.spawnFleet(0, makeFleet({{Hull::Corvette, 3}}));
     space.world.get<MoveOrder>(fleet)->target = target;
 
     std::vector<uint32_t> visited;
@@ -266,7 +266,7 @@ TEST_CASE("движение: флот проходит через промежу
 
 TEST_CASE("движение: недостижимая цель снимает приказ") {
     Space space;
-    const Entity fleet = space.spawnFleet(0, Fleet{2, 0, 0, 0});
+    const Entity fleet = space.spawnFleet(0, makeFleet({{Hull::Corvette, 2}}));
     space.world.get<MoveOrder>(fleet)->target = 99999;  // такой системы нет
 
     space.run(5);
@@ -277,7 +277,7 @@ TEST_CASE("движение: недостижимая цель снимает п
 
 TEST_CASE("движение: пустой флот никуда не идёт") {
     Space space;
-    const Entity fleet = space.spawnFleet(0, Fleet{0, 0, 0, 0});
+    const Entity fleet = space.spawnFleet(0, Fleet{});
     space.world.get<MoveOrder>(fleet)->target = 50;
 
     space.run(1000);
@@ -291,7 +291,7 @@ TEST_CASE("движение: без графа в ресурсах ничего 
     registerFleetComponents(world);
 
     const Entity fleet = world.create();
-    world.add<Fleet>(fleet, Fleet{1, 0, 0, 0});
+    world.add<Fleet>(fleet, makeFleet({{Hull::Corvette, 1}}));
     world.add<FleetLocation>(fleet, FleetLocation{0, 0, fx::zero()});
     world.add<MoveOrder>(fleet, MoveOrder{5, 0});
 
@@ -307,7 +307,7 @@ TEST_CASE("движение: воспроизводится тик в тик") {
     for (Space* space : {&first, &second}) {
         for (uint32_t i = 0; i < 40; ++i) {
             const Entity fleet = space->spawnFleet(i * 3,
-                Fleet{i % 5, (i + 1) % 3, i % 2, (i % 7 == 0) ? 1u : 0u});
+                makeFleet({{Hull::Corvette, i % 5}, {Hull::Destroyer, (i + 1) % 3}, {Hull::Cruiser, i % 2}, {Hull::Battleship, (i % 7 == 0) ? 1u : 0u}}));
             space->world.get<MoveOrder>(fleet)->target = (i * 7 + 11) % 140;
         }
     }
@@ -319,4 +319,66 @@ TEST_CASE("движение: воспроизводится тик в тик") {
     // Сорок флотов, три тысячи тиков, поиск пути на каждом прибытии —
     // и ни одного расхождения.
     CHECK(first.world.hash() == second.world.hash());
+}
+
+// ---------------------------------------------------------------------------
+// Согласованность таблиц корпусов
+// ---------------------------------------------------------------------------
+
+TEST_CASE("корпуса: цена строго растёт с классом") {
+    // От этого порядка зависит модель потерь: `survivors` снимает корабли
+    // с дешёвых классов первыми, и «дешёвый» там означает просто «раньше
+    // в перечислении». Разъедься порядок цен с порядком классов — эскорт
+    // начал бы гибнуть позже линкоров, и смешанный флот потерял бы смысл.
+    for (uint8_t hull = 2; hull < uint8_t(Hull::Count); ++hull) {
+        CAPTURE(int(hull));
+        CHECK(hullCost(Hull(hull)) > hullCost(Hull(hull - 1)));
+    }
+}
+
+TEST_CASE("корпуса: у каждого класса есть цена, скорость и вес") {
+    // Таблица характеристик заполняется руками, и пустая строка в ней
+    // означала бы корабль, который ничего не стоит и никуда не летит.
+    for (uint8_t hull = 1; hull < uint8_t(Hull::Count); ++hull) {
+        CAPTURE(int(hull));
+        const Fleet one = makeFleet({{Hull(hull), 1}});
+        CHECK(hullCost(Hull(hull)) > 0);
+        CHECK(hullSpeed(Hull(hull)) > fx::zero());
+        CHECK(fleetTonnage(one) > 0);
+        CHECK(fleetSpeed(one) == hullSpeed(Hull(hull)));
+    }
+}
+
+TEST_CASE("роли: тендер не стреляет, монитор осаждает, носитель бьёт издали") {
+    // Три роли — три РАЗНЫХ ответа. Если бы они отличались только числами,
+    // «правильным» флотом всегда был бы самый дорогой корпус, который игрок
+    // может себе позволить, и выбора бы не было.
+
+    // Монитор при равной цене ломает оборону планеты в разы лучше линкора.
+    const uint32_t monitorSiege = fleetSiegePower(makeFleet({{Hull::Monitor, 2}}));
+    const uint32_t lineSiege = fleetSiegePower(makeFleet({{Hull::Battleship, 1}}));
+    CHECK(monitorSiege > lineSiege * 2);
+    // ...и при этом он дешевле линкора.
+    CHECK(hullCost(Hull::Monitor) * 2 < hullCost(Hull::Battleship) * 3);
+
+    // Корветы воюют, но осаду почти не двигают.
+    CHECK(fleetSiegePower(makeFleet({{Hull::Corvette, 100}})) == 0);
+
+    // Тендер снижает потери, и отдача упирается в потолок: флот из одних
+    // тендеров не должен становиться неуязвимым.
+    CHECK(fleetDamageControl(Fleet{}) == fx::zero());
+    CHECK(fleetDamageControl(makeFleet({{Hull::Battleship, 10}})) == fx::zero());
+    const fx few = fleetDamageControl(makeFleet({{Hull::Tender, 1}, {Hull::Battleship, 9}}));
+    const fx many = fleetDamageControl(makeFleet({{Hull::Tender, 5}, {Hull::Battleship, 5}}));
+    CHECK(few > fx::zero());
+    CHECK(many > few);
+    CHECK(fleetDamageControl(makeFleet({{Hull::Tender, 100}})) <= fx::fromFraction(7, 20));
+}
+
+TEST_CASE("роли: скорость осадного флота ниже скорости ударного") {
+    // Осада — операция, которую готовят. Если бы монитор шёл наравне
+    // с линкором, осадный флот стал бы просто ещё одним линейным.
+    CHECK(hullSpeed(Hull::Monitor) < hullSpeed(Hull::Battleship));
+    CHECK(hullSpeed(Hull::Titan) < hullSpeed(Hull::Battleship));
+    CHECK(hullSpeed(Hull::Corvette) > hullSpeed(Hull::Destroyer));
 }

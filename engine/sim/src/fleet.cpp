@@ -16,46 +16,102 @@ void registerFleetComponents(World& world) {
     world.registerComponent<MoveOrder>("MoveOrder");
 }
 
+namespace {
+
+/// Всё, что отличает один корпус от другого, — одной таблицей.
+///
+/// Раньше цена жила в switch, скорость в цепочке if, тоннаж в формуле,
+/// а осадная мощь не жила нигде. Добавить корпус означало вспомнить
+/// про четыре места; забыть одно — получить корабль, который ничего
+/// не весит или летает с нулевой скоростью. Таблица делает пропуск
+/// невозможным: у строки либо есть все поля, либо она не компилируется.
+struct HullSpec {
+    uint32_t cost;      // сплавов
+    fx speed;           // игровых единиц в секунду
+    uint32_t tonnage;   // вес в очках престижа и в оценке сил
+    uint32_t siege;     // вклад в штурм планеты
+};
+
+const HullSpec& specOf(Hull hull) {
+    static const HullSpec table[kHullClasses] = {
+        /* корвет  */ {kCostCorvette,   kSpeedCorvette,   1,  0},
+        /* тендер  */ {kCostTender,     kSpeedTender,     2,  0},
+        /* эсминец */ {kCostDestroyer,  kSpeedDestroyer,  3,  1},
+        /* носитель*/ {kCostCarrier,    kSpeedCarrier,    7,  2},
+        /* крейсер */ {kCostCruiser,    kSpeedCruiser,    8,  3},
+        /* монитор */ {kCostMonitor,    kSpeedMonitor,   10, 16},
+        /* линкор  */ {kCostBattleship, kSpeedBattleship, 20, 6},
+        /* титан   */ {kCostTitan,      kSpeedTitan,     70, 24},
+    };
+    static const HullSpec none{};
+    if (hull == Hull::None || hull >= Hull::Count) return none;
+    return table[size_t(hull) - 1];
+}
+
+}  // namespace
+
+fx hullSpeed(Hull hull) { return specOf(hull).speed; }
+
 fx fleetSpeed(const Fleet& fleet) {
-    // Ищем самый медленный ПРИСУТСТВУЮЩИЙ класс. Порядок проверок от
-    // медленного к быстрому, поэтому первое совпадение и есть ответ.
-    if (fleet.battleships > 0) return kSpeedBattleship;
-    if (fleet.cruisers > 0) return kSpeedCruiser;
-    if (fleet.destroyers > 0) return kSpeedDestroyer;
-    if (fleet.corvettes > 0) return kSpeedCorvette;
-    return fx::zero();
+    // Скорость флота задаёт самый медленный ПРИСУТСТВУЮЩИЙ корабль.
+    // Перебираем все классы и берём минимум: цепочка if от медленного
+    // к быстрому требовала помнить порядок скоростей, а он не совпадает
+    // с порядком цен — монитор дешевле линкора и медленнее его.
+    fx slowest = fx::zero();
+    for (size_t index = 0; index < kHullClasses; ++index) {
+        if (fleet.ships[index] == 0) continue;
+        const fx speed = specOf(Hull(index + 1)).speed;
+        if (slowest <= fx::zero() || speed < slowest) slowest = speed;
+    }
+    return slowest;
 }
 
 uint32_t fleetTonnage(const Fleet& fleet) {
     // Тоннаж растёт быстрее числа слотов: линкор дороже четырёх корветов
     // и в производстве, и в потерях.
-    return fleet.corvettes * 1u + fleet.destroyers * 3u +
-           fleet.cruisers * 8u + fleet.battleships * 20u;
+    uint32_t total = 0;
+    for (size_t index = 0; index < kHullClasses; ++index) {
+        total += fleet.ships[index] * specOf(Hull(index + 1)).tonnage;
+    }
+    return total;
 }
 
-uint32_t hullCost(Hull hull) {
-    switch (hull) {
-        case Hull::Corvette:   return kCostCorvette;
-        case Hull::Destroyer:  return kCostDestroyer;
-        case Hull::Cruiser:    return kCostCruiser;
-        case Hull::Battleship: return kCostBattleship;
-        default:               return 0;
+uint32_t fleetSiegePower(const Fleet& fleet) {
+    uint32_t total = 0;
+    for (size_t index = 0; index < kHullClasses; ++index) {
+        total += fleet.ships[index] * specOf(Hull(index + 1)).siege;
     }
+    return total;
 }
+
+fx fleetDamageControl(const Fleet& fleet) {
+    uint32_t tenders = fleet[Hull::Tender];
+    if (tenders == 0) return fx::zero();
+
+    uint32_t ships = 0;
+    for (size_t index = 0; index < kHullClasses; ++index) ships += fleet.ships[index];
+    if (ships == 0) return fx::zero();
+
+    // Один тендер на десять кораблей снимает десятую часть урона. Дальше
+    // отдача падает: потолок в 35% выбран так, чтобы флот из одних тендеров
+    // (которые не стреляют) всё равно проигрывал флоту с пушками.
+    const fx share = fx::fromFraction(int64_t(tenders), int64_t(ships));
+    return min(share, fx::fromFraction(7, 20));
+}
+
+uint32_t hullCost(Hull hull) { return specOf(hull).cost; }
 
 void fleetAdd(Fleet& fleet, Hull hull, uint32_t count) {
-    switch (hull) {
-        case Hull::Corvette:   fleet.corvettes += count; break;
-        case Hull::Destroyer:  fleet.destroyers += count; break;
-        case Hull::Cruiser:    fleet.cruisers += count; break;
-        case Hull::Battleship: fleet.battleships += count; break;
-        default: break;
-    }
+    if (hull == Hull::None || hull >= Hull::Count) return;
+    fleet[hull] += count;
 }
 
 uint32_t fleetCost(const Fleet& fleet) {
-    return fleet.corvettes * kCostCorvette + fleet.destroyers * kCostDestroyer +
-           fleet.cruisers * kCostCruiser + fleet.battleships * kCostBattleship;
+    uint32_t total = 0;
+    for (size_t index = 0; index < kHullClasses; ++index) {
+        total += fleet.ships[index] * specOf(Hull(index + 1)).cost;
+    }
+    return total;
 }
 
 void systemFleetMovement(World& world, const TickContext& context) {
@@ -195,10 +251,9 @@ void systemMergeFleets(World& world, const TickContext&) {
             Fleet* into = world.get<Fleet>(candidates[index].entity);
             if (into != nullptr) {
                 for (size_t i = index + 1; i <= end; ++i) {
-                    into->corvettes += candidates[i].fleet.corvettes;
-                    into->destroyers += candidates[i].fleet.destroyers;
-                    into->cruisers += candidates[i].fleet.cruisers;
-                    into->battleships += candidates[i].fleet.battleships;
+                    for (size_t hull = 0; hull < kHullClasses; ++hull) {
+                        into->ships[hull] += candidates[i].fleet.ships[hull];
+                    }
                     // Опустошаем сразу: до применения буфера мир не должен
                     // содержать удвоенных кораблей.
                     Fleet* from = world.get<Fleet>(candidates[i].entity);

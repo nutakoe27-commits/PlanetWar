@@ -70,10 +70,10 @@ struct FleetView {
     bool operator==(const FleetView& o) const {
         return empire == o.empire && system == o.system && nextSystem == o.nextSystem &&
                progress.raw() == o.progress.raw() &&
-               composition.corvettes == o.composition.corvettes &&
-               composition.destroyers == o.composition.destroyers &&
-               composition.cruisers == o.composition.cruisers &&
-               composition.battleships == o.composition.battleships;
+               composition[sim::Hull::Corvette] == o.composition[sim::Hull::Corvette] &&
+               composition[sim::Hull::Destroyer] == o.composition[sim::Hull::Destroyer] &&
+               composition[sim::Hull::Cruiser] == o.composition[sim::Hull::Cruiser] &&
+               composition[sim::Hull::Battleship] == o.composition[sim::Hull::Battleship];
     }
     bool operator!=(const FleetView& o) const { return !(*this == o); }
 };
@@ -127,6 +127,28 @@ struct EmpireView {
     fx alloys = fx::zero();
     fx research = fx::zero();
     fx influence = fx::zero();
+
+    /// Стадия сезона и сколько до следующей.
+    ///
+    /// Едет в снапшоте, а не считается клиентом из своего тика: клиент
+    /// не обязан знать длительности стадий, а сервер обязан быть
+    /// единственным источником правды о времени. Два байта на кадр —
+    /// цена того, что «до Конфликта осталось 40 минут» у всех совпадает.
+    uint8_t stage = 0;
+    /// Секунд до следующей стадии. Ноль на Финале.
+    uint32_t stageSecondsLeft = 0;
+
+    /// Престиж: пять треков и сумма. Игрок обязан видеть, за что играет.
+    uint32_t prestigeTerritory = 0;
+    uint32_t prestigeEconomy = 0;
+    uint32_t prestigeScience = 0;
+    uint32_t prestigeWar = 0;
+    uint32_t prestigeDiplomacy = 0;
+
+    uint32_t prestigeTotal() const {
+        return prestigeTerritory + prestigeEconomy + prestigeScience + prestigeWar +
+               prestigeDiplomacy;
+    }
 };
 
 /// Полное состояние мира глазами одного клиента.

@@ -1,5 +1,7 @@
 #include "doctest.h"
 
+#include "assets_path.h"
+
 #include <cmath>
 #include <fstream>
 
@@ -8,24 +10,11 @@
 
 using namespace pw;
 using namespace pw::render;
+using namespace pw::render::testing;
 
 namespace {
 
-/// Где лежат собранные ассеты.
-///
-/// Тест запускают и из корня репозитория, и из каталога сборки. Искать
-/// в обоих местах дешевле, чем однажды получить «тест зелёный, потому
-/// что он ничего не проверил».
-std::string findManifest() {
-    const char* candidates[] = {"assets/build/planets.json",
-                                "../assets/build/planets.json",
-                                "../../assets/build/planets.json"};
-    for (const char* path : candidates) {
-        std::ifstream probe(path);
-        if (probe) return path;
-    }
-    return {};
-}
+std::string findManifest() { return testing::findAsset("assets/build/planets.json"); }
 
 /// Система с планетами и вид на неё. Ни окна, ни видеокарты: SystemView
 /// отдаёт массивы экземпляров, и всё, что нужно проверить, — их

@@ -43,10 +43,17 @@ constexpr float kStarRadius = 7.0f;
 constexpr float kShipHalfSize[] = {
     0.0f,    // Hull::None
     4.4f,    // корвет
+    4.8f,    // тендер
     5.4f,    // эсминец
+    7.0f,    // носитель
     6.8f,    // крейсер
+    6.4f,    // монитор
     8.4f,    // линкор
+    11.0f,   // титан
 };
+static_assert(sizeof(kShipHalfSize) / sizeof(kShipHalfSize[0]) ==
+                  size_t(sim::Hull::Count),
+              "размеры значков обязаны покрывать все корпуса");
 
 /// На сколько сместить стоящий флот от звезды.
 ///
@@ -105,19 +112,29 @@ void pushCircle(std::vector<rhi::LineVertex>& out, float x, float y, float radiu
 /// Флот — это счётчики, а не отдельные корабли, и рисовать его одним
 /// значком правильнее, чем сотней спрайтов: игрок принимает решение
 /// по флоту целиком.
+/// Каким кораблём рисовать отряд на карте.
+///
+/// САМЫМ КРУПНЫМ ПРИСУТСТВУЮЩИМ, а не самым многочисленным. Значок отвечает
+/// на вопрос «с чем я столкнусь», и один титан в отряде корветов важнее
+/// сотни корветов: именно он решит бой. Перебор идёт сверху вниз по
+/// перечислению, то есть от самого дорогого корпуса к самому дешёвому.
 sim::Hull dominantHull(const sim::Fleet& fleet) {
-    if (fleet.battleships > 0) return sim::Hull::Battleship;
-    if (fleet.cruisers > 0) return sim::Hull::Cruiser;
-    if (fleet.destroyers > 0) return sim::Hull::Destroyer;
+    for (uint8_t hull = uint8_t(sim::Hull::Count); hull-- > 1;) {
+        if (fleet[sim::Hull(hull)] > 0) return sim::Hull(hull);
+    }
     return sim::Hull::Corvette;
 }
 
 const char* hullSprite(sim::Hull hull) {
     switch (hull) {
         case sim::Hull::Corvette:   return "corvette";
+        case sim::Hull::Tender:     return "tender";
         case sim::Hull::Destroyer:  return "destroyer";
+        case sim::Hull::Carrier:    return "carrier";
         case sim::Hull::Cruiser:    return "cruiser";
+        case sim::Hull::Monitor:    return "monitor";
         case sim::Hull::Battleship: return "battleship";
+        case sim::Hull::Titan:      return "titan";
         default:                    return "corvette";
     }
 }

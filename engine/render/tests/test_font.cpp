@@ -1,5 +1,7 @@
 #include "doctest.h"
 
+#include "assets_path.h"
+
 #include <string>
 
 #include "pw/core/rng.h"
@@ -7,16 +9,13 @@
 
 using namespace pw;
 using namespace pw::render;
+using namespace pw::render::testing;
 
 namespace {
 
 bool loadFont(Font& font) {
-    const char* candidates[] = {"assets/build/font.json", "../assets/build/font.json",
-                                "../../assets/build/font.json"};
-    for (const char* path : candidates) {
-        if (font.load(path)) return true;
-    }
-    return false;
+    const std::string path = testing::findAsset("assets/build/font.json");
+    return !path.empty() && font.load(path);
 }
 
 }  // namespace

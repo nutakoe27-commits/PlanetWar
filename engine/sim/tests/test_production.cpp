@@ -119,8 +119,8 @@ constexpr int64_t kSecond = kTicksPerSecond;
 
 TEST_CASE("команды: применяются в порядке добавления") {
     Yard yard;
-    yard.commands.spawnFleet(0, 1, Fleet{1, 0, 0, 0});
-    yard.commands.spawnFleet(0, 2, Fleet{0, 1, 0, 0});
+    yard.commands.spawnFleet(0, 1, makeFleet({{Hull::Corvette, 1}}));
+    yard.commands.spawnFleet(0, 2, makeFleet({{Hull::Destroyer, 1}}));
     CHECK(yard.commands.size() == 2);
 
     TickContext context;
@@ -134,7 +134,7 @@ TEST_CASE("команды: применяются в порядке добавл
 
 TEST_CASE("команды: удаление безопасно повторять") {
     Yard yard;
-    yard.commands.spawnFleet(0, 1, Fleet{1, 0, 0, 0});
+    yard.commands.spawnFleet(0, 1, makeFleet({{Hull::Corvette, 1}}));
     TickContext context;
     systemApplyCommands(yard.world, context);
 
@@ -150,13 +150,13 @@ TEST_CASE("команды: удаление безопасно повторят�
 
 TEST_CASE("команды: созданный флот сразу пригоден к использованию") {
     Yard yard;
-    yard.commands.spawnFleet(0, 5, Fleet{2, 0, 0, 0});
+    yard.commands.spawnFleet(0, 5, makeFleet({{Hull::Corvette, 2}}));
     TickContext context;
     systemApplyCommands(yard.world, context);
 
     yard.world.each<Fleet, FleetLocation, MoveOrder, Owner>(
         [&](Entity, Fleet& fleet, FleetLocation& location, MoveOrder& order, Owner& owner) {
-            CHECK(fleet.corvettes == 2u);
+            CHECK(fleet[Hull::Corvette] == 2u);
             CHECK(location.system == 5u);
             CHECK(location.nextSystem == 5u);   // стоит, а не летит в никуда
             CHECK(order.target == kNoSystem);    // без приказа
@@ -300,8 +300,8 @@ TEST_CASE("постройка: ничья система не строит") {
 
 TEST_CASE("роспуск: пустой флот исчезает") {
     Yard yard;
-    yard.commands.spawnFleet(0, 1, Fleet{0, 0, 0, 0});
-    yard.commands.spawnFleet(0, 1, Fleet{3, 0, 0, 0});
+    yard.commands.spawnFleet(0, 1, Fleet{});
+    yard.commands.spawnFleet(0, 1, makeFleet({{Hull::Corvette, 3}}));
     TickContext context;
     systemApplyCommands(yard.world, context);
     CHECK(yard.fleetsOf(0) == 2);
@@ -410,9 +410,9 @@ TEST_CASE("слияние: свои флоты в одной системе об
     yard.world.registerComponent<FleetArmament>("FleetArmament");
     const FleetArmament same = withArmament(50, 50);
 
-    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
-    stationed(yard, 1, 0, Fleet{3, 1, 0, 0}, same);
-    stationed(yard, 1, 0, Fleet{0, 0, 1, 0}, same);
+    stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 5}}), same);
+    stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 3}, {Hull::Destroyer, 1}}), same);
+    stationed(yard, 1, 0, makeFleet({{Hull::Cruiser, 1}}), same);
     CHECK(yard.fleetsOf(0) == 3);
 
     mergeTick(yard);
@@ -425,8 +425,8 @@ TEST_CASE("слияние: разное вооружение не смешива
     Yard yard;
     yard.world.registerComponent<FleetArmament>("FleetArmament");
 
-    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, withArmament(100, 0));
-    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, withArmament(0, 100));
+    stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 5}}), withArmament(100, 0));
+    stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 5}}), withArmament(0, 100));
 
     mergeTick(yard);
     // Смешав их, мы потеряли бы выбор игрока, а вместе с ним контр-систему.
@@ -438,8 +438,8 @@ TEST_CASE("слияние: чужие флоты не сливаются") {
     yard.world.registerComponent<FleetArmament>("FleetArmament");
     const FleetArmament same = withArmament(50, 50);
 
-    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
-    stationed(yard, 1, 7, Fleet{5, 0, 0, 0}, same);
+    stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 5}}), same);
+    stationed(yard, 1, 7, makeFleet({{Hull::Corvette, 5}}), same);
 
     mergeTick(yard);
     CHECK(yard.fleetsOf(0) == 1);
@@ -451,8 +451,8 @@ TEST_CASE("слияние: флот с приказом не трогают") {
     yard.world.registerComponent<FleetArmament>("FleetArmament");
     const FleetArmament same = withArmament(50, 50);
 
-    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
-    const Entity ordered = stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
+    stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 5}}), same);
+    const Entity ordered = stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 5}}), same);
     yard.world.get<MoveOrder>(ordered)->target = 9;
 
     mergeTick(yard);
@@ -465,8 +465,8 @@ TEST_CASE("слияние: флоты в разных системах оста�
     yard.world.registerComponent<FleetArmament>("FleetArmament");
     const FleetArmament same = withArmament(50, 50);
 
-    stationed(yard, 1, 0, Fleet{5, 0, 0, 0}, same);
-    stationed(yard, 2, 0, Fleet{5, 0, 0, 0}, same);
+    stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 5}}), same);
+    stationed(yard, 2, 0, makeFleet({{Hull::Corvette, 5}}), same);
 
     mergeTick(yard);
     CHECK(yard.fleetsOf(0) == 2);

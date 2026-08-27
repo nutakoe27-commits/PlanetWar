@@ -74,7 +74,53 @@ uint32_t buildingCost(Building building) {
         // планету и строить флот. Право обязано стоить времени.
         case Building::Fortress:   return 150;
         case Building::Shipyard:   return 200;
-        default:                   return 0;
+        // Инфраструктура. Дороже производственных зданий намеренно: она
+        // окупается не доходом, а тем, чего не случилось, и такую покупку
+        // человек откладывает до последнего. Высокая цена делает решение
+        // «строю снабжение вместо ещё одной шахты» осознанным, а не
+        // машинальным — а именно осознанность здесь и нужна.
+        case Building::SupplyDepot:     return 180;
+        case Building::ShieldGenerator: return 220;
+        case Building::Drydock:         return 260;
+        // Хабитат дороже всего: он торгует за самый дефицитный ресурс
+        // карты — за место. Дешёвый хабитат обесценил бы класс планеты,
+        // а за просторные миры в этой игре воюют.
+        case Building::Habitat:         return 320;
+        case Building::Garrison:        return 120;
+        default:                        return 0;
+    }
+}
+
+uint8_t countBuildings(const Planet& planet, const PlanetDevelopment& development,
+                       Building building) {
+    // Обходим ВЕСЬ массив слотов, а не первые planet.slots: доступное
+    // число слотов само зависит от числа хабитатов, и считать его здесь
+    // значило бы получить рекурсию с неочевидным дном.
+    (void)planet;
+    uint8_t count = 0;
+    for (uint8_t slot = 0; slot < kMaxSlots; ++slot) {
+        if (development.buildings[slot] == uint8_t(building)) ++count;
+    }
+    return count;
+}
+
+uint8_t usableSlots(const Planet& planet, const PlanetDevelopment& development) {
+    const int base = std::min<int>(planet.slots, kMaxSlots);
+    const int extra = int(countBuildings(planet, development, Building::Habitat)) *
+                      int(kHabitatSlots);
+    return uint8_t(std::min(base + extra, kMaxSlots));
+}
+
+bool isInfrastructure(Building building) {
+    switch (building) {
+        case Building::SupplyDepot:
+        case Building::ShieldGenerator:
+        case Building::Drydock:
+        case Building::Habitat:
+        case Building::Garrison:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -140,6 +186,11 @@ void systemEconomy(World& world, const TickContext& context) {
     // Заводы откладываем: им нужны минералы, а сколько их будет, известно
     // только после того, как отработают все шахты империи.
     std::vector<uint32_t> foundries(empires, 0);
+    // Узлы снабжения и число планет — для содержания флота. Оба считаются
+    // здесь же, одним обходом: отдельный проход по планетам ради двух
+    // счётчиков был бы вторым источником правды о том, чем владеет империя.
+    std::vector<uint32_t> depots(empires, 0);
+    std::vector<uint32_t> planets(empires, 0);
 
     // Выработка достаётся владельцу САМОЙ ПЛАНЕТЫ, а не её системы.
     //
@@ -153,7 +204,10 @@ void systemEconomy(World& world, const TickContext& context) {
             if (empire == kNoEmpire || empire >= empires) return;
 
             Ledger::Flow& flow = ledger->at(empire);
-            const uint8_t limit = std::min<uint8_t>(planet.slots, kMaxSlots);
+            ++planets[empire];
+            // Слоты СЧИТАЮТСЯ, а не берутся из планеты: хабитаты добавляют
+            // места, и застройка в них обязана работать.
+            const uint8_t limit = usableSlots(planet, development);
 
             for (uint8_t slot = 0; slot < limit; ++slot) {
                 const auto building = Building(development.buildings[slot]);
@@ -179,16 +233,55 @@ void systemEconomy(World& world, const TickContext& context) {
                     case Building::Foundry:
                         ++foundries[empire];
                         break;
+                    case Building::SupplyDepot:
+                        ++depots[empire];
+                        break;
                     default:
-                        break;  // крепость ничего не производит
+                        // Крепость, верфь, щит, док, хабитат и гарнизон
+                        // ресурсов не производят: они покупают устойчивость,
+                        // а платят за неё содержанием, как и все остальные.
+                        break;
                 }
             }
         });
 
     // --- содержание флота ---
+    //
+    // ЗДЕСЬ ЖИВЁТ ГЛАВНЫЙ ТОРМОЗ СНЕЖНОГО КОМА. Тонна флота у империи
+    // из сорока планет обходится дороже, чем у империи из четырёх, и это
+    // не штраф за успех, а логистика: чем дальше растянут фронт, тем
+    // дороже держать на нём корабли.
+    //
+    // Почему именно так, а не «лимит планет»: лимит игрок читает как
+    // запрет и обижается на него; растущее содержание он читает как задачу
+    // и решает её — узлами снабжения, специализацией, отказом от лишнего
+    // флота. Первое отнимает решение, второе его создаёт.
+    //
+    // Без тормоза сервер на тысячу игроков вырождается за неделю: первый,
+    // кто вырвался вперёд, растёт быстрее всех просто потому, что уже
+    // впереди, и к третьей неделе играть остаётся некому.
+    std::vector<fx> upkeepScale(empires, fx::one());
+    for (uint32_t empire = 0; empire < empires; ++empire) {
+        const uint32_t owned = planets[empire];
+        fx scale = fx::one();
+        if (owned > kUpkeepFreePlanets) {
+            scale += kUpkeepGrowthPerPlanet * fx::fromInt(int64_t(owned - kUpkeepFreePlanets));
+        }
+        // Узлы снабжения — единственный способ его ослабить. То есть рост
+        // оплачивается инфраструктурой, а не запрещается.
+        if (depots[empire] > 0) {
+            fx relief = kDepotUpkeepRelief * fx::fromInt(int64_t(depots[empire]));
+            relief = min(relief, kDepotReliefCap);
+            scale *= (fx::one() - relief);
+        }
+        upkeepScale[empire] = max(fx::fromFraction(1, 4), scale);
+    }
+
     world.each<Fleet, Owner>([&](Entity, Fleet& fleet, Owner& owner) {
         if (owner.empire == kNoEmpire || owner.empire >= empires) return;
-        ledger->at(owner.empire).energy -= kUpkeepTonnage * fx::fromInt(fleetTonnage(fleet));
+        ledger->at(owner.empire).energy -= kUpkeepTonnage *
+                                           fx::fromInt(fleetTonnage(fleet)) *
+                                           upkeepScale[owner.empire];
     });
 
     // --- проход 2: заводы ---
@@ -249,12 +342,7 @@ void planetDefenceCap(World& world, const TickContext&) {
         [&](Entity entity, Planet& planet, PlanetDefense& defense) {
             uint32_t fortresses = 0;
             if (const PlanetDevelopment* development = world.get<PlanetDevelopment>(entity)) {
-                const uint8_t limit = std::min<uint8_t>(planet.slots, kMaxSlots);
-                for (uint8_t slot = 0; slot < limit; ++slot) {
-                    if (development->buildings[slot] == uint8_t(Building::Fortress)) {
-                        ++fortresses;
-                    }
-                }
+                fortresses = countBuildings(planet, *development, Building::Fortress);
             }
 
             const fx cap = kReadinessMax + kFortressReadiness * fx::fromInt(fortresses);

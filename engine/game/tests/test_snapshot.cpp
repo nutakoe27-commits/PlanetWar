@@ -78,7 +78,7 @@ WorldView makeWorld(uint32_t systems, uint32_t fleets) {
         fleet.empire = uint8_t(i % 4);
         fleet.system = i % systems;
         fleet.nextSystem = fleet.system;
-        fleet.composition = sim::Fleet{i + 1, i % 3, i % 2, 0};
+        fleet.composition = sim::makeFleet({{sim::Hull::Corvette, i + 1}, {sim::Hull::Destroyer, i % 3}, {sim::Hull::Cruiser, i % 2}});
         world.fleets[fleet.id] = fleet;
     }
     world.empire.alloys = fx::fromInt(1000);

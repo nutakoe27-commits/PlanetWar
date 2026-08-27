@@ -5,6 +5,7 @@
 #include "pw/sim/fleet.h"
 #include "pw/sim/galaxy.h"
 #include "pw/sim/production.h"
+#include "pw/sim/season.h"
 
 namespace pw::sim {
 
@@ -93,12 +94,13 @@ void systemControlRollup(World& world, const TickContext&) {
 // Присутствие
 // ---------------------------------------------------------------------------
 
-void Presence::Entry::add(uint32_t empire, uint32_t tonnage) {
+void Presence::Entry::add(uint32_t empire, uint32_t tonnage, uint32_t siege) {
     if (tonnage == 0 || empire == kNoEmpire) return;
 
     for (uint32_t i = 0; i < count; ++i) {
         if (empires[i] != empire) continue;
         tonnages[i] += tonnage;
+        sieges[i] += siege;
         return;
     }
     if (count >= kMaxPresent) {
@@ -108,6 +110,7 @@ void Presence::Entry::add(uint32_t empire, uint32_t tonnage) {
     }
     empires[count] = empire;
     tonnages[count] = tonnage;
+    sieges[count] = siege;
     ++count;
 }
 
@@ -115,6 +118,14 @@ uint32_t Presence::Entry::tonnageOf(uint32_t empire) const {
     if (empire == kNoEmpire) return 0;
     for (uint32_t i = 0; i < count; ++i) {
         if (empires[i] == empire) return tonnages[i];
+    }
+    return 0;
+}
+
+uint32_t Presence::Entry::siegeOf(uint32_t empire) const {
+    if (empire == kNoEmpire) return 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (empires[i] == empire) return sieges[i];
     }
     return 0;
 }
@@ -156,7 +167,8 @@ void Presence::rebuild(World& world, uint32_t systemCount) {
         [&](Entity, Fleet& fleet, FleetLocation& location, Owner& owner) {
             if (location.system != location.nextSystem) return;
             if (location.system >= systemCount) return;
-            entries_[location.system].add(owner.empire, fleetTonnage(fleet));
+            entries_[location.system].add(owner.empire, fleetTonnage(fleet),
+                                          fleetSiegePower(fleet));
         });
 }
 
@@ -178,10 +190,46 @@ namespace {
 /// Втрое больший флот не берёт планету втрое быстрее. Иначе выигрывал бы
 /// просто тот, кто собрал всё в один кулак, и разделять силы никогда не имело
 /// бы смысла — а вместе с этим исчезли бы и фронт, и рейды.
-fx siegeRate(uint32_t tonnage) {
+fx siegeRate(uint32_t tonnage, uint32_t siegePower) {
     const uint32_t capped = std::min(tonnage, kSiegeTonnageScale);
     const fx scale = fx::one() + fx::fromFraction(int64_t(capped), kSiegeTonnageScale);
-    return kSiegeBaseRate * scale;
+
+    // Осадные корабли считаются ОТДЕЛЬНОЙ прибавкой, а не добавкой к тоннажу.
+    //
+    // Через тоннаж они упирались бы в тот же потолок затухания, что и всё
+    // остальное, и специально собранный осадный отряд ничем не отличался бы
+    // от такого же по массе линейного. Отдельное слагаемое даёт мониторам
+    // собственную ось: против планеты они работают там, где линкоры уже
+    // упёрлись в потолок.
+    const uint32_t cappedSiege = std::min(siegePower, kSiegeMonitorScale);
+    const fx assault = fx::fromFraction(int64_t(cappedSiege), kSiegeMonitorScale);
+
+    return kSiegeBaseRate * (scale + assault);
+}
+
+/// Во сколько раз планетарные щиты растягивают осаду этой планеты.
+fx shieldSlowdown(const World& world, Entity planetEntity, const Planet& planet) {
+    const PlanetDevelopment* development = world.get<PlanetDevelopment>(planetEntity);
+    if (development == nullptr) return fx::one();
+
+    const uint8_t shields = countBuildings(planet, *development, Building::ShieldGenerator);
+    if (shields == 0) return fx::one();
+
+    // Каждый щит режет скорость осады, но с затуханием и с потолком:
+    // планету, обвешанную щитами, всё равно можно взять — просто дольше.
+    fx factor = fx::one();
+    for (uint8_t index = 0; index < shields; ++index) factor *= kShieldSiegeSlowdown;
+    return max(kShieldSlowdownCap, factor);
+}
+
+/// Во сколько раз гарнизоны ускоряют восстановление обороны.
+fx garrisonRegen(const World& world, Entity planetEntity, const Planet& planet) {
+    const PlanetDevelopment* development = world.get<PlanetDevelopment>(planetEntity);
+    if (development == nullptr) return fx::one();
+
+    const uint8_t garrisons = countBuildings(planet, *development, Building::Garrison);
+    if (garrisons == 0) return fx::one();
+    return fx::one() + kGarrisonRegenBonus * fx::fromInt(garrisons);
 }
 
 /// Можно ли сейчас что-то сделать с планетой этого владельца.
@@ -233,6 +281,13 @@ void systemSiege(World& world, const TickContext& context) {
     world.each<Planet, Owner>([&](Entity entity, Planet& planet, Owner& owner) {
         if (planet.system >= systemCount) return;
         if (!actionable(presence->at(planet.system), owner.empire)) return;
+        // Стадия сезона решает, можно ли вообще трогать эту планету:
+        // на Расширении чужие дома неприкосновенны, на Финале карта
+        // заморожена целиком. Проверка стоит ЗДЕСЬ, при выборе цели,
+        // а не ниже при списании обороны: иначе флот «осаждал» бы
+        // неприкосновенную планету, ничего не добиваясь, и защитник
+        // видел бы уведомление об осаде, которой нет.
+        if (!siegeAllowed(world, *galaxy, planet.system, owner.empire)) return;
         if (uint32_t(planet.orbit) >= targetOrbit[planet.system]) return;
         targetOrbit[planet.system] = planet.orbit;
         targetEntity[planet.system] = entity;
@@ -249,9 +304,14 @@ void systemSiege(World& world, const TickContext& context) {
                 siege.besieger = kNoEmpire;
                 siege.ticks = 0;
                 if (owner.empire != kNoEmpire && defense.readiness < defense.maxReadiness) {
+                    // Крепость поднимает ПОТОЛОК обороны, гарнизон — СКОРОСТЬ
+                    // её возврата. Разные вопросы: первый про «сколько выдержу»,
+                    // второй про «как быстро оправлюсь». Планета, пережившая
+                    // осаду, без гарнизона остаётся уязвимой полтора часа.
+                    const fx regen = kReadinessRegen *
+                                     garrisonRegen(world, entity, planet);
                     defense.readiness =
-                        min(defense.maxReadiness,
-                            defense.readiness + kReadinessRegen * context.delta);
+                        min(defense.maxReadiness, defense.readiness + regen * context.delta);
                 }
                 return;
             }
@@ -279,7 +339,9 @@ void systemSiege(World& world, const TickContext& context) {
             }
 
             // --- осада ---
-            defense.readiness -= siegeRate(tonnage) * context.delta;
+            const uint32_t assault = here.siegeOf(attacker);
+            defense.readiness -= siegeRate(tonnage, assault) *
+                                 shieldSlowdown(world, entity, planet) * context.delta;
             if (defense.readiness > fx::zero()) return;
 
             // Планета пала.

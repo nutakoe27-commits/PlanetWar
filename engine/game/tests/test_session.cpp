@@ -177,8 +177,8 @@ TEST_CASE("сессия: игрок видит свой стартовый фл�
     const auto own = client.fleetsAt(client.capital());
     REQUIRE(own.size() == 1);
     const FleetView& fleet = client.view().fleets.at(own.front());
-    CHECK(fleet.composition.corvettes == 8);
-    CHECK(fleet.composition.destroyers == 2);
+    CHECK(fleet.composition[sim::Hull::Corvette] == 8);
+    CHECK(fleet.composition[sim::Hull::Destroyer] == 2);
 }
 
 // ---------------------------------------------------------------------------
