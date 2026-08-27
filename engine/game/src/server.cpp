@@ -467,7 +467,6 @@ void Server::applyColonize(Player& player, const ColonizeMessage& message) {
 void Server::applySplitFleet(Player& player, const SplitFleetMessage& message) {
     sim::Fleet taken{};
     uint32_t system = sim::kNoSystem;
-    uint32_t orbit = sim::kNoOrbit;
     bool applied = false;
     const sim::FleetArmament* armament = nullptr;
 
@@ -482,7 +481,6 @@ void Server::applySplitFleet(Player& player, const SplitFleetMessage& message) {
             }
             taken = sim::applySplit(fleet, sim::Hull(message.hull), message.count);
             system = location.system;
-            orbit = location.orbit;
             armament = world_.get<sim::FleetArmament>(entity);
             applied = true;
         });
@@ -503,10 +501,14 @@ void Server::applySplitFleet(Player& player, const SplitFleetMessage& message) {
     // того же флота, а не свежая постройка. Иначе выделенные корветы
     // молча меняли бы оружие, и разделение флота стало бы способом
     // переоснастить его бесплатно.
+    //
+    // Орбиту новому отряду НЕ задаём: её назначит systemFleetStation
+    // в ближайшем тике по общему правилу. Задать её здесь значило бы
+    // завести второе место, где решается, у какой планеты стоит флот, —
+    // и однажды эти два места разошлись бы.
     if (sim::Commands* commands = world_.resource<sim::Commands>()) {
         commands->spawnFleet(player.empire, system, taken, armament);
     }
-    (void)orbit;
 }
 
 void Server::applyBuildShip(Player& player, const BuildShipMessage& message) {
