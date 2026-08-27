@@ -86,7 +86,7 @@ void Ui::end() {
     y = std::max(pad, y);
 
     const Rect box{x, y, width, height};
-    panel(box, "panel_light");
+    panel(box, "hud_header");
     for (size_t index = 0; index < lines.size(); ++index) {
         text(x + pad, y + pad * 0.6f + step * float(index), lines[index], theme_.text);
     }
@@ -255,7 +255,11 @@ void Ui::progress(const Rect& r, float value, const TextColor& color) {
     // без видимого жёлоба не сообщает, сколько ОСТАЛОСЬ, — а именно это
     // от неё и нужно.
     const Rect track{r.x, r.y, r.w, std::max(r.h, 4.0f)};
-    panel(track, "bar_back");
+    fill(track, theme_.track);
+    // Обводка в один пиксель: без неё жёлоб сливается с подложкой панели,
+    // и полоса снова читается как чёрточка, а не как «столько осталось».
+    fill(Rect{track.x, track.y, track.w, 1.0f}, theme_.edgeDim);
+    fill(Rect{track.x, track.bottom() - 1.0f, track.w, 1.0f}, theme_.edgeDim);
 
     const float filled = std::clamp(value, 0.0f, 1.0f);
     if (filled <= 0.0f) return;
@@ -265,6 +269,32 @@ void Ui::progress(const Rect& r, float value, const TextColor& color) {
     const UiSprite* sprite = lookup("bar_fill");
     quad(Rect{inner.x, inner.y, std::max(1.0f, inner.w * filled), inner.h},
          sprite != nullptr ? *sprite : fallbackSprite(), color);
+}
+
+void Ui::listRow(const Rect& r, bool hovered, bool selected) {
+    // Спокойная строка не рисуется вовсе. Список из десяти подложек —
+    // это стопка кнопок, а не перечень: глаз начинает выбирать там,
+    // где надо просто просматривать.
+    if (selected) {
+        fill(r, theme_.rowActive);
+    } else if (hovered) {
+        fill(r, theme_.rowHover);
+    } else {
+        return;
+    }
+    // Отметка слева, а не рамка вокруг. Рамка обводит строку и тем
+    // отделяет её от списка; полоска показывает место в списке,
+    // не разрывая его.
+    if (selected) {
+        fill(Rect{r.x, r.y, std::max(2.0f, theme_.unit * 0.25f), r.h}, theme_.edge);
+    }
+}
+
+void Ui::sectionHeader(const Rect& r) {
+    fill(r, theme_.headerFill);
+    // Черта снизу: заголовок обязан читаться как крышка над строками,
+    // а не как ещё одна строка того же списка.
+    fill(Rect{r.x, r.bottom() - 1.0f, r.w, 1.0f}, theme_.edgeDim);
 }
 
 void Ui::separator(const Rect& r) {
@@ -302,13 +332,13 @@ ButtonResult Ui::behaviour(uint32_t id, const Rect& r, bool enabled) {
 
 const char* Ui::stylePlate(ButtonStyle style, bool hovered, bool held,
                            bool enabled) const {
-    if (!enabled) return "panel_dark";
-    if (held) return "button_down";
+    if (!enabled) return "hud_panel_deep";
+    if (held) return "hud_button_down";
     switch (style) {
-        case ButtonStyle::Accent: return hovered ? "button_hover" : "button_accent";
-        case ButtonStyle::Danger: return hovered ? "button_hover" : "button_danger";
-        case ButtonStyle::Quiet:  return hovered ? "button" : nullptr;
-        default:                  return hovered ? "button_hover" : "button";
+        case ButtonStyle::Accent: return hovered ? "hud_button_hover" : "hud_button_accent";
+        case ButtonStyle::Danger: return hovered ? "hud_button_hover" : "hud_button_danger";
+        case ButtonStyle::Quiet:  return hovered ? "hud_row_hover" : nullptr;
+        default:                  return hovered ? "hud_button_hover" : "hud_button";
     }
 }
 
@@ -358,10 +388,10 @@ ButtonResult Ui::slot(uint32_t id, const Rect& r, const char* sprite, bool selec
     const ButtonResult result = behaviour(id, r, enabled);
     const bool held = active_ == id && input_.down;
 
-    const char* plate = held               ? "button_down"
-                        : selected         ? "button_accent"
-                        : result.hovered   ? "slot_hover"
-                                           : "slot";
+    const char* plate = held               ? "hud_button_down"
+                        : selected         ? "hud_button_accent"
+                        : result.hovered   ? "hud_slot_hover"
+                                           : "hud_slot";
     panel(r, plate);
     if (sprite != nullptr) {
         icon(r.inset(theme_.unit * 0.4f), sprite,

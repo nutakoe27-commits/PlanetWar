@@ -322,6 +322,7 @@ bool noticeIsBad(game::NoticeKind kind) {
     }
 }
 
+
 // ---------------------------------------------------------------------------
 // Журнал
 // ---------------------------------------------------------------------------
@@ -435,92 +436,199 @@ TextColor barTint(float value) {
 // ---------------------------------------------------------------------------
 
 ScreenAction Screen::topBar(Ui& ui, const game::Client& client) const {
+    // ВЕРХНЯЯ ПОЛОСА — ГЛАВНЫЙ ПРИБОР ИГРЫ.
+    //
+    // Она устроена как в Stellaris, и это не подражание, а вывод из того,
+    // как ей пользуются. Игрок смотрит сюда не «иногда», а постоянно,
+    // краем глаза, не отрываясь от карты. Значит:
+    //
+    //   1. Полоса идёт ВО ВСЮ ШИРИНУ и прижата к самому краю. Панель
+    //      с полями и зазором глаз воспринимает как отдельное окно
+    //      и вынужден на неё наводиться; полоса по краю читается
+    //      периферийным зрением, без фокусировки.
+    //   2. У каждого ресурса ДВА числа: запас и приход. Запас отвечает
+    //      «сколько сейчас», приход — «что будет дальше», и решения
+    //      принимаются про дальше. Империя с двадцатью тысячами сплавов
+    //      и минусом по энергии проигрывает, и по одному запасу
+    //      этого не видно.
+    //   3. Ресурсы разбиты на ГРУППЫ с разделителями: производство,
+    //      наука и влияние. Пять чисел в ряд читаются как пять чисел,
+    //      две группы по два-три — как две мысли.
+    //   4. Слева герб и имя империи, справа стадия сезона и престиж.
+    //      Края полосы — самые дешёвые для глаза места, туда идёт то,
+    //      что нужно реже.
     const float unit = ui.unit();
     const float line = ui.lineHeight();
-    const float height = line + unit * 2.0f;
-    const Rect bar{0.0f, 0.0f, float(ui.screenWidth()), height};
-    ui.panel(bar, "panel");
+    const float height = line * 2.55f + unit * 0.5f;
+    const float width = float(ui.screenWidth());
+
+    // Заливка, а не плитка. У полосы во всю ширину нет видимых концов,
+    // значит и срезанные углы ей не нужны; а плитку с углами пришлось бы
+    // выпускать за края экрана, нарушая проверку «ничего не вылезает
+    // за пределы окна». Оформление не стоит ослабленной проверки.
+    ui.fill(Rect{0.0f, 0.0f, width, height}, ui.theme().barFill);
+    // Светящаяся черта под полосой: она и отделяет прибор от карты.
+    ui.fill(Rect{0.0f, height - 1.0f, width, 1.0f}, ui.theme().edge);
 
     const auto& empire = client.view().empire;
+
+    // --- герб и имя империи ---
+    const float crest = line * 1.7f;
+    float x = unit * 1.4f;
+    const EmpireColor& mineColor = empireColor(client.empire());
+    ui.icon(Rect{x, (height - crest) * 0.5f, crest, crest}, "icon_crest",
+            TextColor{mineColor.r, mineColor.g, mineColor.b, 1.0f});
+    if (ui.hotspot(uiId("crest"), Rect{x, 0.0f, crest + unit, height}).hovered) {
+        ui.tooltip("ваша империя · цвет герба совпадает с цветом ваших систем "
+                   "на карте");
+    }
+    x += crest + unit * 1.2f;
+
+    // --- ресурсы ---
     struct Entry {
         const char* icon;
-        const char* name;
+        const char* label;
+        const char* hint;
         int64_t value;
+        fx income;
+        bool group;   // после этой записи идёт разделитель
     };
-    // Подсказка отвечает на «зачем оно мне», а не называет ресурс.
-    // Название игрок и так угадает по значку со второго раза; чего он
-    // не угадает никогда — на что этот ресурс тратится и откуда берётся.
     const Entry entries[] = {
-        {"res_minerals",
+        {"res_minerals", "МИНЕРАЛЫ",
          "МИНЕРАЛЫ · платят за здания · дают шахты",
-         empire.minerals.floorToInt()},
-        {"res_alloys",
+         empire.minerals.floorToInt(), empire.mineralsIncome, false},
+        {"res_alloys", "СПЛАВЫ",
          "СПЛАВЫ · платят за корабли · дают ТОЛЬКО литейные, из минералов",
-         empire.alloys.floorToInt()},
-        {"res_energy",
+         empire.alloys.floorToInt(), empire.alloysIncome, false},
+        {"res_energy", "ЭНЕРГИЯ",
          "ЭНЕРГИЯ · уходит на содержание зданий и флота · дают электростанции",
-         empire.energy.floorToInt()},
-        {"res_research",
+         empire.energy.floorToInt(), empire.energyIncome, true},
+        {"res_research", "НАУКА",
          "ИССЛЕДОВАНИЯ · счёт науки в престиже · дают лаборатории",
-         empire.research.floorToInt()},
-        {"res_influence",
+         empire.research.floorToInt(), empire.researchIncome, false},
+        {"res_influence", "ВЛИЯНИЕ",
          "ВЛИЯНИЕ · счёт дипломатии в престиже · дают торговые узлы",
-         empire.influence.floorToInt()},
+         empire.influence.floorToInt(), empire.influenceIncome, true},
     };
 
-    const float iconSize = line * 1.25f;
-    float x = unit * 1.5f;
+    const float iconSize = line * 1.5f;
+    const float top = (height - line * 2.0f) * 0.5f;
     for (size_t index = 0; index < sizeof(entries) / sizeof(entries[0]); ++index) {
         const Entry& entry = entries[index];
-        const std::string value = grouped(entry.value);
-        const float width = iconSize + unit * 0.6f + ui.textWidth(value);
 
-        const Rect cell{x, unit * 0.5f, width, height - unit};
-        // Наведение объясняет, что это за число. Иконка узнаётся быстрее
-        // подписи, но узнаётся не с первого раза — подсказка закрывает
-        // именно первый раз.
+        // Приход показывается ЗА МИНУТУ, а не за секунду. За секунду это
+        // дробь вроде «0,4», а дробь на приборе, в который смотрят
+        // мельком, не читается — её надо расшифровывать.
+        const int64_t perMinute = (entry.income * fx::fromInt(60)).roundToInt();
+        const std::string stock = grouped(entry.value);
+        const std::string rate = (perMinute > 0 ? "+" : "") + grouped(perMinute);
+
+        const float column = std::max(ui.textWidth(stock), ui.textWidth(rate));
+        const float cellWidth = iconSize + unit * 0.7f + column;
+        const Rect cell{x, 0.0f, cellWidth + unit * 0.8f, height};
+
         if (ui.hotspot(uiId("res", uint32_t(index)), cell).hovered) {
-            ui.tooltip(entry.name);
+            ui.fill(cell.inset(unit * 0.3f), ui.theme().rowHover);
+            std::string hint = entry.hint;
+            hint += perMinute == 0   ? " · сейчас ни прихода, ни расхода"
+                    : perMinute > 0  ? " · сейчас плюс " + grouped(perMinute) + " в минуту"
+                                     : " · сейчас МИНУС " + grouped(-perMinute) + " в минуту";
+            ui.tooltip(hint);
         }
 
         ui.icon(Rect{x, (height - iconSize) * 0.5f, iconSize, iconSize}, entry.icon);
-        ui.text(x + iconSize + unit * 0.6f, (height - line) * 0.5f, value,
-                ui.theme().text);
-        x += width + unit * 2.0f;
+
+        const float textX = x + iconSize + unit * 0.7f;
+        ui.text(textX, top, stock, ui.theme().text);
+        // Ноль — не хорошо и не плохо, он серый. Зелёный ноль читался бы
+        // как «всё в порядке», а стоящая экономика в порядке не бывает.
+        const TextColor rateColor = perMinute > 0   ? ui.theme().textGood
+                                    : perMinute < 0 ? ui.theme().textBad
+                                                    : ui.theme().textDim;
+        ui.text(textX, top + line, rate, rateColor);
+
+        x += cellWidth + unit * 2.0f;
+        if (entry.group) {
+            ui.fill(Rect{x - unit, height * 0.22f, 1.0f, height * 0.56f},
+                    ui.theme().edgeDim);
+            x += unit;
+        }
     }
 
-    // --- стадия сезона ---
+    // Простаивающие литейные — прямо в полосе, а не в подсказке.
     //
-    // По центру верхней полосы, а не в углу: это единственное число
-    // на экране, которое одинаково у всех игроков сервера, и вокруг него
-    // строится вся подготовка. «До Конфликта сорок минут» меняет то,
-    // что игрок строит прямо сейчас, сильнее любой другой цифры здесь.
+    // Это единственная ошибка экономики, которую игрок делает раз за разом:
+    // строит литейные, забывает шахты, и сплавы перестают расти без всякого
+    // предупреждения. Полоса обязана сказать об этом сама.
+    const int64_t idle = (empire.foundryIdle * fx::fromInt(60)).roundToInt();
+    if (idle > 0) {
+        const std::string warn = "-" + grouped(idle);
+        const float alertSize = line * 1.2f;
+        const Rect box{x, 0.0f, alertSize + unit * 0.5f + ui.textWidth(warn) + unit,
+                       height};
+        ui.icon(Rect{x, (height - alertSize) * 0.5f, alertSize, alertSize}, "icon_alert");
+        ui.text(x + alertSize + unit * 0.5f, (height - line) * 0.5f, warn,
+                ui.theme().textWarn);
+        if (ui.hotspot(uiId("idle-foundry"), box).hovered) {
+            ui.tooltip("литейным не хватает минералов: столько сплавов в минуту "
+                       "вы НЕ получаете · постройте шахты");
+        }
+        x += box.w;
+    }
+
+    // --- правый край: стадия сезона и престиж ---
+    //
+    // Стадия — единственное число на экране, одинаковое у всех игроков
+    // сервера, и вокруг него строится вся подготовка. «До Конфликта
+    // сорок минут» меняет то, что игрок делает прямо сейчас, сильнее
+    // любой другой цифры здесь.
     const auto stage = sim::SeasonStage(empire.stage);
     const TextColor stageColor = stage == sim::SeasonStage::Expansion ? ui.theme().textGood
                                  : stage == sim::SeasonStage::Crisis  ? ui.theme().textBad
                                  : stage == sim::SeasonStage::Final   ? ui.theme().textWarn
                                                                       : ui.theme().textAccent;
-    const std::string stageText =
-        std::string(sim::stageName(stage)) +
-        (empire.stageSecondsLeft > 0 ? " · " + duration(empire.stageSecondsLeft)
-                                     : std::string());
-    const float stageWidth = ui.textWidth(stageText);
-    const Rect stageBox{(float(ui.screenWidth()) - stageWidth) * 0.5f, 0.0f, stageWidth,
-                        height};
-    ui.textCentered(stageBox, stageText, stageColor);
-    if (ui.hotspot(uiId("season"), stageBox.inset(-unit)).hovered) {
+
+    const std::string prestige = grouped(empire.prestigeTotal());
+    const float prestigeIcon = line * 1.35f;
+    const float prestigeWidth = prestigeIcon + unit * 0.6f + ui.textWidth(prestige);
+    float right = width - unit * 1.4f - prestigeWidth;
+    ui.icon(Rect{right, (height - prestigeIcon) * 0.5f, prestigeIcon, prestigeIcon},
+            "icon_prestige");
+    ui.text(right + prestigeIcon + unit * 0.6f, (height - line) * 0.5f, prestige,
+            ui.theme().textWarn);
+    if (ui.hotspot(uiId("prestige-top"),
+                   Rect{right - unit * 0.5f, 0.0f, prestigeWidth + unit, height})
+            .hovered) {
+        ui.tooltip("престиж: территория " + number(empire.prestigeTerritory) +
+                   " · экономика " + number(empire.prestigeEconomy) + " · наука " +
+                   number(empire.prestigeScience) + " · война " +
+                   number(empire.prestigeWar) + " · дипломатия " +
+                   number(empire.prestigeDiplomacy) +
+                   " · пять независимых счётчиков, выиграть можно любым");
+    }
+
+    right -= unit * 2.0f;
+    ui.fill(Rect{right, height * 0.22f, 1.0f, height * 0.56f}, ui.theme().edgeDim);
+    right -= unit * 1.6f;
+
+    const std::string stageName = sim::stageName(stage);
+    const std::string stageLeft =
+        empire.stageSecondsLeft > 0 ? "ещё " + duration(empire.stageSecondsLeft)
+                                    : std::string("сезон закрывается");
+    const float stageWidth =
+        std::max(ui.textWidth(stageName), ui.textWidth(stageLeft)) + line * 1.5f + unit;
+    right -= stageWidth;
+
+    const float clock = line * 1.35f;
+    ui.icon(Rect{right, (height - clock) * 0.5f, clock, clock}, "icon_clock");
+    ui.text(right + clock + unit * 0.6f, top, stageName, stageColor);
+    ui.text(right + clock + unit * 0.6f, top + line, stageLeft, ui.theme().textDim);
+    if (ui.hotspot(uiId("season"), Rect{right - unit, 0.0f, stageWidth + unit * 2.0f,
+                                        height})
+            .hovered) {
         ui.tooltip(stageHint(stage));
     }
 
-    // Связь. Показывается всегда: в MMO игрок обязан отличать «сервер
-    // тормозит» от «я плохо играю».
-    const std::string link = number(client.roundTrip()) + " мс · потери " +
-                             number(client.lossPercent()) + "%";
-    const TextColor quality = client.lossPercent() > 15  ? ui.theme().textBad
-                              : client.lossPercent() > 5 ? ui.theme().textWarn
-                                                         : ui.theme().textDim;
-    ui.textRight(Rect{0.0f, 0.0f, float(ui.screenWidth()) - unit * 1.5f, height}, link,
-                 quality);
     return {};
 }
 
@@ -545,7 +653,7 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
         column.row(line * 1.3f);
 
         const Rect panel{at.x, at.y, width, column.height()};
-        ui.panel(panel, "panel");
+        ui.panel(panel, "hud_panel");
         column.place(panel);
 
         const Rect titleRow = column.next();
@@ -570,7 +678,7 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
     // Отступ перед кнопкой объявляем отдельно, чтобы он не прилипал
     // к последней планете, когда планет ноль.
     const Rect panel{at.x, at.y, width, column.height() + unit * 0.6f};
-    ui.panel(panel, "panel");
+    ui.panel(panel, "hud_panel");
     column.place(panel);
 
     // --- шапка ---
@@ -620,9 +728,8 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
         // список планет висел в пустоте.
         if (index > 0) ui.separator(Rect{card.x + unit, card.y - 1.0f, card.w - unit * 2.0f, 1.0f});
 
-        if (selected) ui.panel(card, "button_accent", 0.55f);
         const ButtonResult hit = ui.hotspot(uiId("planet-row", uint32_t(index)), card);
-        if (hit.hovered && !selected) ui.panel(card, "slot_hover", 0.5f);
+        ui.listRow(card, hit.hovered, selected);
         if (hit.clicked) {
             action.kind = ActionKind::SelectPlanet;
             action.value = uint32_t(index);
@@ -739,27 +846,31 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
         std::min(line * 2.7f,
                  (width - unit * 2.0f - gridPad * float(columns - 1)) / float(columns));
 
-    const int paletteColumns = 2;
-    const int paletteRows =
-        (int(sim::Building::Count) - 1 + paletteColumns - 1) / paletteColumns;
     const float paletteRowHeight = line * 2.1f;
 
     Column column(unit);
     column.row(line * 1.25f);                          // «Планета K · класс»
     column.row(line * 1.35f, unit * 0.7f);             // состояние
     for (int r = 0; r < gridRows; ++r) column.row(cell, r + 1 < gridRows ? gridPad : 0.0f);
-    if (paletteOpen) {
-        column.row(line * 1.6f, unit * 0.2f);          // «Что построить»
-        for (int r = 0; r < paletteRows; ++r) {
-            column.row(paletteRowHeight - gridPad, r + 1 < paletteRows ? gridPad : 0.0f);
-        }
-    } else if (detailOpen) {
+    // ПАЛИТРА ЗАСТРОЙКИ В СТОЛБЕЦ НЕ ВХОДИТ.
+    //
+    // Двенадцать построек в два столбца — это шесть строк, полторы сотни
+    // пикселей, которые появляются и исчезают по щелчку. Пока палитра
+    // жила внутри панели, весь левый столбец на её высоту и прыгал,
+    // а на экране 1024x600 нижняя панель уезжала за нижний край —
+    // проверка «ничего не вылезает за пределы окна» поймала это первой.
+    //
+    // Теперь палитра — отдельное окно рядом со столбцом, поверх карты.
+    // Так же она устроена и в Stellaris, и по той же причине: выбор
+    // из дюжины вариантов не обязан помещаться в колонку, ширина
+    // которой выбрана для совсем другого.
+    if (detailOpen) {
         column.row(line * 1.5f, unit * 0.1f);          // здание и чем полезно
         column.row(line * 2.0f);                       // «Снести»
     }
 
     const Rect panel{unit * 1.5f, top, width, column.height()};
-    ui.panel(panel, "panel");
+    ui.panel(panel, "hud_panel");
     column.place(panel);
 
     // --- шапка ---
@@ -881,28 +992,49 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
         }
     }
 
-    // --- палитра застройки ---
+    // --- палитра застройки: отдельное окно рядом со столбцом ---
     if (paletteOpen) {
-        const Rect head = column.next();
+        const int64_t minerals = client.view().empire.minerals.floorToInt();
+        const int palColumns = 2;
+        const int palRows =
+            (int(sim::Building::Count) - 1 + palColumns - 1) / palColumns;
+        const float palWidth = width * 1.15f;
+
+        Column pal(unit);
+        pal.row(line * 1.5f, unit * 0.4f);             // «Что построить»
+        for (int r = 0; r < palRows; ++r) {
+            pal.row(paletteRowHeight - gridPad, r + 1 < palRows ? gridPad : 0.0f);
+        }
+
+        // Окно встаёт справа от столбца и НЕ ВЫЛЕЗАЕТ за низ экрана:
+        // если не помещается снизу — поднимается. Окно, часть которого
+        // за кадром, это не «почти помещается», это недоступные кнопки.
+        const float limit = float(ui.screenHeight()) - line * 3.6f - unit * 2.0f;
+        const float palY =
+            std::min(panel.y, std::max(unit, limit - pal.height()));
+        const Rect box{panel.right() + unit, palY, palWidth, pal.height()};
+        ui.panel(box, "hud_panel");
+        pal.place(box);
+
+        const Rect head = pal.next();
         ui.text(head.x, head.y + (head.h - line) * 0.5f,
                 "Что построить в слоте " + number(int64_t(state.slot) + 1),
                 ui.theme().textAccent);
 
-        const int64_t minerals = client.view().empire.minerals.floorToInt();
-        for (int paletteRow = 0; paletteRow < paletteRows; ++paletteRow) {
-            const Rect strip = column.next();
+        for (int paletteRow = 0; paletteRow < palRows; ++paletteRow) {
+            const Rect strip = pal.next();
             const float buttonWidth = (strip.w - gridPad) * 0.5f;
-            for (int col = 0; col < paletteColumns; ++col) {
-                const int index = paletteRow * paletteColumns + col;
+            for (int col = 0; col < palColumns; ++col) {
+                const int index = paletteRow * palColumns + col;
                 if (index >= int(sim::Building::Count) - 1) break;
                 const uint8_t building = uint8_t(index + 1);
-                const Rect box{strip.x + float(col) * (buttonWidth + gridPad), strip.y,
-                               buttonWidth, strip.h};
+                const Rect cellBox{strip.x + float(col) * (buttonWidth + gridPad), strip.y,
+                                   buttonWidth, strip.h};
 
                 const int64_t cost = int64_t(sim::buildingCost(sim::Building(building)));
                 const bool affordable = minerals >= cost;
                 const ButtonResult hit = ui.iconButton(
-                    uiId("build", building), box, buildingIcon(building),
+                    uiId("build", building), cellBox, buildingIcon(building),
                     buildingName(building),
                     affordable ? ButtonStyle::Normal : ButtonStyle::Quiet, affordable);
                 if (hit.hovered) {
@@ -994,9 +1126,15 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
         }
     }
 
-    const Rect panel{float(ui.screenWidth()) - width - unit * 1.5f, top, width,
-                     column.height()};
-    ui.panel(panel, "panel");
+    // Панель флота переехала в ЛЕВЫЙ столбец, к системе и планете.
+    //
+    // Раньше она стояла справа, и правый край экрана делили между собой
+    // два разных занятия: разглядывание выбранного и просмотр списка.
+    // Теперь справа только список — «что у меня есть», а слева всё
+    // про выбранное: система, планета в ней, флот в ней же. Одна мысль —
+    // один столбец.
+    const Rect panel{unit * 1.5f, top, width, column.height()};
+    ui.panel(panel, "hud_panel");
     column.place(panel);
 
     const Rect titleRow = column.next();
@@ -1013,9 +1151,8 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
             const Rect strip = column.next();
             const Rect card{strip.x, strip.y, strip.w, strip.h - 2.0f};
 
-            if (selected) ui.panel(card, "button_accent", 0.55f);
             const ButtonResult hit = ui.hotspot(uiId("fleet-row", uint32_t(index)), card);
-            if (hit.hovered && !selected) ui.panel(card, "slot_hover", 0.5f);
+            ui.listRow(card, hit.hovered, selected);
             if (hit.clicked) {
                 action.kind = ActionKind::SelectFleet;
                 action.value = id;
@@ -1178,7 +1315,7 @@ ScreenAction Screen::messagePanel(Ui& ui, int64_t now, float top, float left,
 
     const float height = rowHeight * float(messages_->entries().size()) + unit;
     const Rect panel{(left + right - widest) * 0.5f, top, widest, height};
-    ui.panel(panel, "panel_dark", 0.85f * strongest);
+    ui.panel(panel, "hud_panel_deep", 0.92f * strongest);
 
     float y = panel.y + unit * 0.5f;
     size_t index = 0;
@@ -1194,7 +1331,7 @@ ScreenAction Screen::messagePanel(Ui& ui, int64_t now, float top, float left,
             // этого «где-то» надо ещё доскроллить вручную.
             const ButtonResult hit = ui.hotspot(uiId("message", uint32_t(index)), box);
             if (hit.hovered) {
-                ui.panel(box, "slot_hover", 0.5f);
+                ui.fill(box, ui.theme().rowHover);
                 ui.tooltip("щёлкните — камера перейдёт к системе " +
                            number(entry.system) + ", где это случилось");
             }
@@ -1228,16 +1365,18 @@ ScreenAction Screen::bottomBar(Ui& ui, const game::Client& client,
     ScreenAction action;
     const float unit = ui.unit();
     const float line = ui.lineHeight();
-    const float height = line + unit * 2.2f;
-    const Rect bar{0.0f, float(ui.screenHeight()) - height, float(ui.screenWidth()),
-                   height};
+    const float height = line + unit * 2.6f;
+    const float width = float(ui.screenWidth());
+    const Rect bar{0.0f, float(ui.screenHeight()) - height, width, height};
     // Полоса во всю ширину, а не кнопка в углу и подпись отдельно посреди
     // пустоты. Всё, что относится к экрану целиком, живёт здесь — и глазу
-    // не приходится искать это по углам.
-    ui.panel(bar, "panel");
+    // не приходится искать это по углам. Заливкой, по той же причине,
+    // что и верхняя.
+    ui.fill(bar, ui.theme().barFill);
+    ui.fill(Rect{0.0f, bar.y, width, 1.0f}, ui.theme().edge);
 
-    const Rect reset{unit * 1.5f, bar.y + unit * 0.6f, line * 9.0f, height - unit * 1.2f};
-    const ButtonResult fit = ui.iconButton(uiId("reset-view"), reset, "icon_planet",
+    const Rect reset{unit * 1.5f, bar.y + unit * 0.7f, line * 9.0f, height - unit * 1.4f};
+    const ButtonResult fit = ui.iconButton(uiId("reset-view"), reset, "icon_galaxy",
                                            state.inSystem ? "Вся система" : "Вся галактика");
     if (fit.hovered) {
         ui.tooltip(state.inSystem
@@ -1265,22 +1404,24 @@ ScreenAction Screen::bottomBar(Ui& ui, const game::Client& client,
         }
     }
 
-    // Престиж — между кнопками, слева от подсказки. Это счёт за сезон,
-    // и он обязан быть на виду постоянно: игра, в которой не видно, за что
-    // играешь, читается как бесцельная возня. Пять треков в подсказке,
-    // сумма на полосе — потому что решение принимают по сумме, а разбирают
-    // по трекам.
-    const auto& empire = client.view().empire;
-    const std::string score = "престиж " + grouped(empire.prestigeTotal());
-    const float scoreWidth = ui.textWidth(score) + unit * 2.0f;
-    const Rect scoreBox{reset.right() + unit * 1.5f, bar.y, scoreWidth, height};
-    ui.textCentered(scoreBox, score, ui.theme().textAccent);
-    if (ui.hotspot(uiId("prestige"), scoreBox).hovered) {
-        ui.tooltip("территория " + number(empire.prestigeTerritory) +
-                   " · экономика " + number(empire.prestigeEconomy) +
-                   " · наука " + number(empire.prestigeScience) +
-                   " · война " + number(empire.prestigeWar) +
-                   " · дипломатия " + number(empire.prestigeDiplomacy));
+    // Связь, а не престиж: престиж переехал в верхнюю полосу, и держать
+    // его в двух местах — значит заставлять игрока сверять два числа
+    // и гадать, почему их два.
+    //
+    // В MMO игрок обязан отличать «сервер тормозит» от «я плохо играю»,
+    // поэтому связь показывается ВСЕГДА, а не только когда стало плохо.
+    // Индикатор, появляющийся вместе с проблемой, сам выглядит проблемой.
+    const std::string link = number(client.roundTrip()) + " мс · потери " +
+                             number(client.lossPercent()) + "%";
+    const float linkWidth = ui.textWidth(link) + unit * 2.0f;
+    const Rect linkBox{reset.right() + unit * 1.5f, bar.y, linkWidth, height};
+    const TextColor quality = client.lossPercent() > 15  ? ui.theme().textBad
+                              : client.lossPercent() > 5 ? ui.theme().textWarn
+                                                         : ui.theme().textDim;
+    ui.textCentered(linkBox, link, quality);
+    if (ui.hotspot(uiId("link"), linkBox).hovered) {
+        ui.tooltip("задержка до сервера и доля потерянных пакетов · выше "
+                   "полусотни миллисекунд приказы начинают ощущаться вязкими");
     }
 
     // Строка состояния: что игра ждёт от игрока прямо сейчас. Одна,
@@ -1302,13 +1443,206 @@ ScreenAction Screen::bottomBar(Ui& ui, const game::Client& client,
         hint = "правая кнопка вращает вид, колесо приближает";
         hintColor = ui.theme().textDim;
     }
-    ui.textCentered(Rect{scoreBox.right(), bar.y, quit.x - scoreBox.right(), height}, hint,
+    ui.textCentered(Rect{linkBox.right(), bar.y, quit.x - linkBox.right(), height}, hint,
                     hintColor);
     return action;
 }
 
 // ---------------------------------------------------------------------------
 // Сборка
+// ---------------------------------------------------------------------------
+// Список своего: системы и флоты
+// ---------------------------------------------------------------------------
+
+ScreenAction Screen::outliner(Ui& ui, const game::Client& client,
+                              const ScreenState& state, float top, float width) {
+    // ЗАЧЕМ ОН НУЖЕН. Панели слева отвечают на вопрос «что я сейчас
+    // выбрал». Этот список отвечает на другой: «что у меня вообще есть».
+    // Вопросы разные, и задают их с разной частотой — первый раз в минуту,
+    // второй каждый раз, когда надо что-то найти. Без списка поиск своей
+    // системы среди двухсот чужих идёт глазами по карте, и на сотне систем
+    // это перестаёт работать совсем.
+    //
+    // Разделы СВОРАЧИВАЮТСЯ. У игрока с тридцатью системами и пятью
+    // флотами флоты уезжают за нижний край, а именно они меняются чаще
+    // всего — свернул системы, и флот снова на виду.
+    ScreenAction action;
+    const float unit = ui.unit();
+    const float line = ui.lineHeight();
+    const uint8_t mine = uint8_t(client.empire() & 0xFFu);
+
+    // Свои системы и свои флоты собираются заранее: высота панели считается
+    // из ТОГО ЖЕ списка, что и рисуется. Считать высоту отдельно — это
+    // ровно тот способ, которым панель однажды разъезжается с содержимым.
+    std::vector<uint32_t> systems;
+    for (uint32_t i = 0; i < uint32_t(client.view().systems.size()); ++i) {
+        if (client.view().systems[i].owner == mine) systems.push_back(i);
+    }
+    std::vector<std::pair<uint32_t, const game::FleetView*>> fleets;
+    for (const auto& [id, fleet] : client.view().fleets) {
+        if (fleet.empire != mine) continue;
+        fleets.emplace_back(id, &fleet);
+    }
+    // Самый крупный флот сверху: искать глазами обычно именно его.
+    std::sort(fleets.begin(), fleets.end(), [](const auto& a, const auto& b) {
+        return sim::fleetTonnage(a.second->composition) >
+               sim::fleetTonnage(b.second->composition);
+    });
+
+    const float header = line * 1.7f;
+    const float row = line * 1.9f;
+    const float bottomLimit = float(ui.screenHeight()) - line * 3.6f - unit * 2.0f;
+
+    // Сколько строк влезает. Место делится между разделами по потребности,
+    // а не поровну: пустой раздел не должен занимать половину списка.
+    const auto collapsed = [&](uint32_t section) {
+        return (collapsed_ & (1u << section)) != 0;
+    };
+    const float available = bottomLimit - top - unit * 2.0f - header * 2.0f;
+    int systemRows = collapsed(0) ? 0 : int(systems.size());
+    int fleetRows = collapsed(1) ? 0 : int(fleets.size());
+    if (available > 0.0f) {
+        int budget = int(available / row);
+        // Флотам гарантируется место: они короче и меняются чаще.
+        const int fleetShare = std::min(fleetRows, std::max(0, budget / 3));
+        budget -= fleetShare;
+        systemRows = std::min(systemRows, std::max(0, budget));
+        fleetRows = std::min(fleetRows, fleetShare + std::max(0, budget - systemRows));
+    } else {
+        systemRows = fleetRows = 0;
+    }
+
+    const bool systemsCut = systemRows < int(systems.size()) && !collapsed(0);
+    const bool fleetsCut = fleetRows < int(fleets.size()) && !collapsed(1);
+
+    Column column(unit);
+    column.row(header, unit * 0.3f);
+    for (int i = 0; i < systemRows; ++i) column.row(row);
+    if (systemsCut) column.row(line * 1.4f);
+    column.row(header, unit * 0.3f);
+    for (int i = 0; i < fleetRows; ++i) column.row(row);
+    if (fleetsCut) column.row(line * 1.4f);
+
+    const Rect panel{float(ui.screenWidth()) - width - unit, top, width, column.height()};
+    ui.panel(panel, "hud_panel");
+    column.place(panel);
+
+    // --- заголовок раздела ---
+    const auto section = [&](uint32_t index, const char* title, size_t count) {
+        const Rect at = column.next();
+        ui.sectionHeader(at);
+        const float mark = line * 0.9f;
+        ui.icon(Rect{at.x + unit * 0.5f, at.y + (at.h - mark) * 0.5f, mark, mark},
+                collapsed(index) ? "icon_chevron_right" : "icon_chevron_down");
+        ui.text(at.x + unit * 0.6f + mark, at.y + (at.h - line) * 0.5f, title,
+                ui.theme().textAccent);
+        ui.textRight(Rect{at.x, at.y + (at.h - line) * 0.5f, at.w - unit * 0.6f, line},
+                     number(int64_t(count)), ui.theme().textDim);
+        const ButtonResult hit = ui.hotspot(uiId("section", index), at);
+        if (hit.hovered) {
+            ui.tooltip(collapsed(index) ? "развернуть раздел" : "свернуть раздел");
+        }
+        if (hit.clicked) collapsed_ ^= (1u << index);
+    };
+
+    section(0, "СИСТЕМЫ", systems.size());
+
+    for (int i = 0; i < systemRows; ++i) {
+        const uint32_t id = systems[size_t(i)];
+        const auto& view = client.view().systems[id];
+        const Rect at = column.next();
+        const Rect card{at.x, at.y, at.w, at.h - 2.0f};
+        const bool selected = id == state.system;
+
+        const ButtonResult hit = ui.hotspot(uiId("out-system", id), card);
+        ui.listRow(card, hit.hovered, selected);
+        if (hit.clicked) {
+            action.kind = ActionKind::FocusSystem;
+            action.value = id;
+        }
+
+        const float mark = card.h * 0.62f;
+        ui.icon(Rect{card.x + unit * 0.5f, card.y + (card.h - mark) * 0.5f, mark, mark},
+                "icon_star");
+        ui.text(card.x + unit * 0.9f + mark, card.y + (card.h - line) * 0.5f,
+                "Система " + number(id), selected ? ui.theme().text : ui.theme().textDim);
+
+        // Сколько планет уже ваши. Число, ради которого сюда и смотрят:
+        // «3 / 5» означает, что в этой системе ещё есть что занимать.
+        const std::string counter =
+            number(view.ownedPlanets) + "/" + number(view.totalPlanets);
+        ui.textRight(Rect{card.x, card.y + (card.h - line) * 0.5f, card.w - unit * 0.6f,
+                          line},
+                     counter,
+                     view.ownedPlanets < view.totalPlanets ? ui.theme().textWarn
+                                                           : ui.theme().textGood);
+        if (hit.hovered) {
+            ui.tooltip("щёлкните — камера наведётся на эту систему · занято планет " +
+                       counter);
+        }
+    }
+    if (systemsCut) {
+        const Rect at = column.next();
+        // О скрытом говорится ПРЯМО. Молча обрезанный список — это
+        // сообщение «у вас больше ничего нет», и оно ложное.
+        ui.text(at.x + unit * 0.5f, at.y, "ещё " +
+                    number(int64_t(systems.size()) - systemRows) + " · сверните раздел",
+                ui.theme().textDim);
+    }
+
+    section(1, "ФЛОТЫ", fleets.size());
+
+    for (int i = 0; i < fleetRows; ++i) {
+        const uint32_t id = fleets[size_t(i)].first;
+        const game::FleetView& fleet = *fleets[size_t(i)].second;
+        const Rect at = column.next();
+        const Rect card{at.x, at.y, at.w, at.h - 2.0f};
+        const bool selected = id == state.fleet;
+
+        const ButtonResult hit = ui.hotspot(uiId("out-fleet", id), card);
+        ui.listRow(card, hit.hovered, selected);
+        if (hit.clicked) {
+            action.kind = ActionKind::SelectFleet;
+            action.value = id;
+        }
+
+        const float mark = card.h * 0.62f;
+        ui.icon(Rect{card.x + unit * 0.5f, card.y + (card.h - mark) * 0.5f, mark, mark},
+                "icon_fleet");
+        ui.text(card.x + unit * 0.9f + mark, card.y + (card.h - line) * 0.5f,
+                number(sim::fleetTonnage(fleet.composition)) + " т",
+                selected ? ui.theme().text : ui.theme().textDim);
+
+        // В пути или стоит — это первое, что нужно знать про флот.
+        const bool moving = fleet.nextSystem != fleet.system;
+        const std::string where =
+            moving ? "→ " + number(fleet.nextSystem) : number(fleet.system);
+        ui.textRight(Rect{card.x, card.y + (card.h - line) * 0.5f, card.w - unit * 0.6f,
+                          line},
+                     where, moving ? ui.theme().textWarn : ui.theme().textDim);
+        if (hit.hovered) {
+            std::string full;
+            for (uint8_t hull = 1; hull < uint8_t(sim::Hull::Count); ++hull) {
+                const uint32_t count = fleet.composition[sim::Hull(hull)];
+                if (count == 0) continue;
+                if (!full.empty()) full += ", ";
+                full += std::string(hullName(hull)) + " " + number(count);
+            }
+            if (full.empty()) full = "пустой отряд";
+            ui.tooltip(full + (moving ? " · идёт в систему " + number(fleet.nextSystem)
+                                      : " · стоит в системе " + number(fleet.system)) +
+                       " · щёлкните, чтобы выбрать");
+        }
+    }
+    if (fleetsCut) {
+        const Rect at = column.next();
+        ui.text(at.x + unit * 0.5f, at.y,
+                "ещё " + number(int64_t(fleets.size()) - fleetRows), ui.theme().textDim);
+    }
+
+    return action;
+}
+
 // ---------------------------------------------------------------------------
 
 const char* actionName(ActionKind kind) {
@@ -1342,7 +1676,7 @@ ScreenAction Screen::build(Ui& ui, const game::Client& client, const ScreenState
         const Rect box{(float(ui.screenWidth()) - line * 16.0f) * 0.5f,
                        (float(ui.screenHeight()) - line * 3.0f) * 0.5f, line * 16.0f,
                        line * 3.0f};
-        ui.panel(box, "panel");
+        ui.panel(box, "hud_panel");
         ui.textCentered(box, "подключаюсь к серверу...", ui.theme().text);
         return action;
     }
@@ -1355,13 +1689,22 @@ ScreenAction Screen::build(Ui& ui, const game::Client& client, const ScreenState
 
     const float unit = ui.unit();
     const float line = ui.lineHeight();
-    const float top = line + unit * 2.0f + unit * 1.2f;
+    // Ниже верхней полосы ровно на её высоту: полоса нарисована из тех же
+    // чисел, и разъехаться им нечем.
+    const float top = line * 2.55f + unit * 0.5f + unit;
 
-    // Два столбца, между ними мир. Слева — «что я выбрал»: система, потом
-    // планета, потом застройка. Это порядок, в котором человек думает,
-    // и потому панели идут именно так, а не разбросаны по углам.
+    // ДВА СТОЛБЦА, между ними карта.
+    //
+    // Слева — «что я выбрал»: система, потом планета, потом флот в ней.
+    // Это порядок, в котором человек думает, и потому панели идут именно
+    // так, а не разбросаны по углам.
+    //
+    // Справа — «что у меня есть»: список систем и флотов. Разделение
+    // взято у Stellaris и держится на простом наблюдении: выбранное
+    // разглядывают, а список просматривают, и смешивать эти два занятия
+    // в одной колонке значит мешать обоим.
     const float leftWidth = std::min(float(ui.screenWidth()) * 0.26f, line * 21.0f);
-    const float rightWidth = std::min(float(ui.screenWidth()) * 0.23f, line * 19.0f);
+    const float rightWidth = std::min(float(ui.screenWidth()) * 0.20f, line * 17.0f);
 
     take(topBar(ui, client));
 
@@ -1369,8 +1712,9 @@ ScreenAction Screen::build(Ui& ui, const game::Client& client, const ScreenState
     take(systemPanel(ui, client, state, top, leftWidth, leftBottom));
     float planetBottom = leftBottom;
     take(planetPanel(ui, client, state, leftBottom + unit * 1.2f, leftWidth, planetBottom));
+    take(fleetPanel(ui, client, state, planetBottom + unit * 1.2f, leftWidth));
 
-    take(fleetPanel(ui, client, state, top, rightWidth));
+    take(outliner(ui, client, state, top, rightWidth));
     take(messagePanel(ui, now, top, unit * 1.5f + leftWidth,
                       float(ui.screenWidth()) - rightWidth - unit * 1.5f));
     take(bottomBar(ui, client, state, now));

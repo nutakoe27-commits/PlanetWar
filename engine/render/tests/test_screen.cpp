@@ -379,10 +379,17 @@ TEST_CASE("экран: пустой слот открывает палитру, 
     fixture.frame(-100.0f, -100.0f, false, false, false);
     REQUIRE(fixture.hasPalette());
 
-    // Ищем кнопку шахты и нажимаем её.
+    // Ищем кнопку постройки и нажимаем её.
+    //
+    // Обход идёт ПО ВСЕМУ ЭКРАНУ, а не по заранее известной полосе слева.
+    // Прежняя редакция искала в диапазоне x от 20 до 380 — то есть знала,
+    // где нарисован левый столбец, — и покраснела в тот день, когда
+    // палитра переехала в отдельное окно рядом. Тест не должен знать
+    // координат панелей: он проверяет, что до кнопки можно ДОТЯНУТЬСЯ
+    // мышью, а не то, что она лежит в конкретном месте.
     bool ordered = false;
-    for (int y = 40; y < 880 && !ordered; ++y) {
-        for (int x = 20; x < 380; x += 6) {
+    for (int y = 0; y < fixture.screenHeight && !ordered; ++y) {
+        for (int x = 0; x < fixture.screenWidth; x += 6) {
             const ScreenAction action = fixture.click(float(x), float(y));
             if (action.kind != ActionKind::Build) continue;
             CHECK(action.slot == 0);

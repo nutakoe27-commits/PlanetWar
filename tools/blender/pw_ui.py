@@ -39,6 +39,20 @@ ICON_SIZE = 96
 PANEL_SIZE = 96
 PANEL_BORDER = 24
 
+# Поле растяжки у рамок в духе Stellaris — вдвое меньше.
+#
+# ЭТО НЕ ВКУСОВЩИНА. Поле растяжки не тянется, поэтому у плитки с полем 24
+# верхний и нижний углы вместе занимают 48 пикселей. Строка списка высотой
+# 30 пикселей ниже этой суммы — углы налезают друг на друга, и вместо
+# прямоугольника со срезами получается линза. Первый же список это и показал:
+# строки выглядели капсулами, а не строками.
+#
+# Срез тоже уменьшен, чтобы остаться внутри поля: срез больше поля растяжки
+# «поедет» вбок на широкой панели.
+HUD_BORDER = 14
+HUD_CUT = 0.22
+HUD_RIM = 0.062
+
 
 def _srgb(channel: float) -> float:
     """sRGB -> линейное. Blender считает свет в линейном пространстве,
@@ -172,6 +186,117 @@ def rounded_plate(name: str, width: float, height: float, radius: float,
 
     obj = bpy.data.objects.new(name, mesh)
     bpy.context.collection.objects.link(obj)
+    return obj
+
+
+# ---------------------------------------------------------------------------
+# Рамки в духе Stellaris: срезанные углы и светящаяся кромка
+# ---------------------------------------------------------------------------
+
+
+def _chamfer_outline(width: float, height: float, cut: float):
+    """Контур прямоугольника со СРЕЗАННЫМИ углами.
+
+    Не скруглёнными. Разница принципиальна и хорошо видна: скругление
+    читается как мягкая кнопка операционной системы, срез — как деталь
+    корпуса. Весь космический интерфейс держится на этом различии,
+    и Stellaris здесь не исключение — там срезаны вообще все углы.
+
+    Срез обязан быть меньше поля растяжки девяти частей (24 из 96),
+    иначе угол попадёт в тянущуюся часть и «поедет» на широкой панели.
+    """
+    half_w = width * 0.5
+    half_h = height * 0.5
+    return [
+        (half_w - cut, half_h), (half_w, half_h - cut),
+        (half_w, -half_h + cut), (half_w - cut, -half_h),
+        (-half_w + cut, -half_h), (-half_w, -half_h + cut),
+        (-half_w, half_h - cut), (-half_w + cut, half_h),
+    ]
+
+
+def angular_plate(name: str, width: float = 2.0, height: float = 2.0,
+                  cut: float = 0.30, rim: float = 0.085,
+                  thickness: float = 0.10):
+    """Пластина со срезанными углами и отдельной кромкой.
+
+    Кромка — НЕ НАРИСОВАННАЯ ОБВОДКА, а настоящая фаска со своим
+    материалом. Поэтому она честно ловит свет по периметру и не выглядит
+    контуром, обведённым поверх заливки: у обводки одинаковая яркость
+    на всех сторонах, у фаски — нет.
+
+    Три материала по назначению граней:
+      0 — лицевая плоскость (тёмная подложка панели),
+      1 — фаска по периметру (светящаяся кромка),
+      2 — бортик вниз (тень под панелью).
+    """
+    outline = _chamfer_outline(width, height, cut)
+    count = len(outline)
+    shrink = max(0.0, 1.0 - rim / (min(width, height) * 0.5))
+
+    vertices = []
+    faces = []
+    slots = []
+
+    top_z = thickness * 0.5
+
+    # Лицевая плоскость: веер из центра.
+    vertices.append((0.0, 0.0, top_z))
+    inner_start = len(vertices)
+    for x, y in outline:
+        vertices.append((x * shrink, y * shrink, top_z))
+    for i in range(count):
+        faces.append((0, inner_start + i, inner_start + (i + 1) % count))
+        slots.append(0)
+
+    # Фаска: от лицевой плоскости к внешнему контуру, чуть ниже.
+    outer_start = len(vertices)
+    for x, y in outline:
+        vertices.append((x, y, top_z - rim * 0.55))
+    for i in range(count):
+        faces.append((inner_start + i, inner_start + (i + 1) % count,
+                      outer_start + (i + 1) % count, outer_start + i))
+        slots.append(1)
+
+    # Бортик: панель обязана иметь толщину, иначе её край бумажный.
+    bottom_start = len(vertices)
+    for x, y in outline:
+        vertices.append((x, y, -thickness * 0.5))
+    for i in range(count):
+        faces.append((outer_start + i, outer_start + (i + 1) % count,
+                      bottom_start + (i + 1) % count, bottom_start + i))
+        slots.append(2)
+
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    for polygon, slot in zip(mesh.polygons, slots):
+        polygon.material_index = slot
+
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+    return obj
+
+
+def hud_plate(name: str, body, rim, skirt=None, alpha: float = 0.94,
+              cut: float = HUD_CUT, rim_width: float = HUD_RIM,
+              rim_glow: float = 1.0):
+    """Готовая панель интерфейса: подложка, кромка, тень.
+
+    Яркость кромки — ПАРАМЕТР, и по умолчанию она обычная.
+    Пересвеченной её получают только внешние рамки: панель обязана
+    читаться поверх звёздного неба, а небо местами ярче любой подложки.
+    Строкам списка и кнопкам яркая кромка противопоказана — когда светится
+    всё, интерфейс превращается в гирлянду и перестаёт направлять взгляд.
+    Светиться должно то, на что смотреть, а не всё сразу.
+    """
+    obj = angular_plate(f"pw_ui_{name}", cut=cut, rim=rim_width)
+    obj.data.materials.append(flat_material(f"pw_ui_mat_{name}_body", body, alpha))
+    obj.data.materials.append(
+        flat_material(f"pw_ui_mat_{name}_rim", rim, min(1.0, alpha + 0.06), rim_glow))
+    obj.data.materials.append(
+        flat_material(f"pw_ui_mat_{name}_skirt", skirt or (0.01, 0.015, 0.03),
+                      alpha * 0.85, 0.6))
     return obj
 
 
@@ -355,6 +480,113 @@ def glyph_icon(kind: str, name: str):
         bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.12, 0.0, 0.1))
         obj = add(bpy.context.object)
         obj.scale = (0.24, 0.08, 0.08)
+    elif kind == "chevron_down":
+        # Уголок «свернуть/развернуть» в заголовке списка. Две планки
+        # домиком, а не треугольник: сплошной треугольник в четырнадцать
+        # пикселей превращается в кляксу, а уголок из штрихов остаётся
+        # уголком.
+        for sign in (1.0, -1.0):
+            bpy.ops.mesh.primitive_cube_add(
+                size=1.0, rotation=(0.0, 0.0, sign * math.pi * 0.25),
+                location=(sign * 0.21, 0.10, 0.0))
+            obj = add(bpy.context.object)
+            obj.scale = (0.62, 0.17, 0.17)
+    elif kind == "chevron_right":
+        for sign in (1.0, -1.0):
+            bpy.ops.mesh.primitive_cube_add(
+                size=1.0, rotation=(0.0, 0.0, sign * math.pi * 0.25),
+                location=(-0.10, sign * 0.21, 0.0))
+            obj = add(bpy.context.object)
+            obj.scale = (0.17, 0.62, 0.17)
+    elif kind == "crest":
+        # Герб империи слева в верхней полосе — на месте, где игрок ищет
+        # ответ «чья это игра». Обязан отличаться силуэтом от всего набора.
+        #
+        # Лучи ДЛИННЕЕ щита, а не вписаны в него. Вписанная звезда
+        # сливается с шестиугольником в белое пятно: силуэт получается
+        # у щита, а звезды в нём не видно вовсе.
+        for rotation in (0.0, math.pi * 0.5, math.pi * 0.25, math.pi * 0.75):
+            bpy.ops.mesh.primitive_cube_add(size=1.0, rotation=(0.0, 0.0, rotation),
+                                            location=(0.0, 0.0, 0.10))
+            obj = add(bpy.context.object)
+            obj.scale = (1.02, 0.085, 0.10)
+        bpy.ops.mesh.primitive_cylinder_add(vertices=6, radius=0.40, depth=0.20,
+                                            rotation=(0.0, 0.0, math.radians(30.0)))
+        obj = add(bpy.context.object)
+        obj.scale = (1.0, 1.10, 1.0)
+        bpy.ops.mesh.primitive_cylinder_add(vertices=6, radius=0.26, depth=0.28,
+                                            rotation=(0.0, 0.0, math.radians(30.0)),
+                                            location=(0.0, 0.0, 0.06))
+        obj = add(bpy.context.object)
+        obj.scale = (1.0, 1.10, 1.0)
+    elif kind == "galaxy":
+        # Спираль для кнопки «вся галактика».
+        #
+        # Шары ПЕРЕКРЫВАЮТСЯ. Первая версия ставила их с зазором, и вместо
+        # рукавов получалась россыпь: на кнопке в двадцать пикселей такая
+        # россыпь читается как грязь, а не как галактика. Рукав обязан
+        # быть сплошным, поэтому шаг вдоль дуги меньше диаметра шара.
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=18, ring_count=12, radius=0.20)
+        obj = add(bpy.context.object)
+        obj.scale = (1.0, 1.0, 0.5)
+        for branch in (0.0, math.pi):
+            for step in range(14):
+                t = step / 13.0
+                angle = branch + t * 2.6
+                radius = 0.16 + t * 0.52
+                size = 0.145 - t * 0.075
+                bpy.ops.mesh.primitive_uv_sphere_add(
+                    segments=12, ring_count=8, radius=size,
+                    location=(radius * math.cos(angle), radius * math.sin(angle), 0.0))
+                obj = add(bpy.context.object)
+                obj.scale = (1.0, 1.0, 0.45)
+    elif kind == "alert":
+        # Треугольник с восклицанием: тревога обязана узнаваться силуэтом
+        # раньше, чем игрок прочтёт текст рядом.
+        #
+        # ПРИЗМА, А НЕ ПИРАМИДА. Конус с нулевым верхним радиусом сверху
+        # выглядит треугольником только в проекции, а под наклоном камеры
+        # превращается в кляксу. Призма остаётся треугольником с любой
+        # высоты — и именно она снимается прямо сверху.
+        # БЕЗ ПОВОРОТА. Проверено съёмкой, а не выведено из документации:
+        # у трёхгранной призмы Blender вершина смотрит вверх сама, а
+        # каждая добавленная четверть оборота уводила её по часовой —
+        # девяносто градусов дали треугольник «направо», сто восемьдесят
+        # «вниз». Знак тревоги, смотрящий вбок, означает уже не тревогу.
+        bpy.ops.mesh.primitive_cone_add(vertices=3, radius1=0.60, radius2=0.60,
+                                        depth=0.16)
+        add(bpy.context.object)
+        # Восклицательный знак: штрих и точка под ним. Смещены вниз от
+        # середины — у треугольника, стоящего на основании, свободное
+        # место именно там, а не в остром верху.
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.0, 0.06, 0.11))
+        obj = add(bpy.context.object)
+        obj.scale = (0.11, 0.30, 0.12)
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0.0, -0.21, 0.11))
+        obj = add(bpy.context.object)
+        obj.scale = (0.12, 0.12, 0.12)
+    elif kind == "star":
+        # Звезда для строки системы в списке. Шар с коронами, а не
+        # пятиконечник: на карте система выглядит именно так.
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=20, ring_count=12, radius=0.30)
+        add(bpy.context.object)
+        for rotation in (0.0, math.pi * 0.5, math.pi * 0.25, math.pi * 0.75):
+            bpy.ops.mesh.primitive_cube_add(size=1.0, rotation=(0.0, 0.0, rotation))
+            obj = add(bpy.context.object)
+            obj.scale = (0.92, 0.055, 0.055)
+    elif kind == "prestige":
+        # Престиж — венок с гранью в середине. Отличается от звезды тем,
+        # что он кольцо, а не диск: рядом в строке они не путаются.
+        bpy.ops.mesh.primitive_torus_add(major_radius=0.40, minor_radius=0.075,
+                                         major_segments=24, minor_segments=8)
+        add(bpy.context.object)
+        bpy.ops.mesh.primitive_cone_add(vertices=4, radius1=0.24, radius2=0.0,
+                                        depth=0.34, location=(0.0, 0.0, 0.05))
+        add(bpy.context.object)
+        bpy.ops.mesh.primitive_cone_add(vertices=4, radius1=0.24, radius2=0.0,
+                                        depth=0.34, location=(0.0, 0.0, -0.05),
+                                        rotation=(math.pi, 0.0, 0.0))
+        add(bpy.context.object)
     else:  # demolish — мусорный бак
         # БЫЛ МОЛОТОК, и на кнопке размером в строку он читался как цифра
         # «7»: длинная ручка наискось и короткий боёк. Значок, который

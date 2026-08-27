@@ -110,3 +110,27 @@ TEST_CASE("fixed: clamp и lerp") {
     CHECK(clamp(fx::fromInt(15), lo, hi) == fx::fromInt(15));
     CHECK(lerp(lo, hi, fx::fromFraction(1, 2)) == fx::fromInt(15));
 }
+
+TEST_CASE("fixed: округление к ближайшему честно на обеих сторонах нуля") {
+    // Число, которое ПОКАЗЫВАЮТ, округляется, а не усекается. Проверка
+    // существует потому, что на верхней полосе живёт приход ресурсов,
+    // и он бывает отрицательным: усечение вниз показало бы «-1» там,
+    // где на деле «-0,4», а усечение к нулю — «0» там, где убыток есть.
+    CHECK(fx::fromFraction(4, 10).roundToInt() == 0);
+    CHECK(fx::fromFraction(6, 10).roundToInt() == 1);
+    CHECK(fx::fromFraction(-4, 10).roundToInt() == 0);
+    CHECK(fx::fromFraction(-6, 10).roundToInt() == -1);
+    CHECK(fx::fromFraction(-14, 10).roundToInt() == -1);
+    CHECK(fx::fromFraction(-16, 10).roundToInt() == -2);
+
+    // Ровная половина уходит ВВЕРХ, в обе стороны одинаково: правило
+    // должно быть одно, иначе два одинаковых по модулю числа округлятся
+    // по-разному и разойдутся на единицу.
+    CHECK(fx::fromFraction(1, 2).roundToInt() == 1);
+    CHECK(fx::fromFraction(-1, 2).roundToInt() == 0);
+
+    // Целые не двигаются.
+    for (int64_t value : {-7, -1, 0, 1, 42}) {
+        CHECK(fx::fromInt(value).roundToInt() == value);
+    }
+}

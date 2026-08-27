@@ -102,6 +102,12 @@ void writeEmpire(ByteWriter& writer, const EmpireView& empire) {
     writer.fixed(empire.alloys);
     writer.fixed(empire.research);
     writer.fixed(empire.influence);
+    writer.fixed(empire.energyIncome);
+    writer.fixed(empire.mineralsIncome);
+    writer.fixed(empire.alloysIncome);
+    writer.fixed(empire.researchIncome);
+    writer.fixed(empire.influenceIncome);
+    writer.fixed(empire.foundryIdle);
     writer.u8(empire.stage);
     writer.varint(empire.stageSecondsLeft);
     writer.varint(empire.prestigeTerritory);
@@ -117,6 +123,12 @@ bool readEmpire(ByteReader& reader, EmpireView& empire) {
     empire.alloys = reader.fixed();
     empire.research = reader.fixed();
     empire.influence = reader.fixed();
+    empire.energyIncome = reader.fixed();
+    empire.mineralsIncome = reader.fixed();
+    empire.alloysIncome = reader.fixed();
+    empire.researchIncome = reader.fixed();
+    empire.influenceIncome = reader.fixed();
+    empire.foundryIdle = reader.fixed();
     empire.stage = reader.u8();
     empire.stageSecondsLeft = uint32_t(reader.varint());
     empire.prestigeTerritory = uint32_t(reader.varint());
@@ -128,9 +140,27 @@ bool readEmpire(ByteReader& reader, EmpireView& empire) {
 }
 
 bool sameEmpire(const EmpireView& a, const EmpireView& b) {
+    // Сравниваются ВСЕ отправляемые поля, а не только запасы.
+    //
+    // Раньше сравнивались одни запасы, и это работало по случайности:
+    // запасы меняются почти каждый тик, поэтому блок и так уходил заново,
+    // а стадия с престижем ехали пассажирами. Стоило запасам замереть —
+    // упёрлись в ноль по энергии, встала экономика на Финале — и смена
+    // стадии перестала бы доезжать до клиента вовсе.
     return a.energy.raw() == b.energy.raw() && a.minerals.raw() == b.minerals.raw() &&
            a.alloys.raw() == b.alloys.raw() && a.research.raw() == b.research.raw() &&
-           a.influence.raw() == b.influence.raw();
+           a.influence.raw() == b.influence.raw() &&
+           a.energyIncome.raw() == b.energyIncome.raw() &&
+           a.mineralsIncome.raw() == b.mineralsIncome.raw() &&
+           a.alloysIncome.raw() == b.alloysIncome.raw() &&
+           a.researchIncome.raw() == b.researchIncome.raw() &&
+           a.influenceIncome.raw() == b.influenceIncome.raw() &&
+           a.foundryIdle.raw() == b.foundryIdle.raw() && a.stage == b.stage &&
+           a.stageSecondsLeft == b.stageSecondsLeft &&
+           a.prestigeTerritory == b.prestigeTerritory &&
+           a.prestigeEconomy == b.prestigeEconomy &&
+           a.prestigeScience == b.prestigeScience && a.prestigeWar == b.prestigeWar &&
+           a.prestigeDiplomacy == b.prestigeDiplomacy;
 }
 
 }  // namespace
@@ -270,6 +300,20 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
             out.empire.prestigeDiplomacy = prestige->diplomacy;
         }
     });
+
+    // Приход берётся из бухгалтерии тика — той самой, по которой сервер
+    // и начисляет ресурсы. Второго счёта нет, разойтись нечему.
+    if (const sim::Ledger* ledger = world.resource<sim::Ledger>()) {
+        if (empire < ledger->size()) {
+            const sim::Ledger::Flow& flow = ledger->at(empire);
+            out.empire.energyIncome = flow.energy;
+            out.empire.mineralsIncome = flow.minerals;
+            out.empire.alloysIncome = flow.alloys;
+            out.empire.researchIncome = flow.research;
+            out.empire.influenceIncome = flow.influence;
+            out.empire.foundryIdle = flow.foundryIdle;
+        }
+    }
 
     if (const sim::Season* season = world.resource<sim::Season>()) {
         out.empire.stage = uint8_t(season->stage);

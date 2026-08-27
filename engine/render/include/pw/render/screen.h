@@ -187,6 +187,9 @@ private:
     /// секунд взвод спадает сам: выход по одному нажатию рядом с кнопкой
     /// «показать всё» — это потерянная партия из-за дрогнувшей руки.
     int64_t quitArmedAt_ = 0;
+    /// Какие разделы списка свёрнуты. Битовая маска, а не поле в мире:
+    /// это вид, а не состояние игры, и сервер о нём знать не обязан.
+    uint32_t collapsed_ = 0;
 
     ScreenAction topBar(Ui& ui, const game::Client& client) const;
     /// Панели левого столбца. Каждая возвращает свою нижнюю границу
@@ -200,6 +203,15 @@ private:
                              float& bottom) const;
     ScreenAction fleetPanel(Ui& ui, const game::Client& client,
                             const ScreenState& state, float top, float width) const;
+    /// Список всего своего у правого края: системы и флоты.
+    ///
+    /// Тот самый «аутлайнер», без которого стратегия на сотню систем
+    /// превращается в поиск по карте глазами. Панели слева отвечают
+    /// на вопрос «что я выбрал», список справа — на вопрос «что у меня
+    /// вообще есть», и это разные вопросы: первый задают раз в минуту,
+    /// второй — каждый раз, когда надо что-то найти.
+    ScreenAction outliner(Ui& ui, const game::Client& client, const ScreenState& state,
+                          float top, float width);
     ScreenAction messagePanel(Ui& ui, int64_t now, float top, float left,
                               float right) const;
     ScreenAction bottomBar(Ui& ui, const game::Client& client, const ScreenState& state,

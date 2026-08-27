@@ -453,11 +453,47 @@ def build_ui(samples: int) -> None:
         borders[name] = pw_ui.PANEL_BORDER
         bpy.data.objects.remove(obj, do_unlink=True)
 
+    # --- рамки в духе Stellaris: срезанные углы и светящаяся кромка ---
+    #
+    # Отдельный набор, а не замена старому: скруглённые пластины остались
+    # под индикаторы и мелочь, где срез в четыре пикселя всё равно не виден.
+    #
+    # Подложки почти чёрные, кромки — холодная сталь. Это и есть весь
+    # секрет космического интерфейса: цвет несёт кромка и текст, а панель
+    # обязана уступить экран карте. Панель, выкрашенная в цвет, отбирает
+    # внимание у того, ради чего она нарисована.
+    hud_plates = [
+        # имя,                подложка,               кромка,                 альфа, яркость кромки
+        # Внешние рамки — светятся: им держать край поверх звёздного неба.
+        ("hud_bar",           (0.020, 0.028, 0.048),  (0.24, 0.46, 0.66),     0.97, 1.30),
+        ("hud_panel",         (0.030, 0.042, 0.070),  (0.21, 0.42, 0.60),     0.93, 1.25),
+        ("hud_panel_deep",    (0.016, 0.023, 0.040),  (0.16, 0.32, 0.47),     0.95, 1.10),
+        # Внутренности — почти не светятся. Когда светится всё, не светится
+        # ничего: взгляд перестаёт различать, что здесь главное.
+        ("hud_header",        (0.055, 0.080, 0.125),  (0.17, 0.30, 0.42),     0.94, 0.75),
+        ("hud_row",           (0.048, 0.066, 0.100),  (0.11, 0.20, 0.30),     0.72, 0.55),
+        ("hud_row_hover",     (0.100, 0.145, 0.210),  (0.22, 0.40, 0.56),     0.90, 0.80),
+        ("hud_row_active",    (0.075, 0.150, 0.215),  (0.34, 0.62, 0.86),     0.95, 1.00),
+        ("hud_button",        (0.062, 0.088, 0.135),  (0.20, 0.36, 0.50),     0.96, 0.85),
+        ("hud_button_hover",  (0.105, 0.155, 0.220),  (0.34, 0.60, 0.84),     1.00, 1.10),
+        ("hud_button_down",   (0.040, 0.058, 0.090),  (0.16, 0.29, 0.42),     1.00, 0.70),
+        ("hud_button_accent", (0.065, 0.135, 0.195),  (0.34, 0.66, 0.92),     1.00, 1.20),
+        ("hud_button_danger", (0.150, 0.062, 0.068),  (0.80, 0.34, 0.31),     1.00, 1.20),
+        ("hud_slot",          (0.034, 0.047, 0.075),  (0.14, 0.26, 0.37),     0.90, 0.65),
+        ("hud_slot_hover",    (0.082, 0.120, 0.175),  (0.32, 0.56, 0.78),     1.00, 1.00),
+        ("hud_group",         (0.032, 0.045, 0.072),  (0.10, 0.19, 0.28),     0.50, 0.45),
+    ]
+    for name, body, rim, alpha, glow in hud_plates:
+        obj = pw_ui.hud_plate(name, body=body, rim=rim, alpha=alpha, rim_glow=glow)
+        snapshot(obj, name, size=pw_ui.PANEL_SIZE, ortho=2.02, elevation=90.0)
+        borders[name] = pw_ui.HUD_BORDER
+        bpy.data.objects.remove(obj, do_unlink=True)
+
     # Заливка индикатора — без скругления по краям: она обрезается
     # по длине, и скруглённый край при обрезке выглядел бы обломанным.
-    for name, color in (("bar_fill", (0.42, 0.72, 0.52)),
-                        ("bar_fill_warn", (0.85, 0.66, 0.28)),
-                        ("bar_fill_bad", (0.82, 0.34, 0.34)),
+    for name, color in (("bar_fill", (0.36, 0.74, 0.92)),
+                        ("bar_fill_warn", (0.92, 0.72, 0.30)),
+                        ("bar_fill_bad", (0.86, 0.36, 0.34)),
                         ("white", (1.0, 1.0, 1.0))):
         obj = pw_ui.rounded_plate(f"pw_ui_{name}", width=2.0, height=2.0,
                                   radius=0.06, bevel=0.03)
@@ -516,24 +552,43 @@ def build_ui(samples: int) -> None:
         bpy.data.objects.remove(obj, do_unlink=True)
 
     # --- служебные значки ---
+    #
+    # У каждого своя высота камеры, и это не украшение.
+    #
+    # Значок-ПРЕДМЕТ (щит, часы, бак) снимается с наклона: наклон даёт
+    # объём, и предмет читается предметом. Значок-ЗНАК (уголок списка,
+    # треугольник тревоги, спираль галактики) обязан сниматься ПРЯМО
+    # СВЕРХУ: под наклоном знак теряет симметрию и начинает означать
+    # что-то другое. Проверено на себе — уголок «свернуть», снятый
+    # под сорок градусов, читался как галочка, а треугольник тревоги
+    # смотрел вбок.
     glyphs = [
-        ("icon_close",    "close",    (0.92, 0.62, 0.62)),
-        ("icon_back",     "back",     (0.82, 0.86, 0.94)),
-        ("icon_enter",    "enter",    (0.82, 0.90, 0.98)),
-        ("icon_siege",    "siege",    (0.94, 0.52, 0.44)),
-        ("icon_defense",  "defense",  (0.62, 0.86, 0.72)),
-        ("icon_planet",   "planet",   (0.72, 0.84, 0.96)),
-        ("icon_fleet",    "fleet",    (0.86, 0.88, 0.94)),
-        ("icon_clock",    "clock",    (0.88, 0.84, 0.66)),
-        ("icon_demolish", "demolish", (0.90, 0.72, 0.58)),
-        ("icon_plus",     "plus",     (0.62, 0.74, 0.90)),
+        # имя,            модель,        цвет,                    высота камеры
+        ("icon_close",    "close",    (0.92, 0.62, 0.62), 40.0),
+        ("icon_back",     "back",     (0.82, 0.86, 0.94), 40.0),
+        ("icon_enter",    "enter",    (0.82, 0.90, 0.98), 40.0),
+        ("icon_siege",    "siege",    (0.94, 0.52, 0.44), 40.0),
+        ("icon_defense",  "defense",  (0.62, 0.86, 0.72), 40.0),
+        ("icon_planet",   "planet",   (0.72, 0.84, 0.96), 40.0),
+        ("icon_fleet",    "fleet",    (0.86, 0.88, 0.94), 40.0),
+        ("icon_clock",    "clock",    (0.88, 0.84, 0.66), 40.0),
+        ("icon_demolish", "demolish", (0.90, 0.72, 0.58), 40.0),
+        ("icon_plus",     "plus",     (0.62, 0.74, 0.90), 62.0),
+        # Знаки: строго сверху.
+        ("icon_chevron_down",  "chevron_down",  (0.70, 0.84, 0.98), 90.0),
+        ("icon_chevron_right", "chevron_right", (0.70, 0.84, 0.98), 90.0),
+        ("icon_crest",         "crest",         (0.88, 0.92, 1.00), 90.0),
+        ("icon_galaxy",        "galaxy",        (0.74, 0.88, 1.00), 90.0),
+        ("icon_alert",         "alert",         (0.99, 0.76, 0.32), 90.0),
+        ("icon_star",          "star",          (0.99, 0.90, 0.58), 90.0),
+        ("icon_prestige",      "prestige",      (0.95, 0.84, 0.54), 62.0),
     ]
-    for name, kind, color in glyphs:
+    for name, kind, color, elevation in glyphs:
         obj = pw_ui.glyph_icon(kind, f"pw_ui_{name}")
         obj.data.materials.clear()
         obj.data.materials.append(pw_ui.metal_material(f"pw_ui_mat_{name}", color))
         snapshot(obj, name, size=pw_ui.ICON_SIZE,
-                 ortho=pw_ui.fit_object(obj), elevation=40.0)
+                 ortho=pw_ui.fit_object(obj), elevation=elevation)
         bpy.data.objects.remove(obj, do_unlink=True)
 
     atlas_png = os.path.join(BUILD_DIR, "ui.png")
