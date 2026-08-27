@@ -616,7 +616,12 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
                     float ax[3], ay[3];
                     surfaceBasis(nx, ny, nz, ax, ay);
 
-                    const float scale = radius * 0.15f * growth;
+                    // Постройка заметно крупнее натуральной: настоящий
+                    // город на планете размером с экран занимал бы доли
+                    // пикселя. Здесь важна не достоверность масштаба,
+                    // а читаемость — по силуэту игрок узнаёт, что стоит
+                    // на планете, не открывая списка.
+                    const float scale = radius * 0.30f * growth;
                     rhi::MeshInstance instance;
                     for (int i = 0; i < 3; ++i) {
                         instance.axisX[i] = ax[i] * scale;

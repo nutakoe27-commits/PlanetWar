@@ -422,6 +422,26 @@ int main(int argc, char** argv) {
                 systemCamera.focusOrbit = 0xFFFFFFFFu;
                 systemCamera.distance =
                     render::fitDistance(client.galaxy().planetCount(client.capital()));
+                if (shotZoom > 1.0f) {
+                    // Крупный план: разглядеть постройки на поверхности
+                    // и наведённую планету. На общем плане они с пиксель.
+                    systemCamera.distance /= shotZoom;
+                    systemCamera.focusOrbit = 0;
+                    selection.planetIndex = 0;
+                }
+
+                // И сразу закладываем стройку на каждой планете.
+                //
+                // Снимок обязан показывать ОБЖИТУЮ систему, а не пустые
+                // шары: постройки на поверхности и полоса готовности —
+                // ровно та часть интерфейса, которую иначе никто
+                // не проверит, потому что в свежей столице её нет.
+                for (const auto& planet : client.planetsAt(client.capital())) {
+                    client.orderBuildBuilding(planet.id, 0, sim::Building::Mine);
+                    if (planet.slots > 1) {
+                        client.orderBuildBuilding(planet.id, 1, sim::Building::PowerPlant);
+                    }
+                }
             }
             if (headless && shotZoom > 1.0f) {
                 // Снимок крупным планом: смотрим на свою столицу. Нужен,
