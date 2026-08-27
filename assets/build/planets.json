@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "note": "Сгенерировано tools/blender/build_assets.py. Не редактировать руками.",
+  "generator": "blender 5.0.1",
+  "planets": [
+    {
+      "class": 0,
+      "id": "barren",
+      "name": "Выжженный",
+      "mesh": "meshes/barren.pwm",
+      "texture": "planet_barren.png",
+      "gloss": 0.04,
+      "ring": false
+    },
+    {
+      "class": 1,
+      "id": "desert",
+      "name": "Пустынный",
+      "mesh": "meshes/desert.pwm",
+      "texture": "planet_desert.png",
+      "gloss": 0.07,
+      "ring": false
+    },
+    {
+      "class": 2,
+      "id": "ocean",
+      "name": "Океанический",
+      "mesh": "meshes/ocean.pwm",
+      "texture": "planet_ocean.png",
+      "gloss": 0.75,
+      "ring": false
+    },
+    {
+      "class": 3,
+      "id": "volcanic",
+      "name": "Вулканический",
+      "mesh": "meshes/volcanic.pwm",
+      "texture": "planet_volcanic.png",
+      "gloss": 0.18,
+      "ring": false
+    },
+    {
+      "class": 4,
+      "id": "gas_giant",
+      "name": "Газовый гигант",
+      "mesh": "meshes/gas_giant.pwm",
+      "texture": "planet_gas_giant.png",
+      "gloss": 0.1,
+      "ring": true
+    },
+    {
+      "class": 5,
+      "id": "asteroid_belt",
+      "name": "Пояс астероидов",
+      "mesh": "meshes/asteroid_belt.pwm",
+      "texture": "planet_asteroid_belt.png",
+      "gloss": 0.04,
+      "ring": false
+    },
+    {
+      "class": 6,
+      "id": "station",
+      "name": "Станция",
+      "mesh": "meshes/station.pwm",
+      "texture": "planet_station.png",
+      "gloss": 0.5,
+      "ring": false
+    }
+  ],
+  "stars": [
+    {
+      "class": 0,
+      "id": "star_red",
+      "name": "Красный карлик",
+      "texture": "star_red.png"
+    },
+    {
+      "class": 1,
+      "id": "star_yellow",
+      "name": "Жёлтая звезда",
+      "texture": "star_yellow.png"
+    },
+    {
+      "class": 2,
+      "id": "star_blue",
+      "name": "Голубой гигант",
+      "texture": "star_blue.png"
+    },
+    {
+      "class": 3,
+      "id": "star_neutron",
+      "name": "Нейтронная",
+      "texture": "star_neutron.png"
+    },
+    {
+      "class": 4,
+      "id": "star_blackhole",
+      "name": "Чёрная дыра",
+      "texture": "star_blackhole.png"
+    }
+  ],
+  "ring": {
+    "mesh": "meshes/ring.pwm",
+    "texture": "planet_ring.png"
+  },
+  "structures": [
+    {
+      "building": 1,
+      "id": "mine",
+      "mesh": "meshes/build_mine.pwm"
+    },
+    {
+      "building": 2,
+      "id": "power",
+      "mesh": "meshes/build_power.pwm"
+    },
+    {
+      "building": 3,
+      "id": "foundry",
+      "mesh": "meshes/build_foundry.pwm"
+    },
+    {
+      "building": 4,
+      "id": "lab",
+      "mesh": "meshes/build_lab.pwm"
+    },
+    {
+      "building": 5,
+      "id": "trade",
+      "mesh": "meshes/build_trade.pwm"
+    },
+    {
+      "building": 6,
+      "id": "fortress",
+      "mesh": "meshes/build_fortress.pwm"
+    },
+    {
+      "building": 7,
+      "id": "shipyard",
+      "mesh": "meshes/build_shipyard.pwm"
+    }
+  ],
+  "structure_texture": "structures.png",
+  "space": {
+    "texture": "space.png"
+  }
+}

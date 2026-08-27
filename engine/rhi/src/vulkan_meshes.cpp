@@ -57,13 +57,15 @@ Vec3 normalise(const Vec3& v) {
     return {v.x / length, v.y / length, v.z / length};
 }
 
+}  // namespace
+
 /// Матрица «вид умножить на проекцию», по столбцам, как ждёт GLSL.
 ///
 /// Считается здесь, на процессоре, и в float — это РИСОВАНИЕ, а не
 /// симуляция. Правило «никакой плавающей точки» действует в pw_sim,
 /// pw_net и pw_game, где от неё зависит воспроизводимость мира; на
 /// картинку оно не распространяется и распространяться не должно.
-void makeViewProjection(const Camera3D& camera, float aspect, float* out) {
+void viewProjectionMatrix(const Camera3D& camera, float aspect, float out[16]) {
     const Vec3 eye{camera.eyeX, camera.eyeY, camera.eyeZ};
     const Vec3 target{camera.targetX, camera.targetY, camera.targetZ};
     const Vec3 up{camera.upX, camera.upY, camera.upZ};
@@ -110,7 +112,24 @@ void makeViewProjection(const Camera3D& camera, float aspect, float* out) {
     }
 }
 
-}  // namespace
+bool projectPoint(const Camera3D& camera, float aspect, float x, float y, float z,
+                  float& outX, float& outY, float& outDepth) {
+    float matrix[16];
+    viewProjectionMatrix(camera, aspect, matrix);
+
+    const float clipX = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
+    const float clipY = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
+    const float clipW = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
+
+    outDepth = clipW;
+    if (clipW <= 1e-4f) return false;   // точка за камерой
+
+    // Отсечённое пространство Vulkan: X и Y в [-1, 1], причём Y смотрит вниз,
+    // то есть уже так, как считает экран.
+    outX = (clipX / clipW) * 0.5f + 0.5f;
+    outY = (clipY / clipW) * 0.5f + 0.5f;
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // Сетки
@@ -127,8 +146,12 @@ void Device::Impl::destroyMeshes() {
 
     if (meshPipeline) vkDestroyPipeline(device, meshPipeline, nullptr);
     if (meshLayout) vkDestroyPipelineLayout(device, meshLayout, nullptr);
+    if (glowPipeline) vkDestroyPipeline(device, glowPipeline, nullptr);
+    if (glowLayout) vkDestroyPipelineLayout(device, glowLayout, nullptr);
     meshPipeline = VK_NULL_HANDLE;
     meshLayout = VK_NULL_HANDLE;
+    glowPipeline = VK_NULL_HANDLE;
+    glowLayout = VK_NULL_HANDLE;
 }
 
 /// Залить данные в свежий буфер в памяти, видимой процессору.
@@ -228,12 +251,44 @@ bool Device::createMeshPipeline(const std::vector<uint8_t>& vertexSpirv,
                            /*cull=*/true, /*blend=*/true);
 }
 
+bool Device::createGlowPipeline(const std::vector<uint8_t>& vertexSpirv,
+                                const std::vector<uint8_t>& fragmentSpirv) {
+    Impl& d = *impl_;
+
+    const VkVertexInputBindingDescription bindings[] = {
+        {0, sizeof(MeshVertex), VK_VERTEX_INPUT_RATE_VERTEX},
+        {1, sizeof(MeshInstance), VK_VERTEX_INPUT_RATE_INSTANCE},
+    };
+
+    const VkVertexInputAttributeDescription attributes[] = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshVertex, x)},
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshVertex, nx)},
+        {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(MeshVertex, u)},
+        {3, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshInstance, axisX)},
+        {4, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshInstance, axisY)},
+        {5, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshInstance, axisZ)},
+        {6, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshInstance, origin)},
+        {7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(MeshInstance, r)},
+        {8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(MeshInstance, emissive)},
+    };
+
+    // Отсечения задних граней НЕТ: оболочку свечения смотрят и снаружи,
+    // и изнутри — камера входит внутрь короны, стоит приблизиться.
+    return d.buildPipeline(vertexSpirv, fragmentSpirv, /*textured=*/true,
+                           VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, bindings, 2, attributes,
+                           uint32_t(sizeof(attributes) / sizeof(attributes[0])), d.glowLayout,
+                           d.glowPipeline, uint32_t(sizeof(MeshPush)), /*depth=*/true,
+                           /*cull=*/false, /*blend=*/true, /*depthWrite=*/false,
+                           /*additive=*/true);
+}
+
 void Device::setCamera3D(const Camera3D& camera) { impl_->camera3d = camera; }
 
-void Device::drawMeshes(MeshHandle handle, const MeshInstance* instances, size_t count,
-                        TextureHandle texture) {
-    Impl& d = *impl_;
-    if (!d.frameOpen || d.meshPipeline == VK_NULL_HANDLE) return;
+void Device::Impl::drawMeshesWith(VkPipeline pipeline, VkPipelineLayout layout,
+                                  MeshHandle handle, const MeshInstance* instances,
+                                  size_t count, TextureHandle texture) {
+    Impl& d = *this;
+    if (!d.frameOpen || pipeline == VK_NULL_HANDLE) return;
     if (instances == nullptr || count == 0) return;
     if (handle == kInvalidMesh || handle > d.meshes.size()) return;
     if (texture == kInvalidTexture || texture > d.textures.size()) return;
@@ -252,7 +307,7 @@ void Device::drawMeshes(MeshHandle handle, const MeshInstance* instances, size_t
 
     MeshPush push{};
     const float aspect = float(d.width) / float(d.height > 0 ? d.height : 1);
-    makeViewProjection(d.camera3d, aspect, push.viewProjection);
+    viewProjectionMatrix(d.camera3d, aspect, push.viewProjection);
     push.lightPosition[0] = d.camera3d.lightX;
     push.lightPosition[1] = d.camera3d.lightY;
     push.lightPosition[2] = d.camera3d.lightZ;
@@ -264,11 +319,11 @@ void Device::drawMeshes(MeshHandle handle, const MeshInstance* instances, size_t
     push.lightColor[1] = d.camera3d.lightG;
     push.lightColor[2] = d.camera3d.lightB;
 
-    vkCmdBindPipeline(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, d.meshPipeline);
-    vkCmdPushConstants(d.cmd, d.meshLayout,
+    vkCmdBindPipeline(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdPushConstants(d.cmd, layout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(push), &push);
-    vkCmdBindDescriptorSets(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, d.meshLayout, 0, 1,
+    vkCmdBindDescriptorSets(d.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
                             &d.textures[texture - 1].set, 0, nullptr);
 
     const VkBuffer buffers[] = {mesh.vertices, d.meshBuffer.buffer};
@@ -278,6 +333,18 @@ void Device::drawMeshes(MeshHandle handle, const MeshInstance* instances, size_t
     vkCmdDrawIndexed(d.cmd, mesh.indexCount, uint32_t(count), 0, 0, 0);
 
     d.meshUsed += bytes;
+}
+
+void Device::drawMeshes(MeshHandle handle, const MeshInstance* instances, size_t count,
+                        TextureHandle texture) {
+    impl_->drawMeshesWith(impl_->meshPipeline, impl_->meshLayout, handle, instances, count,
+                          texture);
+}
+
+void Device::drawGlow(MeshHandle handle, const MeshInstance* instances, size_t count,
+                      TextureHandle texture) {
+    impl_->drawMeshesWith(impl_->glowPipeline, impl_->glowLayout, handle, instances, count,
+                          texture);
 }
 
 }  // namespace pw::rhi

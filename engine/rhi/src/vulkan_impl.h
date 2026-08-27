@@ -171,6 +171,8 @@ struct Device::Impl {
     // --- сетки ---
     VkPipelineLayout meshLayout = VK_NULL_HANDLE;
     VkPipeline meshPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout glowLayout = VK_NULL_HANDLE;
+    VkPipeline glowPipeline = VK_NULL_HANDLE;
     FrameBufferVk meshBuffer;
     VkDeviceSize meshUsed = 0;
     std::vector<MeshVk> meshes;
@@ -202,12 +204,17 @@ struct Device::Impl {
                        uint32_t attributeCount,
                        VkPipelineLayout& outLayout, VkPipeline& outPipeline,
                        uint32_t pushBytes = 16, bool depth = false, bool cull = false,
-                       bool blend = true);
+                       bool blend = true, bool depthWrite = true, bool additive = false);
     /// Залить данные в свежий буфер, живущий до конца работы устройства.
     bool uploadStaticBuffer(const void* data, VkDeviceSize bytes, VkBufferUsageFlags usage,
                             VkBuffer& outBuffer, VkDeviceMemory& outMemory);
     bool createDepthTarget();
     void destroyMeshes();
+    /// Общее тело обоих вызовов отрисовки сеток: обычного и свечения.
+    /// Они различаются только конвейером, и держать две копии значило бы
+    /// однажды поправить одну.
+    void drawMeshesWith(VkPipeline pipeline, VkPipelineLayout layout, MeshHandle handle,
+                        const MeshInstance* instances, size_t count, TextureHandle texture);
     void destroyDrawing();
 
     VkCommandPool pool = VK_NULL_HANDLE;

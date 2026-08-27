@@ -34,6 +34,7 @@ void main() {
     float emissive = vParams.x;
     float rimStrength = vParams.y;
     float gloss = vParams.z;
+    float halo = vParams.w;
 
     vec3 normal = normalize(vNormal);
     vec3 toLight = push.lightPosition - vWorld;
@@ -63,5 +64,17 @@ void main() {
     // сама, и падающий на неё свет — это она же.
     vec3 color = mix(lit, base * 1.15, clamp(emissive, 0.0, 1.0));
 
-    outColor = vec4(color, texel.a * vTint.a);
+    float alpha = texel.a * vTint.a;
+
+    // Мягкий ореол: прозрачность падает к КРАЮ силуэта оболочки.
+    //
+    // Оболочка с постоянной прозрачностью даёт резкое кольцо, и глаз
+    // читает его как ошибку, а не как свет. Настоящее свечение спадает
+    // плавно, и три вложенные оболочки с таким спадом складываются
+    // в ровный ореол.
+    if (halo > 0.0) {
+        alpha *= pow(max(dot(normal, viewDir), 0.0), halo);
+    }
+
+    outColor = vec4(color, alpha);
 }

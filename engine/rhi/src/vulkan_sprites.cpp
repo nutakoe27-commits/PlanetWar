@@ -315,7 +315,8 @@ bool Device::Impl::buildPipeline(const std::vector<uint8_t>& vertexSpirv,
                                  const VkVertexInputAttributeDescription* attributes,
                                  uint32_t attributeCount, VkPipelineLayout& outLayout,
                                  VkPipeline& outPipeline, uint32_t pushBytes, bool depth,
-                                 bool cull, bool blendEnabled) {
+                                 bool cull, bool blendEnabled, bool depthWrite,
+                                 bool additive) {
     if (vertexSpirv.empty() || fragmentSpirv.empty()) {
         return fail("пустой SPIR-V: шейдеры не собраны или не найдены");
     }
@@ -384,7 +385,11 @@ bool Device::Impl::buildPipeline(const std::vector<uint8_t>& vertexSpirv,
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.blendEnable = blendEnabled ? VK_TRUE : VK_FALSE;
     blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    // Сложение вместо замещения: свет складывается, а не закрашивает.
+    // Наложенные друг на друга оболочки короны обязаны становиться ярче,
+    // а не оставаться такими же, — иначе никакого свечения не выходит.
+    blendAttachment.dstColorBlendFactor =
+        additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
     blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
@@ -410,7 +415,7 @@ bool Device::Impl::buildPipeline(const std::vector<uint8_t>& vertexSpirv,
     VkPipelineDepthStencilStateCreateInfo depthState{
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     depthState.depthTestEnable = depth ? VK_TRUE : VK_FALSE;
-    depthState.depthWriteEnable = depth ? VK_TRUE : VK_FALSE;
+    depthState.depthWriteEnable = (depth && depthWrite) ? VK_TRUE : VK_FALSE;
     depthState.depthCompareOp = VK_COMPARE_OP_LESS;
     depthState.minDepthBounds = 0.0f;
     depthState.maxDepthBounds = 1.0f;

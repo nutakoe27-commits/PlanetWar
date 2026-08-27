@@ -197,6 +197,17 @@ public:
     /// Планета на заданной орбите. kNoEntity, если такой орбиты нет.
     Entity planetEntity(uint32_t system, uint32_t orbit) const;
 
+    /// Класс тела на орбите (PlanetClass). Для несуществующей орбиты — Count.
+    ///
+    /// Лежит здесь, а не только в компоненте, по той же причине, что и
+    /// координаты систем: ВИД системы работает с геометрией, а не
+    /// с состоянием мира. Класс планеты выводится из сида и не меняется
+    /// никогда — заставлять рисование ходить за ним в ECS значило бы
+    /// связать интерфейс с симуляцией на ровном месте.
+    uint8_t planetClass(uint32_t system, uint32_t orbit) const;
+    /// Сколько на теле слотов застройки. 0 — такой орбиты нет.
+    uint8_t planetSlots(uint32_t system, uint32_t orbit) const;
+
     /// Положение системы на карте.
     ///
     /// Отдельно от компонента StarSystem намеренно: рисование карты и
@@ -272,6 +283,8 @@ private:
     std::vector<Entity> systems_;
     std::vector<uint32_t> planetOffsets_;   // размер systemCount + 1
     std::vector<Entity> planetEntities_;   // по системам, внутри — по орбитам
+    std::vector<uint8_t> planetClasses_;    // параллельно planetEntities_
+    std::vector<uint8_t> planetSlots_;      // параллельно planetEntities_
     std::vector<uint32_t> offsets_;    // размер systemCount + 1
     std::vector<uint32_t> adjacency_;
     uint32_t laneCount_ = 0;

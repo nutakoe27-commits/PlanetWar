@@ -47,6 +47,19 @@ const char* buildingName(uint8_t building) {
     }
 }
 
+const char* planetClassName(uint8_t planetClass) {
+    switch (sim::PlanetClass(planetClass)) {
+        case sim::PlanetClass::Barren:       return "выжженная";
+        case sim::PlanetClass::Desert:       return "пустынная";
+        case sim::PlanetClass::Ocean:        return "океаническая";
+        case sim::PlanetClass::Volcanic:     return "вулканическая";
+        case sim::PlanetClass::GasGiant:     return "газовый гигант";
+        case sim::PlanetClass::AsteroidBelt: return "пояс астероидов";
+        case sim::PlanetClass::Station:      return "станция";
+        default:                             return "?";
+    }
+}
+
 const char* starName(uint8_t starClass) {
     switch (sim::StarClass(starClass)) {
         case sim::StarClass::Red:       return "красный карлик";
@@ -154,7 +167,12 @@ void Hud::build(const game::Client& client, const Selection& selection, int scre
         const TextColor ownerColor = view.owner == 0xFF ? kDim
                                      : view.owner == uint8_t(client.empire()) ? kGood
                                                                               : kBad;
-        panel.push_back(HudLine{std::string(ownership) + ", оборона " +
+        // Сколько планет системы у её владельца. Это и есть то, чем
+        // наполовину взятая система отличается от целой: без этих двух
+        // чисел частичный захват на карте не виден вообще.
+        panel.push_back(HudLine{std::string(ownership) + " · планет " +
+                                    number(view.ownedPlanets) + " из " +
+                                    number(view.totalPlanets) + " · оборона " +
                                     number(view.readiness) + "%",
                                 ownerColor});
 
@@ -187,10 +205,43 @@ void Hud::build(const game::Client& client, const Selection& selection, int scre
             const bool active = order == selection.planetIndex;
             const std::string mark = active ? "> " : "  ";
 
-            panel.push_back(HudLine{mark + "планета " + number(int64_t(order) + 1) +
-                                        ": слотов " + number(planet.slots) + ", свободно " +
+            // Владелец у КАЖДОЙ планеты свой: захватывают их, а не
+            // систему, и в одной системе соседние орбиты бывают разных
+            // хозяев. Без этой строки игрок не видит, что именно у него
+            // отбирают.
+            const char* whose = planet.owner == 0xFF ? "ничья"
+                                : planet.owner == uint8_t(client.empire()) ? "ваша"
+                                                                           : "чужая";
+            const TextColor whoseColor = planet.owner == 0xFF ? kDim
+                                         : planet.owner == uint8_t(client.empire()) ? kGood
+                                                                                    : kBad;
+            panel.push_back(HudLine{mark + "планета " + number(int64_t(order) + 1) + " · " +
+                                        planetClassName(planet.planetClass) + " · " + whose +
+                                        " · слотов " + number(planet.slots) + ", свободно " +
                                         number(planet.freeSlots()),
-                                    active ? kNormal : kDim});
+                                    active ? whoseColor : kDim});
+
+            if (planet.siegeEmpire != 0xFF) {
+                panel.push_back(HudLine{"     ОСАДА " + number(planet.siegeProgress) +
+                                            "%, оборона " + number(planet.readiness) + "%",
+                                        kBad});
+            } else if (planet.owner != 0xFF && planet.readiness < 100) {
+                panel.push_back(HudLine{"     оборона " + number(planet.readiness) + "%",
+                                        kWarn});
+            }
+
+            // Что строится прямо сейчас. Здание перестало появляться
+            // по щелчку, и без этой строки нажатие выглядит как
+            // проглоченное игрой.
+            if (planet.building()) {
+                std::string line = std::string("     строится ") +
+                                   buildingName(planet.buildBuilding) + " " +
+                                   number(planet.buildPercent) + "%";
+                if (planet.buildQueued > 0) {
+                    line += " (+" + number(planet.buildQueued) + " в очереди)";
+                }
+                panel.push_back(HudLine{line, kGood});
+            }
 
             std::string built;
             for (uint8_t slot = 0; slot < planet.slots; ++slot) {
@@ -252,13 +303,20 @@ void Hud::build(const game::Client& client, const Selection& selection, int scre
     }
 
     // --- подсказки: правый нижний угол ---
-    const char* hints[] = {
+    const char* mapHints[] = {
         "ЛКМ — выбрать систему, ЛКМ по другой — отправить флот",
         "ПКМ — двигать карту, колесо — зум, пробел — вся галактика",
-        "1..8 — построить здание, Q W E R — заказать корабль",
+        "Enter — войти в систему, 1..8 — здание, Q W E R — корабль",
     };
+    const char* systemHints[] = {
+        "ЛКМ — выбрать планету, Tab — следующая",
+        "ПКМ — вращать камеру, колесо — приблизить, пробел — вся система",
+        "1..8 — построить на выбранной планете, Enter — назад к карте",
+    };
+    const char* const* hints = inSystem_ ? systemHints : mapHints;
     float hintY = float(screenHeight) - margin - 3.0f * step;
-    for (const char* hint : hints) {
+    for (int i = 0; i < 3; ++i) {
+        const char* hint = hints[i];
         const float x = float(screenWidth) - margin -
                         (font_ != nullptr ? font_->width(hint, height)
                                           : float(std::string(hint).size()) * height * 0.6f);

@@ -339,6 +339,8 @@ void Galaxy::linkSystems(const GalaxyParams& params) {
 void Galaxy::spawnPlanets(World& world, const GalaxyParams& params) {
     planetOffsets_.assign(systems_.size() + 1, 0);
     planetEntities_.clear();
+    planetClasses_.clear();
+    planetSlots_.clear();
 
     for (uint32_t index = 0; index < systems_.size(); ++index) {
         planetOffsets_[index] = uint32_t(planetEntities_.size());
@@ -405,6 +407,8 @@ void Galaxy::spawnPlanets(World& world, const GalaxyParams& params) {
             world.add<Planet>(planet, Planet{index, uint8_t(planetClass), slots,
                                              /*specialization=*/0, uint8_t(orbit)});
             planetEntities_.push_back(planet);
+            planetClasses_.push_back(uint8_t(planetClass));
+            planetSlots_.push_back(slots);
         }
     }
     planetOffsets_.back() = uint32_t(planetEntities_.size());
@@ -415,6 +419,20 @@ Entity Galaxy::planetEntity(uint32_t system, uint32_t orbit) const {
     const uint32_t begin = planetOffsets_[system];
     if (orbit >= planetOffsets_[system + 1] - begin) return kNoEntity;
     return planetEntities_[begin + orbit];
+}
+
+uint8_t Galaxy::planetClass(uint32_t system, uint32_t orbit) const {
+    if (system >= systemCount()) return uint8_t(PlanetClass::Count);
+    const uint32_t begin = planetOffsets_[system];
+    if (orbit >= planetOffsets_[system + 1] - begin) return uint8_t(PlanetClass::Count);
+    return planetClasses_[begin + orbit];
+}
+
+uint8_t Galaxy::planetSlots(uint32_t system, uint32_t orbit) const {
+    if (system >= systemCount()) return 0;
+    const uint32_t begin = planetOffsets_[system];
+    if (orbit >= planetOffsets_[system + 1] - begin) return 0;
+    return planetSlots_[begin + orbit];
 }
 
 // ---------------------------------------------------------------------------

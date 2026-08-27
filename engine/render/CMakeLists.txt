@@ -8,6 +8,8 @@
 add_library(pw_render STATIC
     src/atlas.cpp
     src/map_view.cpp
+    src/mesh.cpp
+    src/system_view.cpp
     src/font.cpp
     src/hud.cpp)
 

@@ -32,6 +32,7 @@ import bpy  # noqa: E402
 import pw_atlas  # noqa: E402
 import pw_bake  # noqa: E402
 import pw_hulls  # noqa: E402
+import pw_planets  # noqa: E402
 import pw_font  # noqa: E402
 import pw_stars  # noqa: E402
 
@@ -203,6 +204,15 @@ def build(quality: str, keep_frames: bool) -> int:
     print(f"  шрифт       {layout['width']}x{layout['height']}, "
           f"глифов {len(layout['charset'])}, клетка {layout['cell']}")
 
+    # --- планеты ---
+    #
+    # Вид системы — единственное место игры, где на объект СМОТРЯТ, а не
+    # читают его с карты. Поэтому планета здесь настоящая: сетка со сферы
+    # и запечённая карта поверхности, а не круг из шейдера.
+    print()
+    print("  планеты...")
+    build_planets(samples=max(8, samples // 2))
+
     if not keep_frames and os.path.isdir(WORK_DIR):
         shutil.rmtree(WORK_DIR)
 
@@ -213,6 +223,140 @@ def build(quality: str, keep_frames: bool) -> int:
         print(f"  {os.path.relpath(path, ROOT):40s} {os.path.getsize(path) // 1024:6d} КБ")
     print(f"\n  готово за {elapsed:.1f} с")
     return 0
+
+
+def build_planets(samples: int) -> None:
+    """Сетки и карты поверхности всех классов планет.
+
+    Сцена своя: запекание требует другого состояния рендера, чем съёмка
+    спрайтов, и мешать их в одной сцене — верный способ однажды испечь
+    планету с тенями от корабельного света.
+    """
+    scene = pw_bake.reset_scene()
+    scene.render.film_transparent = False
+
+    mesh_dir = os.path.join(BUILD_DIR, "meshes")
+    os.makedirs(mesh_dir, exist_ok=True)
+
+    manifest: dict[str, object] = {
+        "version": 1,
+        "note": "Сгенерировано tools/blender/build_assets.py. Не редактировать руками.",
+        "generator": f"blender {bpy.app.version_string}",
+        "planets": [],
+    }
+
+    for index, spec in enumerate(pw_planets.planet_specs()):
+        if spec.id == "station":
+            obj = pw_planets.build_station(f"pw_{spec.id}")
+        else:
+            obj = pw_planets.build_sphere(f"pw_{spec.id}")
+
+        material = pw_planets.build_surface_material(spec)
+        texture_path = os.path.join(BUILD_DIR, f"planet_{spec.id}.png")
+        pw_planets.bake_surface(obj, material, texture_path, samples=samples)
+
+        mesh_path = os.path.join(mesh_dir, f"{spec.id}.pwm")
+        vertices, indices = pw_planets.export_mesh(obj, mesh_path)
+
+        entry = {
+            "class": index,
+            "id": spec.id,
+            "name": spec.name,
+            "mesh": os.path.relpath(mesh_path, BUILD_DIR).replace(os.sep, "/"),
+            "texture": os.path.relpath(texture_path, BUILD_DIR).replace(os.sep, "/"),
+            "gloss": spec.gloss,
+            "ring": spec.ring,
+        }
+        manifest["planets"].append(entry)
+        print(f"  {spec.name:16s} {vertices:5d} вершин  {indices // 3:5d} треугольников")
+
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    # --- светила ---
+    #
+    # Звезда в виде системы — шар, на который смотрят вблизи. Плоский
+    # залитый круг на таком расстоянии выдаёт себя мгновенно, поэтому
+    # у неё такая же поверхность, как у планеты.
+    manifest["stars"] = []
+    for index, spec in enumerate(pw_planets.star_surface_specs()):
+        obj = pw_planets.build_sphere(f"pw_{spec.id}")
+        material = pw_planets.build_surface_material(spec)
+        texture_path = os.path.join(BUILD_DIR, f"{spec.id}.png")
+        pw_planets.bake_surface(obj, material, texture_path, samples=samples,
+                                width=512, height=256)
+        manifest["stars"].append({
+            "class": index,
+            "id": spec.id,
+            "name": spec.name,
+            "texture": os.path.relpath(texture_path, BUILD_DIR).replace(os.sep, "/"),
+        })
+        print(f"  {spec.name:16s} карта поверхности")
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    # Кольцо — общая сетка на все планеты с кольцами: их различает поворот
+    # и оттенок, а не геометрия.
+    ring = pw_planets.build_ring("pw_ring")
+    ring_material = pw_planets.build_ring_material()
+    ring_texture = os.path.join(BUILD_DIR, "planet_ring.png")
+    pw_planets.bake_surface(ring, ring_material, ring_texture, samples=samples,
+                            width=512, height=64)
+    ring_mesh = os.path.join(mesh_dir, "ring.pwm")
+    ring_vertices, ring_indices = pw_planets.export_mesh(ring, ring_mesh)
+    manifest["ring"] = {
+        "mesh": os.path.relpath(ring_mesh, BUILD_DIR).replace(os.sep, "/"),
+        "texture": os.path.relpath(ring_texture, BUILD_DIR).replace(os.sep, "/"),
+    }
+    print(f"  {'кольцо':16s} {ring_vertices:5d} вершин  {ring_indices // 3:5d} треугольников")
+    bpy.data.objects.remove(ring, do_unlink=True)
+
+    # --- постройки ---
+    #
+    # Игрок обязан видеть, ЧТО он захватывает: обжитой мир с верфью
+    # и крепостью или голый камень. Список в панели этого не даёт —
+    # цифры читаются, а не узнаются.
+    manifest["structures"] = []
+    structure_texture = os.path.join(BUILD_DIR, "structures.png")
+    structure_material = pw_planets.build_structure_material()
+    for index, kind in enumerate(pw_planets.STRUCTURE_IDS):
+        obj = pw_planets.build_structure(kind, f"pw_build_{kind}")
+        if index == 0:
+            # Текстура одна на все постройки: различает их силуэт,
+            # а не поверхность. Печём её на первой и переиспользуем.
+            pw_planets.bake_surface(obj, structure_material, structure_texture,
+                                    samples=samples, width=256, height=256)
+        else:
+            obj.data.materials.clear()
+            obj.data.materials.append(structure_material)
+
+        mesh_path = os.path.join(mesh_dir, f"build_{kind}.pwm")
+        vertices, indices = pw_planets.export_mesh(obj, mesh_path)
+        manifest["structures"].append({
+            "building": index + 1,   # Building::None равен нулю
+            "id": kind,
+            "mesh": os.path.relpath(mesh_path, BUILD_DIR).replace(os.sep, "/"),
+        })
+        print(f"  постройка {kind:10s} {vertices:5d} вершин  {indices // 3:5d} треугольников")
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+    manifest["structure_texture"] = os.path.relpath(structure_texture,
+                                                    BUILD_DIR).replace(os.sep, "/")
+
+    # --- задник ---
+    #
+    # Чёрный фон читается как «сцена не догрузилась». Живое небо стоит
+    # одной текстуры и меняет ощущение картинки целиком.
+    space = pw_planets.build_sphere("pw_space")
+    space_texture = os.path.join(BUILD_DIR, "space.png")
+    pw_planets.bake_surface(space, pw_planets.build_space_material(), space_texture,
+                            samples=samples, width=2048, height=1024)
+    manifest["space"] = {
+        "texture": os.path.relpath(space_texture, BUILD_DIR).replace(os.sep, "/"),
+    }
+    print(f"  {'звёздное небо':16s} 2048x1024")
+    bpy.data.objects.remove(space, do_unlink=True)
+
+    with open(os.path.join(BUILD_DIR, "planets.json"), "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
 
 
 def main() -> int:

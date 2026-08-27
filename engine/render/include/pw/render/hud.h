@@ -74,6 +74,12 @@ class Hud {
 public:
     void setFont(const Font* font) { font_ = font; }
     void setMessages(const MessageLog* messages) { messages_ = messages; }
+    /// Игрок внутри системы или на карте галактики.
+    ///
+    /// Подсказки у видов разные, и показывать управление картой тому,
+    /// кто смотрит на планеты, — это заведомо бесполезная строка на
+    /// экране, где место дорого.
+    void setSystemView(bool inSystem) { inSystem_ = inSystem; }
 
     /// Собрать панели для текущего состояния.
     ///
@@ -92,6 +98,7 @@ public:
 private:
     const Font* font_ = nullptr;
     const MessageLog* messages_ = nullptr;
+    bool inSystem_ = false;
 
     void push(HudFrame& out, const std::string& text, float x, float y, float height,
               const TextColor& color) const;

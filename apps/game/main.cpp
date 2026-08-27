@@ -27,6 +27,7 @@
 #include "pw/render/font.h"
 #include "pw/render/hud.h"
 #include "pw/render/map_view.h"
+#include "pw/render/system_view.h"
 #include "pw/rhi/rhi.h"
 
 using namespace pw;
@@ -137,6 +138,7 @@ void printUsage() {
         "  --shot <файл>    без окна: подключиться, отрисовать карту в PNG и выйти\n"
         "  --shot-after <с> сколько секунд поиграть до снимка (по умолчанию 3)\n"
         "  --shot-zoom <k>  приблизить перед снимком к своей столице (1 — вся карта)\n"
+        "  --shot-system    снимок ВИДА СИСТЕМЫ, а не карты галактики\n"
         "\nУправление:\n"
         "  колесо           зум\n"
         "  правая кнопка    панорамирование\n"
@@ -147,6 +149,12 @@ void printUsage() {
         "  1..8             построить здание на выбранной планете\n"
         "  Q W E R          заказать корвет/эсминец/крейсер/линкор\n"
         "  Пробел           показать всю галактику\n"
+        "  Enter            войти в систему / вернуться на карту\n"
+        "\nВнутри системы:\n"
+        "  левая кнопка     выбрать планету\n"
+        "  правая кнопка    вращать камеру\n"
+        "  колесо           приблизить\n"
+        "  1..8             строить на выбранной планете\n"
         "  Escape           выход\n");
 }
 
@@ -161,6 +169,7 @@ int main(int argc, char** argv) {
     std::string shotPath;
     int shotAfterSeconds = 3;
     float shotZoom = 1.0f;
+    bool shotSystem = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -173,6 +182,7 @@ int main(int argc, char** argv) {
         else if (arg == "--shot" && i + 1 < argc) shotPath = argv[++i];
         else if (arg == "--shot-after" && i + 1 < argc) shotAfterSeconds = std::atoi(argv[++i]);
         else if (arg == "--shot-zoom" && i + 1 < argc) shotZoom = float(std::atof(argv[++i]));
+        else if (arg == "--shot-system") shotSystem = true;
         else {
             printUsage();
             return arg == "--help" ? 0 : 2;
@@ -222,7 +232,11 @@ int main(int argc, char** argv) {
     if (!device.createSpritePipeline(spirv(kSpriteVert, sizeof(kSpriteVert)),
                                      spirv(kSpriteFrag, sizeof(kSpriteFrag))) ||
         !device.createLinePipeline(spirv(kLineVert, sizeof(kLineVert)),
-                                   spirv(kLineFrag, sizeof(kLineFrag)))) {
+                                   spirv(kLineFrag, sizeof(kLineFrag))) ||
+        !device.createMeshPipeline(spirv(kMeshVert, sizeof(kMeshVert)),
+                                   spirv(kMeshFrag, sizeof(kMeshFrag))) ||
+        !device.createGlowPipeline(spirv(kMeshVert, sizeof(kMeshVert)),
+                                   spirv(kMeshFrag, sizeof(kMeshFrag)))) {
         std::fprintf(stderr, "не удалось собрать конвейеры: %s\n", device.lastError().c_str());
         return 1;
     }
@@ -275,6 +289,28 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Планеты вида системы: сетки со сфер и запечённые карты поверхности.
+    //
+    // Без них играть можно — карта галактики цела, — но нельзя посмотреть
+    // на то, что захватываешь. Поэтому отсутствие ассетов здесь отказ,
+    // а не предупреждение: игра, в которой половина экрана пустая,
+    // выглядит сломанной, и разбираться в этом игроку не с чем.
+    render::SystemAssets systemAssets;
+    const char* planetCandidates[] = {"assets/build/planets.json",
+                                      "../assets/build/planets.json",
+                                      "../../assets/build/planets.json"};
+    bool planetsReady = false;
+    for (const char* path : planetCandidates) {
+        if (systemAssets.load(path)) { planetsReady = true; break; }
+    }
+    if (!planetsReady || !systemAssets.upload(device)) {
+        std::fprintf(stderr,
+                     "планеты не загружены: %s\n"
+                     "соберите ассеты: tools/blender/build_assets.py --quality preview\n",
+                     systemAssets.error().c_str());
+        return 1;
+    }
+
     if (!net::initialiseSockets()) {
         std::fprintf(stderr, "не удалось поднять сетевую подсистему\n");
         return 1;
@@ -292,6 +328,15 @@ int main(int argc, char** argv) {
     mapView.setAtlas(&atlas);
     render::MapFrame frame;
     render::Selection selection;
+
+    render::SystemView systemView;
+    systemView.setAssets(&systemAssets);
+    render::SystemFrame systemFrame;
+    render::SystemCamera systemCamera;
+    // В системе игрок или на карте галактики. Два вида, а не один
+    // с зумом: у них разные вопросы. Карта отвечает «куда двинуть флот»,
+    // вид системы — «что делать с этой планетой».
+    bool inSystem = false;
 
     render::Hud hud;
     hud.setFont(&font);
@@ -371,6 +416,13 @@ int main(int argc, char** argv) {
                 const auto own = client.fleetsAt(client.capital());
                 if (!own.empty()) selectedFleet = own.front();
             }
+            if (headless && shotSystem) {
+                // Снимок вида системы: смотрим на свою столицу изнутри.
+                inSystem = true;
+                systemCamera.focusOrbit = 0xFFFFFFFFu;
+                systemCamera.distance =
+                    render::fitDistance(client.galaxy().planetCount(client.capital()));
+            }
             if (headless && shotZoom > 1.0f) {
                 // Снимок крупным планом: смотрим на свою столицу. Нужен,
                 // чтобы разглядеть то, что на общем плане не видно, —
@@ -385,21 +437,74 @@ int main(int argc, char** argv) {
         int width = device.targetWidth(), height = device.targetHeight();
         if (!headless) window.framebufferSize(width, height);
 
-        if (input.wasPressed(Key::Escape)) break;
-        if (input.wheel() != 0.0f) camera.zoom(input.wheel());
-        if (input.wasPressed(Key::Space) && client.ready()) {
-            camera.worldHeight = float(client.galaxy().extent().toDouble()) * 2.0f;
-            camera.centerX = 0.0f;
-            camera.centerY = 0.0f;
+        if (input.wasPressed(Key::Escape)) {
+            // Escape из системы возвращает на карту, а не выходит из игры:
+            // выйти из игры случайным нажатием — это потерянный сеанс.
+            if (inSystem) inSystem = false;
+            else break;
         }
 
-        // Панорамирование правой кнопкой: перемещение в пикселях
-        // переводится в мировые единицы через текущий зум, иначе на
-        // дальнем плане карта ползала бы неощутимо медленно.
-        if (input.isDown(MouseButton::Right) && height > 0) {
-            const float perPixel = camera.worldHeight / float(height);
-            camera.centerX -= input.mouseDeltaX() * perPixel;
-            camera.centerY += input.mouseDeltaY() * perPixel;
+        // Вход в систему и выход из неё. Отдельный вид, а не продолжение
+        // зума карты: у них разные вопросы и разное управление.
+        if (client.ready() && input.wasPressed(Key::Enter) &&
+            selection.system < client.galaxy().systemCount()) {
+            inSystem = !inSystem;
+            if (inSystem) {
+                systemCamera = render::SystemCamera{};
+                // Сначала показываем систему целиком: игрок пришёл сюда
+                // решать, что делать со всеми её телами, а не смотреть
+                // на одно. Наведение на планету — следующий его шаг.
+                systemCamera.focusOrbit = 0xFFFFFFFFu;
+                systemCamera.distance =
+                    render::fitDistance(client.galaxy().planetCount(selection.system));
+            }
+        }
+
+        if (inSystem) {
+            // --- управление внутри системы ---
+            if (input.wheel() != 0.0f) {
+                systemCamera.distance *= std::pow(0.85f, input.wheel());
+                systemCamera.distance = std::clamp(systemCamera.distance, 6.0f, 160.0f);
+            }
+            if (input.isDown(MouseButton::Right) && width > 0 && height > 0) {
+                systemCamera.yawTurns -= input.mouseDeltaX() / float(width);
+                systemCamera.pitchTurns += input.mouseDeltaY() / float(height) * 0.5f;
+                // Через полюс камеру не пускаем: там она переворачивается,
+                // и игрок теряет ориентацию в системе, где всё круглое.
+                systemCamera.pitchTurns = std::clamp(systemCamera.pitchTurns, 0.005f, 0.24f);
+            }
+
+            const auto planets = client.planetsAt(selection.system);
+            if (input.wasPressed(MouseButton::Left) && width > 0 && height > 0) {
+                const uint32_t orbit = render::SystemView::pick(
+                    systemFrame, input.mouseX() / float(width), input.mouseY() / float(height));
+                if (orbit != 0xFFFFFFFFu) {
+                    selection.planetIndex = orbit;
+                    systemCamera.focusOrbit = orbit;
+                }
+            }
+            if (input.wasPressed(Key::Tab) && !planets.empty()) {
+                selection.planetIndex =
+                    uint32_t((selection.planetIndex + 1) % planets.size());
+                systemCamera.focusOrbit = selection.planetIndex;
+            }
+            if (input.wasPressed(Key::Space)) systemCamera.focusOrbit = 0xFFFFFFFFu;
+        } else {
+            if (input.wheel() != 0.0f) camera.zoom(input.wheel());
+            if (input.wasPressed(Key::Space) && client.ready()) {
+                camera.worldHeight = float(client.galaxy().extent().toDouble()) * 2.0f;
+                camera.centerX = 0.0f;
+                camera.centerY = 0.0f;
+            }
+
+            // Панорамирование правой кнопкой: перемещение в пикселях
+            // переводится в мировые единицы через текущий зум, иначе на
+            // дальнем плане карта ползала бы неощутимо медленно.
+            if (input.isDown(MouseButton::Right) && height > 0) {
+                const float perPixel = camera.worldHeight / float(height);
+                camera.centerX -= input.mouseDeltaX() * perPixel;
+                camera.centerY += input.mouseDeltaY() * perPixel;
+            }
         }
 
         // --- указатель ---
@@ -407,7 +512,7 @@ int main(int argc, char** argv) {
         camera.toWorld(input.mouseX(), input.mouseY(), width, height, worldX, worldY);
 
         uint32_t under = 0xFFFFFFFFu;
-        if (client.ready()) {
+        if (client.ready() && !inSystem) {
             under = render::MapView::pick(client.galaxy(), worldX, worldY, camera.worldHeight);
         }
         selection.hoverSystem = selectedFleet != 0xFFFFFFFFu ? under : 0xFFFFFFFFu;
@@ -443,7 +548,7 @@ int main(int argc, char** argv) {
             // Tab переключает планету, Shift+Tab — свой флот. Строить
             // и командовать вслепую нельзя: игрок должен видеть, на что
             // подействует следующее нажатие.
-            if (input.wasPressed(Key::Tab) && !planets.empty()) {
+            if (!inSystem && input.wasPressed(Key::Tab) && !planets.empty()) {
                 const bool back = input.isDown(Key::LeftShift) || input.isDown(Key::RightShift);
                 if (back) {
                     const auto own = client.fleetsAt(selection.system);
@@ -503,8 +608,25 @@ int main(int argc, char** argv) {
         clear.b = 0.063f;
         if (!device.beginFrame(clear)) break;
 
-        device.setCamera(camera.toRhi());
-        if (client.ready()) {
+        if (client.ready() && inSystem && selection.system < client.galaxy().systemCount()) {
+            const float aspect = height > 0 ? float(width) / float(height) : 1.0f;
+            systemCamera.focusOrbit =
+                systemCamera.focusOrbit == 0xFFFFFFFFu ? 0xFFFFFFFFu : selection.planetIndex;
+            systemView.build(client.galaxy(), client.view(), selection.system,
+                             client.empire(), systemCamera, aspect, systemFrame);
+
+            device.setCamera3D(systemFrame.camera);
+            for (const render::MeshBatch& batch : systemFrame.batches) {
+                if (batch.glow) {
+                    device.drawGlow(batch.mesh, batch.instances.data(),
+                                    batch.instances.size(), batch.texture);
+                } else {
+                    device.drawMeshes(batch.mesh, batch.instances.data(),
+                                      batch.instances.size(), batch.texture);
+                }
+            }
+        } else if (client.ready()) {
+            device.setCamera(camera.toRhi());
             mapView.build(client.galaxy(), client.view(), client.empire(), selection,
                           camera.toRhi(), frame);
             // Линии первыми: звёзды и корабли ложатся поверх.
@@ -517,6 +639,7 @@ int main(int argc, char** argv) {
         // Камера меняется между вызовами отрисовки — отдельного конвейера
         // для интерфейса не нужно. Начало в левом верхнем углу, ось Y
         // вниз, единица — пиксель: то есть обычные экранные координаты.
+        hud.setSystemView(inSystem);
         hud.build(client, selection, width, height, now, hudFrame);
         if (!hudFrame.sprites.empty()) {
             rhi::Camera screen;
