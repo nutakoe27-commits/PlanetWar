@@ -328,22 +328,47 @@ bool Device::Impl::createRenderPass() {
     color.finalLayout = headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
                                  : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
+    // Вложение глубины есть ВСЕГДА, даже когда рисуется одна плоская карта.
+    //
+    // Проход в движке один, а конвейеров несколько, и совместимость
+    // конвейера с проходом определяется набором вложений. Заводить второй
+    // проход ради того, чтобы у спрайтов не было глубины, значило бы
+    // удваивать кадровые буферы и переключать проход посреди кадра —
+    // ради состояния, которое выключается одной строкой в конвейере.
+    VkAttachmentDescription depth{};
+    depth.format = depthFormat;
+    depth.samples = VK_SAMPLE_COUNT_1_BIT;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    // Глубина не переживает кадр: она нужна только внутри прохода.
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    const VkAttachmentDescription attachments[] = {color, depth};
+
     VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &ref;
+    subpass.pDepthStencilAttachment = &depthRef;
 
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    info.attachmentCount = 1;
-    info.pAttachments = &color;
+    info.attachmentCount = 2;
+    info.pAttachments = attachments;
     info.subpassCount = 1;
     info.pSubpasses = &subpass;
     info.dependencyCount = 1;
@@ -355,13 +380,70 @@ bool Device::Impl::createRenderPass() {
     return true;
 }
 
+bool Device::Impl::createDepthTarget() {
+    // Формат выбирается из того, что поддерживает устройство. D32 есть
+    // почти везде, но на мобильных бывает только D24S8 или D16 —
+    // а мобильные для нас цель, а не «когда-нибудь потом».
+    const VkFormat candidates[] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT,
+                                   VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM};
+    depthFormat = VK_FORMAT_UNDEFINED;
+    for (VkFormat candidate : candidates) {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(physical, candidate, &props);
+        if (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+            depthFormat = candidate;
+            break;
+        }
+    }
+    if (depthFormat == VK_FORMAT_UNDEFINED) {
+        return fail("устройство не поддерживает ни одного формата глубины");
+    }
+
+    VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = depthFormat;
+    imageInfo.extent = {uint32_t(width), uint32_t(height), 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(device, &imageInfo, nullptr, &depthImage) != VK_SUCCESS) {
+        return fail("не удалось создать изображение глубины");
+    }
+
+    VkMemoryRequirements reqs{};
+    vkGetImageMemoryRequirements(device, depthImage, &reqs);
+    VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    alloc.allocationSize = reqs.size;
+    alloc.memoryTypeIndex =
+        findMemoryType(physical, reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (alloc.memoryTypeIndex == UINT32_MAX) return fail("нет памяти под буфер глубины");
+    if (vkAllocateMemory(device, &alloc, nullptr, &depthMemory) != VK_SUCCESS) {
+        return fail("не удалось выделить память под буфер глубины");
+    }
+    vkBindImageMemory(device, depthImage, depthMemory, 0);
+
+    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = depthImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = depthFormat;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(device, &viewInfo, nullptr, &depthView) != VK_SUCCESS) {
+        return fail("не удалось создать вид буфера глубины");
+    }
+    return true;
+}
+
 bool Device::Impl::createFramebuffers(const std::vector<VkImageView>& views) {
     framebuffers.resize(views.size());
     for (size_t i = 0; i < views.size(); ++i) {
+        const VkImageView attachments[] = {views[i], depthView};
         VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         info.renderPass = renderPass;
-        info.attachmentCount = 1;
-        info.pAttachments = &views[i];
+        info.attachmentCount = 2;
+        info.pAttachments = attachments;
         info.width = uint32_t(width);
         info.height = uint32_t(height);
         info.layers = 1;
@@ -416,6 +498,10 @@ void Device::Impl::destroy() {
     if (acquired) vkDestroySemaphore(device, acquired, nullptr);
     if (rendered) vkDestroySemaphore(device, rendered, nullptr);
 
+    if (depthView) vkDestroyImageView(device, depthView, nullptr);
+    if (depthImage) vkDestroyImage(device, depthImage, nullptr);
+    if (depthMemory) vkFreeMemory(device, depthMemory, nullptr);
+
     if (offView) vkDestroyImageView(device, offView, nullptr);
     if (offImage) vkDestroyImage(device, offImage, nullptr);
     if (offMemory) vkFreeMemory(device, offMemory, nullptr);
@@ -468,10 +554,12 @@ bool Device::init(const DeviceDesc& desc) {
 
     if (d.headless) {
         if (!d.createOffscreenTarget()) return false;
+        if (!d.createDepthTarget()) return false;
         if (!d.createRenderPass()) return false;
         if (!d.createFramebuffers({d.offView})) return false;
     } else {
         if (!d.createSwapchainTarget(desc)) return false;
+        if (!d.createDepthTarget()) return false;
         if (!d.createRenderPass()) return false;
         if (!d.createFramebuffers(d.swapViews)) return false;
     }
@@ -615,19 +703,21 @@ bool Device::beginFrame(const ClearColor& clear) {
         return d.fail("не удалось начать запись команд");
     }
 
-    VkClearValue clearValue{};
-    clearValue.color = {{clear.r, clear.g, clear.b, clear.a}};
+    VkClearValue clearValues[2]{};
+    clearValues[0].color = {{clear.r, clear.g, clear.b, clear.a}};
+    clearValues[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     pass.renderPass = d.renderPass;
     pass.framebuffer = d.framebuffers[d.headless ? 0 : d.imageIndex];
     pass.renderArea = {{0, 0}, {uint32_t(d.width), uint32_t(d.height)}};
-    pass.clearValueCount = 1;
-    pass.pClearValues = &clearValue;
+    pass.clearValueCount = 2;
+    pass.pClearValues = clearValues;
     vkCmdBeginRenderPass(d.cmd, &pass, VK_SUBPASS_CONTENTS_INLINE);
 
     d.spriteUsed = 0;
     d.lineUsed = 0;
+    d.meshUsed = 0;
     d.frameOpen = true;
     return true;
 }

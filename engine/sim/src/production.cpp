@@ -11,14 +11,41 @@
 
 namespace pw::sim {
 
+PlanetConstruction emptyConstruction() {
+    PlanetConstruction site{};
+    site.slot = PlanetConstruction::kNoSlot;
+    site.building = uint8_t(Building::None);
+    for (uint8_t i = 0; i < PlanetConstruction::kQueueLimit; ++i) {
+        site.queueSlots[i] = PlanetConstruction::kNoSlot;
+        site.queueBuildings[i] = uint8_t(Building::None);
+    }
+    site.invested = fx::zero();
+    return site;
+}
+
 void registerProductionComponents(World& world) {
     world.registerComponent<BuildQueue>("BuildQueue");
+    world.registerComponent<PlanetConstruction>("PlanetConstruction");
 }
 
 void initialiseProduction(World& world, const Galaxy& galaxy) {
     for (uint32_t index = 0; index < galaxy.systemCount(); ++index) {
         world.add<BuildQueue>(galaxy.systemEntity(index),
                               BuildQueue{uint8_t(Hull::None), 0, 0, 0, 0, fx::zero()});
+    }
+
+    // Стройка навешивается СРАЗУ ВСЕМ планетам, включая ничьи: заказ тогда
+    // становится записью в поле, а не добавлением компонента. Сущность не
+    // переезжает между таблицами в момент, когда игрок нажал клавишу.
+    //
+    // Обход по указателю галактики, а не по миру: добавление компонента
+    // меняет таблицы, и делать это прямо в обходе мира нельзя.
+    for (uint32_t index = 0; index < galaxy.systemCount(); ++index) {
+        for (uint32_t orbit = 0; orbit < galaxy.planetCount(index); ++orbit) {
+            const Entity planet = galaxy.planetEntity(index, orbit);
+            if (!planet.valid()) continue;
+            world.add<PlanetConstruction>(planet, emptyConstruction());
+        }
     }
 }
 
@@ -36,23 +63,192 @@ void enqueueBuild(BuildQueue& queue, Hull hull, uint32_t count) {
     queue.remaining = count;
 }
 
+namespace {
+
+/// Снять первый заказ из очереди и сделать его текущим.
+void promoteQueued(PlanetConstruction& site) {
+    site.invested = fx::zero();
+    if (site.queued == 0) {
+        site.slot = PlanetConstruction::kNoSlot;
+        site.building = uint8_t(Building::None);
+        return;
+    }
+    site.slot = site.queueSlots[0];
+    site.building = site.queueBuildings[0];
+    for (uint8_t i = 1; i < site.queued; ++i) {
+        site.queueSlots[i - 1] = site.queueSlots[i];
+        site.queueBuildings[i - 1] = site.queueBuildings[i];
+    }
+    --site.queued;
+    site.queueSlots[site.queued] = PlanetConstruction::kNoSlot;
+    site.queueBuildings[site.queued] = uint8_t(Building::None);
+}
+
+/// Вычеркнуть из очереди все заказы на этот слот.
+void dropQueued(PlanetConstruction& site, uint8_t slot) {
+    uint8_t kept = 0;
+    for (uint8_t i = 0; i < site.queued; ++i) {
+        if (site.queueSlots[i] == slot) continue;
+        site.queueSlots[kept] = site.queueSlots[i];
+        site.queueBuildings[kept] = site.queueBuildings[i];
+        ++kept;
+    }
+    for (uint8_t i = kept; i < PlanetConstruction::kQueueLimit; ++i) {
+        site.queueSlots[i] = PlanetConstruction::kNoSlot;
+        site.queueBuildings[i] = uint8_t(Building::None);
+    }
+    site.queued = kept;
+}
+
+}  // namespace
+
+bool enqueueConstruction(PlanetConstruction& site, uint8_t slot, Building building) {
+    if (slot == PlanetConstruction::kNoSlot) {
+        // Отмена всего разом: и текущего, и очереди.
+        site.queued = 0;
+        for (uint8_t i = 0; i < PlanetConstruction::kQueueLimit; ++i) {
+            site.queueSlots[i] = PlanetConstruction::kNoSlot;
+            site.queueBuildings[i] = uint8_t(Building::None);
+        }
+        promoteQueued(site);
+        return true;
+    }
+
+    if (building == Building::None) {
+        dropQueued(site, slot);
+        // Брошенная стройка теряет вложенное: за перестройку планов
+        // на ходу надо платить — то же правило, что и на верфи.
+        if (site.slot == slot) promoteQueued(site);
+        return true;
+    }
+
+    if (site.slot == PlanetConstruction::kNoSlot) {
+        site.slot = slot;
+        site.building = uint8_t(building);
+        site.invested = fx::zero();
+        return true;
+    }
+
+    if (site.queued >= PlanetConstruction::kQueueLimit) return false;
+    site.queueSlots[site.queued] = slot;
+    site.queueBuildings[site.queued] = uint8_t(building);
+    ++site.queued;
+    return true;
+}
+
+uint32_t constructionPercent(const PlanetConstruction& site) {
+    if (site.slot == PlanetConstruction::kNoSlot) return 0;
+    const uint32_t cost = buildingCost(Building(site.building));
+    if (cost == 0) return 0;
+    const int64_t done = (site.invested * fx::fromInt(100)).floorToInt();
+    const int64_t percent = done / int64_t(cost);
+    return uint32_t(std::clamp<int64_t>(percent, 0, 100));
+}
+
+// ---------------------------------------------------------------------------
+// Казна империй
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Сколько всего империй в мире. Ноль означает «строить некому».
+uint32_t empireCount(World& world) {
+    uint32_t empires = 0;
+    world.each<Empire>([&](Entity, Empire& empire) {
+        if (empire.id != kNoEmpire && empire.id + 1 > empires) empires = empire.id + 1;
+    });
+    return empires > 4096 ? 0 : empires;
+}
+
+}  // namespace
+
+void planetConstructionTick(World& world, const TickContext& context) {
+    const uint32_t empires = empireCount(world);
+    if (empires == 0) return;
+
+    // Казна копируется, тратится по ходу обхода и записывается обратно.
+    // Прямой доступ к Empire изнутри обхода планет означал бы вложенный
+    // обход — и медленный, и хрупкий. Тот же приём, что и на верфи.
+    std::vector<fx> minerals(empires, fx::zero());
+    world.each<Empire>([&](Entity, Empire& empire) {
+        if (empire.id < empires) minerals[empire.id] = empire.minerals;
+    });
+
+    world.each<Planet, Owner, PlanetConstruction, PlanetDevelopment>(
+        [&](Entity, Planet& planet, Owner& owner, PlanetConstruction& site,
+            PlanetDevelopment& development) {
+            if (site.slot == PlanetConstruction::kNoSlot) return;
+
+            // Ничья планета не строит. Захваченная — тоже: стройку сбрасывает
+            // осада в момент смены владельца, но проверка нужна и здесь, на
+            // случай любого другого пути смены хозяина.
+            if (owner.empire == kNoEmpire || owner.empire >= empires) return;
+            if (site.slot >= planet.slots || site.slot >= kMaxSlots) {
+                promoteQueued(site);
+                return;
+            }
+
+            const uint32_t cost = buildingCost(Building(site.building));
+            if (cost == 0) {
+                promoteQueued(site);
+                return;
+            }
+
+            const fx wanted = kBuildRatePlanet * context.delta;
+            const fx spent = min(wanted, minerals[owner.empire]);
+            if (spent <= fx::zero()) return;  // нет минералов — стройка стоит
+
+            minerals[owner.empire] -= spent;
+            site.invested += spent;
+
+            if (site.invested < fx::fromInt(int64_t(cost))) return;
+
+            // Здание готово. Остаток НЕ переносится: он уже оплачен этим
+            // зданием, и переносить его в следующее значило бы дать
+            // бесплатную скидку тому, кто строит цепочкой.
+            development.buildings[site.slot] = site.building;
+            promoteQueued(site);
+        });
+
+    world.each<Empire>([&](Entity, Empire& empire) {
+        if (empire.id < empires) empire.minerals = minerals[empire.id];
+    });
+}
+
 void systemProduction(World& world, const TickContext& context) {
     const Galaxy* galaxy = world.resource<Galaxy>();
     Commands* commands = world.resource<Commands>();
     if (galaxy == nullptr || commands == nullptr) return;
 
-    const std::vector<uint32_t> shipyards =
-        countBuildingsPerSystem(world, Building::Shipyard, galaxy->systemCount());
+    // Верфи считаются ТОЛЬКО на планетах владельца системы. Чужой анклав,
+    // удержавшийся на дальней орбите, не строит флот хозяину системы —
+    // иначе захват половины системы дарил бы врагу вашу верфь.
+    const uint32_t systemCount = galaxy->systemCount();
+    std::vector<uint32_t> systemOwner(systemCount, kNoEmpire);
+    world.each<StarSystem, Owner>([&](Entity, StarSystem& system, Owner& owner) {
+        if (system.index < systemCount) systemOwner[system.index] = owner.empire;
+    });
+
+    std::vector<uint32_t> shipyards(systemCount, 0);
+    world.each<Planet, Owner, PlanetDevelopment>(
+        [&](Entity, Planet& planet, Owner& owner, PlanetDevelopment& development) {
+            if (planet.system >= systemCount) return;
+            if (owner.empire == kNoEmpire) return;
+            if (owner.empire != systemOwner[planet.system]) return;
+            const uint8_t limit = std::min<uint8_t>(planet.slots, kMaxSlots);
+            for (uint8_t slot = 0; slot < limit; ++slot) {
+                if (development.buildings[slot] == uint8_t(Building::Shipyard)) {
+                    ++shipyards[planet.system];
+                }
+            }
+        });
 
     // Казна империй копируется в вектор, тратится по ходу обхода систем
     // и записывается обратно. Прямой доступ к компоненту Empire изнутри
     // обхода систем означал бы вложенный обход — а он и медленный,
     // и хрупкий.
-    uint32_t empires = 0;
-    world.each<Empire>([&](Entity, Empire& empire) {
-        if (empire.id != kNoEmpire && empire.id + 1 > empires) empires = empire.id + 1;
-    });
-    if (empires == 0 || empires > 4096) return;
+    const uint32_t empires = empireCount(world);
+    if (empires == 0) return;
 
     std::vector<fx> treasury(empires, fx::zero());
     // Стандартное вооружение империи: компонент FleetArmament на её сущности.

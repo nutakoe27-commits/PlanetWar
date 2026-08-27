@@ -337,7 +337,11 @@ void Galaxy::linkSystems(const GalaxyParams& params) {
 // ---------------------------------------------------------------------------
 
 void Galaxy::spawnPlanets(World& world, const GalaxyParams& params) {
+    planetOffsets_.assign(systems_.size() + 1, 0);
+    planetEntities_.clear();
+
     for (uint32_t index = 0; index < systems_.size(); ++index) {
+        planetOffsets_[index] = uint32_t(planetEntities_.size());
         // Содержимое системы выводится из её координат в списке и сида сезона.
         // Тот же приём, что и в безграничной галактике на Фазе 4: система
         // не хранится, она вычисляется.
@@ -359,8 +363,12 @@ void Galaxy::spawnPlanets(World& world, const GalaxyParams& params) {
         star->starClass = uint8_t(starClass);
         points_[index].starClass = uint8_t(starClass);
 
-        // Число планет. У чёрных дыр их нет — система ценна сама по себе.
-        uint32_t planets = 0;
+        // Число планет.
+        //
+        // У чёрной дыры планет нет, но есть орбитальная станция: владение
+        // теперь на планетах, и без ownable-тела ценнейшая система карты
+        // выпала бы из игры — её нельзя было бы ни взять, ни оборонять.
+        uint32_t planets = 1;
         if (starClass != StarClass::BlackHole) {
             planets = uint32_t(rng.range(1, star->ring == 0 ? 6 : 4));
         }
@@ -370,8 +378,13 @@ void Galaxy::spawnPlanets(World& world, const GalaxyParams& params) {
         points_[index].planets = uint8_t(planets);
 
         for (uint32_t orbit = 0; orbit < planets; ++orbit) {
-            const uint32_t classRoll = rng.below(uint32_t(PlanetClass::Count));
-            const auto planetClass = PlanetClass(classRoll);
+            // Станция вместо планеты — только у чёрной дыры. В общий
+            // бросок она не входит: это не класс небесного тела, а особый
+            // случай одной системы.
+            const auto planetClass =
+                starClass == StarClass::BlackHole
+                    ? PlanetClass::Station
+                    : PlanetClass(rng.below(uint32_t(PlanetClass::Count) - 1));
 
             // Слоты зависят от класса: газовые гиганты просторные,
             // выжженные камни тесные. Это и есть основа экономики (ADR-004).
@@ -382,14 +395,26 @@ void Galaxy::spawnPlanets(World& world, const GalaxyParams& params) {
                 case PlanetClass::Desert:       slots = uint8_t(rng.range(5, 9)); break;
                 case PlanetClass::Volcanic:     slots = uint8_t(rng.range(4, 7)); break;
                 case PlanetClass::AsteroidBelt: slots = uint8_t(rng.range(2, 5)); break;
+                // Станция тесная, но стоит у чёрной дыры: место дорогое
+                // само по себе, а не за счёт простора.
+                case PlanetClass::Station:      slots = 3; break;
                 default:                        slots = uint8_t(rng.range(3, 6)); break;
             }
 
             const Entity planet = world.create();
             world.add<Planet>(planet, Planet{index, uint8_t(planetClass), slots,
                                              /*specialization=*/0, uint8_t(orbit)});
+            planetEntities_.push_back(planet);
         }
     }
+    planetOffsets_.back() = uint32_t(planetEntities_.size());
+}
+
+Entity Galaxy::planetEntity(uint32_t system, uint32_t orbit) const {
+    if (system >= systemCount()) return kNoEntity;
+    const uint32_t begin = planetOffsets_[system];
+    if (orbit >= planetOffsets_[system + 1] - begin) return kNoEntity;
+    return planetEntities_[begin + orbit];
 }
 
 // ---------------------------------------------------------------------------

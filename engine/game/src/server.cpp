@@ -69,31 +69,56 @@ uint32_t Server::pickHome() {
     // Первому игроку — любая система, следующим — та, что дальше всех от
     // уже занятых. Соседние старты означали бы первую встречу на второй
     // минуте: у проигравшего не было бы ни одного осмысленного хода.
-    uint32_t best = 0;
-    int32_t bestDistance = -1;
+    // Столица обязана быть многопланетной. С переносом владения на планеты
+    // «система» перестала быть единицей: старт на одиноком мире у чёрной
+    // дыры — это три слота застройки и одна планета обороны против четырёх
+    // у соседа. Не невезение, а проигрыш до первого хода.
+    constexpr uint8_t kMinHomePlanets = 3;
+
+    auto suitable = [&](uint32_t index) {
+        return !homeTaken_[index] && galaxy_.planetCount(index) >= kMinHomePlanets;
+    };
+
     bool anyTaken = false;
     for (uint32_t i = 0; i < count; ++i) {
         if (homeTaken_[i]) { anyTaken = true; break; }
     }
     if (!anyTaken) {
+        for (uint32_t i = 0; i < count; ++i) {
+            if (!suitable(i)) continue;
+            homeTaken_[i] = true;
+            return i;
+        }
         homeTaken_[0] = true;
         return 0;
     }
 
-    for (uint32_t candidate = 0; candidate < count; ++candidate) {
-        if (homeTaken_[candidate]) continue;
+    // Первому игроку — любая подходящая система, следующим — та, что дальше
+    // всех от уже занятых. Соседние старты означали бы первую встречу на
+    // второй минуте: у проигравшего не было бы ни одного осмысленного хода.
+    uint32_t best = count;
+    int32_t bestDistance = -1;
+    for (int pass = 0; pass < 2 && best == count; ++pass) {
+        // Второй проход снимает требование к числу планет: если тесная
+        // галактика больше ничего не предлагает, пусть игрок сядет хоть
+        // куда-нибудь, а не получит отказ в подключении.
+        for (uint32_t candidate = 0; candidate < count; ++candidate) {
+            if (homeTaken_[candidate]) continue;
+            if (pass == 0 && !suitable(candidate)) continue;
 
-        int32_t nearest = 1 << 20;
-        for (uint32_t other = 0; other < count; ++other) {
-            if (!homeTaken_[other]) continue;
-            const int32_t hops = galaxy_.hopDistance(candidate, other);
-            if (hops >= 0) nearest = std::min(nearest, hops);
-        }
-        if (nearest > bestDistance) {
-            bestDistance = nearest;
-            best = candidate;
+            int32_t nearest = 1 << 20;
+            for (uint32_t other = 0; other < count; ++other) {
+                if (!homeTaken_[other]) continue;
+                const int32_t hops = galaxy_.hopDistance(candidate, other);
+                if (hops >= 0) nearest = std::min(nearest, hops);
+            }
+            if (nearest > bestDistance) {
+                bestDistance = nearest;
+                best = candidate;
+            }
         }
     }
+    if (best == count) best = 0;
     homeTaken_[best] = true;
     return best;
 }
@@ -162,6 +187,20 @@ void Server::receive(const net::Address& from, const uint8_t* data, size_t size,
                         fx::fromInt(config_.startingAlloys), fx::zero(), fx::zero(),
                         empire, player.home});
 
+        // Столица — это ПЛАНЕТЫ родной системы, все до одной. Владение
+        // теперь лежит на них, и отдать игроку одну лишь запись в системе
+        // значило бы посадить его на пустое место: ни дохода, ни обороны,
+        // ни права строить.
+        for (uint32_t orbit = 0; orbit < galaxy_.planetCount(player.home); ++orbit) {
+            const sim::Entity planet = galaxy_.planetEntity(player.home, orbit);
+            if (!planet.valid()) continue;
+            if (sim::Owner* owner = world_.get<sim::Owner>(planet)) owner->empire = empire;
+            if (sim::PlanetDefense* defense = world_.get<sim::PlanetDefense>(planet)) {
+                defense->readiness = defense->maxReadiness;
+            }
+        }
+        // Владелец системы производный и пересчитается в ближайшем тике,
+        // но проставляется и здесь: снапшот собирается раньше первого тика.
         if (sim::Owner* owner = world_.get<sim::Owner>(galaxy_.systemEntity(player.home))) {
             owner->empire = empire;
         }
@@ -170,10 +209,6 @@ void Server::receive(const net::Address& from, const uint8_t* data, size_t size,
         // становится «система захвачена» о его собственном доме.
         if (player.home < previousOwners_.size()) {
             previousOwners_[player.home] = uint8_t(empire & 0xFFu);
-        }
-        if (sim::SystemDefense* defense =
-                world_.get<sim::SystemDefense>(galaxy_.systemEntity(player.home))) {
-            defense->readiness = defense->maxReadiness;
         }
 
         const sim::Entity fleet = world_.create();
@@ -324,9 +359,21 @@ void Server::applyBuildShip(Player& player, const BuildShipMessage& message) {
     // и молча не выполнялся: игрок жал клавишу, ничего не происходило,
     // и понять почему было неоткуда. Молчаливый отказ — худший вид
     // отказа, потому что человек повторяет одно и то же.
-    const std::vector<uint32_t> shipyards = sim::countBuildingsPerSystem(
-        world_, sim::Building::Shipyard, galaxy_.systemCount());
-    if (message.system >= shipyards.size() || shipyards[message.system] == 0) {
+    uint32_t shipyards = 0;
+    world_.each<sim::Planet, sim::Owner, sim::PlanetDevelopment>(
+        [&](sim::Entity, sim::Planet& planet, sim::Owner& planetOwner,
+            sim::PlanetDevelopment& development) {
+            if (planet.system != message.system) return;
+            // Верфь на чужом анклаве внутри вашей системы вам не служит.
+            if (planetOwner.empire != player.empire) return;
+            const uint8_t limit = std::min<uint8_t>(planet.slots, sim::kMaxSlots);
+            for (uint8_t slot = 0; slot < limit; ++slot) {
+                if (development.buildings[slot] == uint8_t(sim::Building::Shipyard)) {
+                    ++shipyards;
+                }
+            }
+        });
+    if (shipyards == 0) {
         ++rejectedOrders_;
         uint8_t buffer[32];
         net::ByteWriter writer(buffer, sizeof(buffer));
@@ -340,18 +387,51 @@ void Server::applyBuildShip(Player& player, const BuildShipMessage& message) {
 
 void Server::applyBuildBuilding(Player& player, const BuildBuildingMessage& message) {
     bool applied = false;
-    world_.each<sim::Planet, sim::PlanetDevelopment>(
-        [&](sim::Entity entity, sim::Planet& planet, sim::PlanetDevelopment& development) {
+    uint32_t system = 0;
+
+    world_.each<sim::Planet, sim::Owner, sim::PlanetDevelopment, sim::PlanetConstruction>(
+        [&](sim::Entity entity, sim::Planet& planet, sim::Owner& owner,
+            sim::PlanetDevelopment& development, sim::PlanetConstruction& site) {
             if (entity.index != message.planet) return;
-            if (message.slot >= planet.slots) return;
+            if (message.slot >= planet.slots || message.slot >= sim::kMaxSlots) return;
 
-            const sim::Owner* owner = world_.get<sim::Owner>(galaxy_.systemEntity(planet.system));
-            if (owner == nullptr || owner->empire != player.empire) return;
+            // Владение проверяется у САМОЙ ПЛАНЕТЫ, а не у её системы:
+            // теперь захватывают планеты, и удержанный в чужом тылу мир
+            // строит своему хозяину, а не хозяину системы вокруг.
+            if (owner.empire != player.empire) return;
 
-            development.buildings[message.slot] = message.building;
-            applied = true;
+            system = planet.system;
+
+            // Снос мгновенный, стройка — нет. Сносить долго незачем, а вот
+            // отменить начатую стройку игрок должен уметь одним действием,
+            // и это то же самое действие.
+            if (message.building == uint8_t(sim::Building::None)) {
+                development.buildings[message.slot] = uint8_t(sim::Building::None);
+                if (site.slot == message.slot) {
+                    sim::enqueueConstruction(site, sim::PlanetConstruction::kNoSlot,
+                                             sim::Building::None);
+                }
+                applied = true;
+                return;
+            }
+
+            if (message.building >= uint8_t(sim::Building::Count)) return;
+
+            // Очередь может быть полна — тогда заказ не принят, и игрок
+            // обязан об этом узнать.
+            applied = sim::enqueueConstruction(site, message.slot,
+                                               sim::Building(message.building));
         });
-    if (!applied) ++rejectedOrders_;
+
+    if (applied) return;
+
+    // Молчаливый отказ — худший вид отказа: человек жмёт клавишу, ничего
+    // не происходит, и понять почему неоткуда. Поэтому отказ едет игроку.
+    ++rejectedOrders_;
+    uint8_t buffer[32];
+    net::ByteWriter writer(buffer, sizeof(buffer));
+    writeNotice(writer, NoticeMessage{NoticeKind::OrderRejected, system});
+    if (!writer.overflowed()) player.connection.sendReliable(buffer, writer.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -362,12 +442,17 @@ void Server::step() {
     sim::TickContext context;
     context.tick = tick_;
 
+    // Производное владение системами пересчитывается ПЕРВЫМ: и бой, и
+    // присутствие, и поиск цели смотрят на владельца системы, и все они
+    // обязаны в одном тике видеть одно и то же.
+    sim::systemControlRollup(world_, context);
     sim::systemFleetMovement(world_, context);
     sim::systemBattles(world_, context);
     sim::systemPresence(world_, context);
     sim::systemSiege(world_, context);
     sim::systemEconomy(world_, context);
-    sim::systemDefenceCap(world_, context);
+    sim::planetDefenceCap(world_, context);
+    sim::planetConstructionTick(world_, context);
     sim::systemProduction(world_, context);
     sim::systemMergeFleets(world_, context);
     sim::systemDisbandEmpty(world_, context);
@@ -461,12 +546,19 @@ void Server::notifyChanges() {
             previousCooldown_[system.index] = battle.cooldown;
             if (battle.cooldown <= before) return;
 
-            if (battle.lastWinner == sim::kBattleDraw) return;   // разошлись — не новость
+            // Ничья — тоже новость, и приходит обеим сторонам. Молчать
+            // о взаимном истреблении нельзя: игрок иначе узнаёт о гибели
+            // флота только по его пропаже с карты.
+            const NoticeKind forWinner =
+                battle.drawn != 0 ? NoticeKind::BattleDraw : NoticeKind::BattleWon;
+            const NoticeKind forLoser =
+                battle.drawn != 0 ? NoticeKind::BattleDraw : NoticeKind::BattleLost;
+
             if (battle.lastWinner != sim::kBattleNobody) {
-                notify(battle.lastWinner, NoticeKind::BattleWon, system.index);
+                notify(battle.lastWinner, forWinner, system.index);
             }
             if (battle.lastLoser != sim::kBattleNobody) {
-                notify(battle.lastLoser, NoticeKind::BattleLost, system.index);
+                notify(battle.lastLoser, forLoser, system.index);
             }
         });
 }

@@ -63,6 +63,21 @@ bool matchesClass(Building building, uint8_t planetClass) {
     }
 }
 
+uint32_t buildingCost(Building building) {
+    switch (building) {
+        case Building::Mine:       return 60;
+        case Building::PowerPlant: return 60;
+        case Building::Foundry:    return 90;
+        case Building::Laboratory: return 90;
+        case Building::TradeHub:   return 90;
+        // Крепость и верфь дороже: это не производство, а право — держать
+        // планету и строить флот. Право обязано стоить времени.
+        case Building::Fortress:   return 150;
+        case Building::Shipyard:   return 200;
+        default:                   return 0;
+    }
+}
+
 std::vector<uint32_t> countBuildingsPerSystem(World& world, Building building,
                                              uint32_t systemCount) {
     std::vector<uint32_t> counts(systemCount, 0);
@@ -96,19 +111,6 @@ fx outputScale(Building building, const Planet& planet) {
     return scale;
 }
 
-/// Номер империи, которой достаётся выработка планеты: владелец её системы.
-///
-/// Планета не имеет отдельного владельца. Занял систему — распоряжаешься
-/// её планетами; потерял — теряешь всё сразу. Это и делает захват системы
-/// значимым событием, а не косметикой на карте.
-std::vector<uint32_t> systemOwners(World& world, uint32_t systemCount) {
-    std::vector<uint32_t> owners(systemCount, kNoEmpire);
-    world.each<StarSystem, Owner>([&](Entity, StarSystem& system, Owner& owner) {
-        if (system.index < systemCount) owners[system.index] = owner.empire;
-    });
-    return owners;
-}
-
 /// Сколько места в учётной книге. Империи нумеруются с нуля и их немного.
 uint32_t ledgerSize(World& world) {
     uint32_t highest = 0;
@@ -133,18 +135,21 @@ void systemEconomy(World& world, const TickContext& context) {
     ledger->reset(empires);
     if (empires == 0) return;
 
-    const std::vector<uint32_t> owners = systemOwners(world, galaxy->systemCount());
-
     // --- проход 1: всё, кроме заводов ---
     //
     // Заводы откладываем: им нужны минералы, а сколько их будет, известно
     // только после того, как отработают все шахты империи.
     std::vector<uint32_t> foundries(empires, 0);
 
-    world.each<Planet, PlanetDevelopment>(
-        [&](Entity, Planet& planet, PlanetDevelopment& development) {
-            if (planet.system >= owners.size()) return;
-            const uint32_t empire = owners[planet.system];
+    // Выработка достаётся владельцу САМОЙ ПЛАНЕТЫ, а не её системы.
+    //
+    // Раньше считался владелец системы, и это было ровно то, от чего игра
+    // ушла: захват системы отдавал всё её содержимое одним щелчком. Теперь
+    // удержанная в чужом тылу планета продолжает кормить своего хозяина —
+    // и осада её соседки не отбирает у него ни единицы дохода.
+    world.each<Planet, PlanetDevelopment, Owner>(
+        [&](Entity, Planet& planet, PlanetDevelopment& development, Owner& planetOwner) {
+            const uint32_t empire = planetOwner.empire;
             if (empire == kNoEmpire || empire >= empires) return;
 
             Ledger::Flow& flow = ledger->at(empire);
@@ -235,18 +240,24 @@ void systemEconomy(World& world, const TickContext& context) {
 // Крепости поднимают потолок обороны
 // ---------------------------------------------------------------------------
 
-void systemDefenceCap(World& world, const TickContext&) {
-    const Galaxy* galaxy = world.resource<Galaxy>();
-    if (galaxy == nullptr) return;
+void planetDefenceCap(World& world, const TickContext&) {
+    // Крепость поднимает потолок ТОЙ ПЛАНЕТЫ, на которой стоит, а не всей
+    // системы. Раньше считалось по системе, и крепость на пустом камне
+    // укрепляла соседний мир-столицу — оборона строилась там, где дешевле,
+    // а не там, где важно. Теперь укрепление — это выбор конкретной планеты.
+    world.each<Planet, PlanetDefense>(
+        [&](Entity entity, Planet& planet, PlanetDefense& defense) {
+            uint32_t fortresses = 0;
+            if (const PlanetDevelopment* development = world.get<PlanetDevelopment>(entity)) {
+                const uint8_t limit = std::min<uint8_t>(planet.slots, kMaxSlots);
+                for (uint8_t slot = 0; slot < limit; ++slot) {
+                    if (development->buildings[slot] == uint8_t(Building::Fortress)) {
+                        ++fortresses;
+                    }
+                }
+            }
 
-    const std::vector<uint32_t> fortresses =
-        countBuildingsPerSystem(world, Building::Fortress, galaxy->systemCount());
-
-    world.each<StarSystem, SystemDefense>(
-        [&](Entity, StarSystem& system, SystemDefense& defense) {
-            if (system.index >= fortresses.size()) return;
-            const fx cap = kReadinessMax +
-                           kFortressReadiness * fx::fromInt(fortresses[system.index]);
+            const fx cap = kReadinessMax + kFortressReadiness * fx::fromInt(fortresses);
             defense.maxReadiness = cap;
             // Готовность выше нового потолка обрезается: снесли крепость —
             // оборона просела сразу, а не осталась висеть.

@@ -6,7 +6,8 @@
 
 add_library(pw_rhi STATIC
     src/vulkan_backend.cpp
-    src/vulkan_sprites.cpp)
+    src/vulkan_sprites.cpp
+    src/vulkan_meshes.cpp)
 
 target_include_directories(pw_rhi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

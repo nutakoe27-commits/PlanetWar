@@ -80,9 +80,22 @@ public:
         uint8_t slots = 0;
         uint8_t orbit = 0;
         uint8_t specialization = 0;
+        /// Владелец ПЛАНЕТЫ. Захватывают их, а не системы, поэтому
+        /// в одной системе владельцы соседних орбит могут быть разными.
+        uint8_t owner = 0xFF;
+        uint8_t readiness = 0;      // готовность обороны, 0..100
+        uint8_t siegeEmpire = 0xFF; // кто осаждает
+        uint8_t siegeProgress = 0;  // 0..100
+        uint8_t buildSlot = 0xFF;   // слот текущей стройки
+        uint8_t buildBuilding = 0;  // Building, который возводится
+        uint8_t buildPercent = 0;   // 0..100
+        uint8_t buildQueued = 0;    // сколько заказов ждёт очереди
         uint8_t buildings[sim::kMaxSlots] = {};
-        /// Свободных слотов под застройку.
+        /// Свободных слотов под застройку. Слот со стройкой уже занят:
+        /// иначе игрок заказал бы в него второе здание, увидев его пустым.
         uint8_t freeSlots() const;
+        /// Идёт ли стройка прямо сейчас.
+        bool building() const { return buildSlot != 0xFF; }
     };
 
     /// Планеты системы. Геометрия берётся из СВОЕЙ галактики — она

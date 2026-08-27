@@ -43,6 +43,13 @@ enum class PlanetClass : uint8_t {
     Volcanic,
     GasGiant,     // много слотов под добычу газа
     AsteroidBelt, // минералы
+    /// Орбитальная станция. Не планета, но владеть ею можно.
+    ///
+    /// Появилась вместе с переносом владения на планеты: у чёрной дыры
+    /// планет нет, а система при этом ценнейшая. Без ownable-тела её
+    /// нельзя было бы ни захватить, ни оборонять — самая дорогая
+    /// недвижимость карты выпала бы из игры целиком.
+    Station,
     Count
 };
 
@@ -177,6 +184,19 @@ public:
     uint64_t seed() const { return seed_; }
     Entity systemEntity(uint32_t index) const { return systems_[index]; }
 
+    /// Сущности планет системы, по орбитам.
+    ///
+    /// Отдельным индексом, а не поиском по всему миру: с переносом владения
+    /// на планеты к ним обращаются и осада, и производство, и вид системы —
+    /// каждый кадр и на каждый щелчок мыши. Обход всех планет галактики
+    /// ради четырёх сущностей одной системы стоил бы ровно столько, сколько
+    /// «безграничная галактика» позволить не может.
+    const Entity* planets(uint32_t index) const {
+        return planetEntities_.data() + planetOffsets_[index];
+    }
+    /// Планета на заданной орбите. kNoEntity, если такой орбиты нет.
+    Entity planetEntity(uint32_t system, uint32_t orbit) const;
+
     /// Положение системы на карте.
     ///
     /// Отдельно от компонента StarSystem намеренно: рисование карты и
@@ -250,6 +270,8 @@ private:
 
     std::vector<Point> points_;
     std::vector<Entity> systems_;
+    std::vector<uint32_t> planetOffsets_;   // размер systemCount + 1
+    std::vector<Entity> planetEntities_;   // по системам, внутри — по орбитам
     std::vector<uint32_t> offsets_;    // размер systemCount + 1
     std::vector<uint32_t> adjacency_;
     uint32_t laneCount_ = 0;

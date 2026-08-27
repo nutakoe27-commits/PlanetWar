@@ -188,8 +188,15 @@ int main(int argc, char** argv) {
                                  fx::zero(), fx::zero(), bots[i].empire, bots[i].home});
         // Вооружение империи: его унаследуют все построенные корабли.
         world.add<FleetArmament>(bots[i].entity, bots[i].doctrine);
+        // Столица — это ПЛАНЕТЫ родной системы, все до одной: владение
+        // теперь лежит на них, и запись в системе сама по себе пуста.
         world.get<Owner>(galaxy.systemEntity(bots[i].home))->empire = bots[i].empire;
-        world.get<SystemDefense>(galaxy.systemEntity(bots[i].home))->readiness = kReadinessMax;
+        for (uint32_t orbit = 0; orbit < galaxy.planetCount(bots[i].home); ++orbit) {
+            const Entity planet = galaxy.planetEntity(bots[i].home, orbit);
+            if (!planet.valid()) continue;
+            world.get<Owner>(planet)->empire = bots[i].empire;
+            world.get<PlanetDefense>(planet)->readiness = kReadinessMax;
+        }
 
         // Стартовый флот.
         const Entity fleet = world.create();
@@ -209,6 +216,7 @@ int main(int argc, char** argv) {
     const int64_t reportEvery = totalTicks / 6;
 
     std::vector<uint32_t> owners(count, kNoEmpire);
+    std::vector<uint32_t> unclaimed(count, 0);
     uint32_t battlesSeen = 0;
     uint32_t violations = 0;
     std::vector<uint32_t> peakSystems(bots.size(), 0);
@@ -225,21 +233,39 @@ int main(int argc, char** argv) {
             });
 
             for (const Bot& bot : bots) {
+                // Сколько в каждой системе планет, ещё не принадлежащих
+                // ЭТОМУ боту. Это и есть «есть ли здесь что захватывать»:
+                // система-владелец больше не отвечает на этот вопрос,
+                // потому что половина её планет может быть чужой.
+                std::fill(unclaimed.begin(), unclaimed.end(), 0);
+                world.each<Planet, Owner>([&](Entity, Planet& planet, Owner& planetOwner) {
+                    if (planet.system >= count) return;
+                    if (planetOwner.empire == bot.empire) return;
+                    ++unclaimed[planet.system];
+                });
+
                 Empire* empire = world.get<Empire>(bot.entity);
 
-                // 1. Достроить планеты в своих системах.
-                //    Здания пока бесплатны — стоимость появится на Фазе 2
-                //    вместе с очередью строительства.
-                world.each<Planet, PlanetDevelopment>(
-                    [&](Entity, Planet& planet, PlanetDevelopment& development) {
+                // 1. Заказать стройку на СВОИХ планетах.
+                //
+                // Раньше бот вписывал здание прямо в застройку, и оно
+                // появлялось мгновенно. Теперь он ставит заказ, как игрок,
+                // и ждёт: иначе прогон сезона проверял бы экономику, которой
+                // в игре нет.
+                world.each<Planet, Owner, PlanetDevelopment, PlanetConstruction>(
+                    [&](Entity, Planet& planet, Owner& planetOwner,
+                        PlanetDevelopment& development, PlanetConstruction& site) {
                         if (planet.system >= count) return;
-                        if (owners[planet.system] != bot.empire) return;
+                        if (planetOwner.empire != bot.empire) return;
+                        if (site.slot != PlanetConstruction::kNoSlot) return;  // уже строит
+
                         const uint8_t limit = std::min<uint8_t>(planet.slots, kMaxSlots);
                         for (uint8_t slot = 0; slot < limit; ++slot) {
                             if (development.buildings[slot] != uint8_t(Building::None)) continue;
-                            development.buildings[slot] =
-                                uint8_t(kBuildOrder[slot % (sizeof(kBuildOrder) /
-                                                            sizeof(kBuildOrder[0]))]);
+                            enqueueConstruction(
+                                site, slot,
+                                kBuildOrder[slot % (sizeof(kBuildOrder) /
+                                                    sizeof(kBuildOrder[0]))]);
                             return;  // по одному зданию за раз
                         }
                     });
@@ -284,14 +310,19 @@ int main(int argc, char** argv) {
                         if (owner.empire != bot.empire) return;
                         if (order.target != kNoSystem) return;
                         if (location.system != location.nextSystem) return;
-                        if (owners[location.system] == kNoEmpire) return;  // занимаем эту
+                        // Пока в системе осталась хоть одна не своя планета,
+                        // флот стоит и доделывает работу. Раньше признаком
+                        // был владелец системы; с переносом владения на
+                        // планеты флот улетал, взяв ОДНУ планету из четырёх,
+                        // и половина системы оставалась чужой навсегда.
+                        if (unclaimed[location.system] > 0) return;
 
                         int32_t best = -1;
                         int32_t bestHops = 1 << 20;
                         int32_t enemy = -1;
                         int32_t enemyHops = 1 << 20;
                         for (uint32_t target = 0; target < count; ++target) {
-                            if (owners[target] == bot.empire) continue;
+                            if (unclaimed[target] == 0) continue;  // там всё уже наше
                             const int32_t hops = galaxy.hopDistance(location.system, target);
                             if (hops < 0) continue;
                             if (owners[target] == kNoEmpire) {
@@ -308,6 +339,11 @@ int main(int argc, char** argv) {
         }
 
         // --- тик мира ---
+        //
+        // Производное владение системами — первым: и бой, и присутствие,
+        // и поиск цели ботом смотрят на владельца системы и обязаны видеть
+        // в одном тике одно и то же.
+        systemControlRollup(world, context);
         systemFleetMovement(world, context);
 
         // Журнал сражений. Снимок делается ПОСЛЕ движения: флот, прилетевший
@@ -335,7 +371,8 @@ int main(int argc, char** argv) {
         systemPresence(world, context);
         systemSiege(world, context);
         systemEconomy(world, context);
-        systemDefenceCap(world, context);
+        planetDefenceCap(world, context);
+        planetConstructionTick(world, context);
         systemProduction(world, context);
 
         // Слияние не имеет права ни терять, ни удваивать корабли: оно только
@@ -370,10 +407,13 @@ int main(int argc, char** argv) {
             for (size_t i = 0; i < stats.size(); ++i) {
                 peakSystems[i] = std::max(peakSystems[i], stats[i].systems);
             }
-            world.each<Planet, PlanetDevelopment>(
-                [&](Entity, Planet& planet, PlanetDevelopment& d) {
+            // Планеты считаются по СВОЕМУ владельцу, а не по владельцу
+            // системы: наполовину взятая система даёт по половине каждому,
+            // и это именно то, что теперь надо видеть в отчёте.
+            world.each<Planet, Owner, PlanetDevelopment>(
+                [&](Entity, Planet& planet, Owner& planetOwner, PlanetDevelopment& d) {
                     if (planet.system >= count) return;
-                    const uint32_t who = owners[planet.system];
+                    const uint32_t who = planetOwner.empire;
                     if (who >= stats.size()) return;
                     ++stats[who].planets;
                     for (uint8_t slot = 0; slot < kMaxSlots; ++slot) {

@@ -35,15 +35,25 @@ namespace pw::game {
 using namespace pw::net;
 
 /// Состояние системы, каким его видит клиент.
+///
+/// Всё здесь ПРОИЗВОДНОЕ от планет: владелец — по большинству, готовность —
+/// средняя по своим планетам, осада — та, что идёт прямо сейчас. Карта
+/// галактики показывает сводку, подробности живут в виде системы.
 struct SystemView {
     uint8_t owner = 0xFF;      // kNoEmpire укладывается в 0xFF
-    uint8_t readiness = 0;     // готовность обороны, 0..100
+    uint8_t readiness = 0;     // средняя готовность своих планет, 0..100
     uint8_t siegeEmpire = 0xFF;
     uint8_t siegeProgress = 0; // 0..100
+    /// Сколько планет системы у её владельца и сколько всего. Это то, чем
+    /// «наполовину взятая система» отличается на карте от целой: без этих
+    /// двух чисел частичный захват не виден вообще.
+    uint8_t ownedPlanets = 0;
+    uint8_t totalPlanets = 0;
 
     bool operator==(const SystemView& o) const {
         return owner == o.owner && readiness == o.readiness &&
-               siegeEmpire == o.siegeEmpire && siegeProgress == o.siegeProgress;
+               siegeEmpire == o.siegeEmpire && siegeProgress == o.siegeProgress &&
+               ownedPlanets == o.ownedPlanets && totalPlanets == o.totalPlanets;
     }
     bool operator!=(const SystemView& o) const { return !(*this == o); }
 };
@@ -68,18 +78,35 @@ struct FleetView {
     bool operator!=(const FleetView& o) const { return !(*this == o); }
 };
 
-/// Застройка планеты — единственное, что в планете меняется.
+/// Изменяемое состояние планеты.
 ///
 /// Геометрия планет (класс, число слотов, орбита) выводится из сида, и
 /// клиент строит её у себя той же функцией, что и сервер. По сети идёт
-/// только то, чего из сида не вывести: что игрок построил и на чём
-/// специализировал.
+/// только то, чего из сида не вывести.
+///
+/// С переносом владения на планеты сюда переехало главное: КТО ХОЗЯИН.
+/// Раньше владение было полем системы, планета же несла одну застройку.
+/// Теперь планета — единица захвата, и клиенту нужны и её владелец, и её
+/// оборона, и осада, и стройка, иначе панель системы не может показать,
+/// что именно в этой системе происходит.
 struct PlanetView {
+    uint8_t owner = 0xFF;          // kNoEmpire укладывается в 0xFF
     uint8_t specialization = 0;
+    uint8_t readiness = 0;         // готовность обороны, 0..100
+    uint8_t siegeEmpire = 0xFF;    // кто осаждает
+    uint8_t siegeProgress = 0;     // 0..100, для ничьей планеты — занятие
+    uint8_t buildSlot = 0xFF;      // слот текущей стройки, 0xFF — стройки нет
+    uint8_t buildBuilding = 0;     // Building, который возводится
+    uint8_t buildPercent = 0;      // 0..100
+    uint8_t buildQueued = 0;       // сколько заказов ждёт очереди
     uint8_t buildings[sim::kMaxSlots] = {};
 
     bool operator==(const PlanetView& o) const {
-        if (specialization != o.specialization) return false;
+        if (owner != o.owner || specialization != o.specialization) return false;
+        if (readiness != o.readiness) return false;
+        if (siegeEmpire != o.siegeEmpire || siegeProgress != o.siegeProgress) return false;
+        if (buildSlot != o.buildSlot || buildBuilding != o.buildBuilding) return false;
+        if (buildPercent != o.buildPercent || buildQueued != o.buildQueued) return false;
         for (uint8_t i = 0; i < sim::kMaxSlots; ++i) {
             if (buildings[i] != o.buildings[i]) return false;
         }

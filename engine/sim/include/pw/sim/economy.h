@@ -99,6 +99,15 @@ inline const fx kClassAffinityBonus = fx::fromFraction(5, 4);
 /// Прибавка к потолку обороны за одну крепость.
 inline const fx kFortressReadiness = fx::fromInt(25);
 
+/// Сколько минералов в секунду способна освоить стройка на планете.
+///
+/// Половина минерала в секунду. Отсюда и берётся время постройки: шахта
+/// в 60 минералов встаёт за две минуты, верфь в 200 — за шесть с половиной.
+/// Это тот масштаб, при котором решение «что строить» — ставка на будущее,
+/// а не реакция на настоящее, и при котором осаждённый не успевает
+/// достроить крепость под падающей обороной.
+inline const fx kBuildRatePlanet = fx::fromFraction(1, 2);
+
 /// Сколько сплавов в секунду способна освоить одна верфь.
 ///
 /// Развитая система даёт около 0.75 сплава в секунду, поэтому две верфи
@@ -145,8 +154,15 @@ bool matchesSpecialisation(Building building, Specialization specialisation);
 /// Подходит ли класс планеты под здание.
 bool matchesClass(Building building, uint8_t planetClass);
 
+/// Во сколько минералов обходится здание.
+///
+/// Цена задаёт и время стройки: она делится на kBuildRatePlanet. Держать
+/// два независимых числа «цена» и «срок» значило бы дать им разойтись —
+/// и получить дешёвое здание, которое строится дольше дорогого.
+uint32_t buildingCost(Building building);
+
 /// Сколько зданий заданного типа стоит в каждой системе.
-/// Используют и крепости, и верфи — считать одинаково незачем дважды.
+/// Нужно тому, что остаётся системным: верфь обслуживает всю систему.
 std::vector<uint32_t> countBuildingsPerSystem(World& world, Building building,
                                              uint32_t systemCount);
 
@@ -157,8 +173,8 @@ std::vector<uint32_t> countBuildingsPerSystem(World& world, Building building,
 /// Производство, содержание и накопление ресурсов империй.
 void systemEconomy(World& world, const TickContext& context);
 
-/// Пересчитать потолок обороны систем по построенным крепостям.
-void systemDefenceCap(World& world, const TickContext& context);
+/// Пересчитать потолок обороны каждой планеты по её крепостям.
+void planetDefenceCap(World& world, const TickContext& context);
 
 void registerEconomyComponents(World& world);
 

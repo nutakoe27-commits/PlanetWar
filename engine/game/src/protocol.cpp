@@ -167,7 +167,7 @@ bool readNotice(ByteReader& reader, NoticeMessage& message) {
     const uint8_t raw = reader.u8();
     message.system = uint32_t(reader.varint());
     if (reader.failed()) return false;
-    if (raw > uint8_t(NoticeKind::OrderRejected)) return false;
+    if (raw >= uint8_t(NoticeKind::Count)) return false;
     message.kind = NoticeKind(raw);
     return true;
 }

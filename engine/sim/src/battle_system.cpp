@@ -18,7 +18,7 @@ void registerBattleComponents(World& world) {
 void initialiseBattles(World& world, const Galaxy& galaxy) {
     for (uint32_t index = 0; index < galaxy.systemCount(); ++index) {
         world.add<BattleState>(galaxy.systemEntity(index),
-                               BattleState{0, 0, kBattleNobody, kBattleNobody});
+                               BattleState{0, 0, kBattleNobody, kBattleNobody, 0, 0, 0});
     }
 }
 
@@ -263,9 +263,12 @@ void systemBattles(World& world, const TickContext& context) {
         states[system]->cooldown = uint32_t(kBattleIntervalSeconds * kTicksPerSecond);
 
         // Исход запоминаем здесь же: сервер прочитает его и скажет игрокам.
+        // И при ничьей запоминаем УЧАСТНИКОВ, а не одну метку: сервер
+        // обязан сказать о бое обеим сторонам, а для этого их надо знать.
+        states[system]->drawn = result.outcome == 2 ? 1u : 0u;
         if (result.outcome == 2) {
-            states[system]->lastWinner = kBattleDraw;
-            states[system]->lastLoser = kBattleDraw;
+            states[system]->lastWinner = uint8_t(parties[a].empire & 0xFFu);
+            states[system]->lastLoser = uint8_t(parties[b].empire & 0xFFu);
         } else {
             const Party& winner = result.outcome == 0 ? parties[a] : parties[b];
             const Party& loser = result.outcome == 0 ? parties[b] : parties[a];

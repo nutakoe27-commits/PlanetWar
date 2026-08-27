@@ -179,13 +179,24 @@ TEST_CASE("галактика: планеты принадлежат сущес�
     }
 }
 
-TEST_CASE("галактика: у чёрных дыр планет нет") {
+TEST_CASE("галактика: у чёрной дыры одна станция вместо планет") {
+    // Планет у чёрной дыры нет и быть не может, но владение теперь лежит
+    // на телах: без ownable-тела ценнейшая система карты выпала бы из игры
+    // целиком — её нельзя было бы ни взять, ни оборонять, ни застроить.
     Built built;
-    built.world.each<StarSystem>([](Entity, StarSystem& s) {
-        if (s.starClass == uint8_t(StarClass::BlackHole)) {
-            CHECK(s.planetCount == 0);
-        }
+    int holes = 0;
+    built.world.each<StarSystem>([&](Entity, StarSystem& s) {
+        if (s.starClass != uint8_t(StarClass::BlackHole)) return;
+        ++holes;
+        CHECK(s.planetCount == 1);
     });
+    CHECK(holes > 0);
+
+    int stations = 0;
+    built.world.each<Planet>([&](Entity, Planet& planet) {
+        if (planet.planetClass == uint8_t(PlanetClass::Station)) ++stations;
+    });
+    CHECK(stations == holes);
 }
 
 TEST_CASE("галактика: редкие светила встречаются, но остаются редкими") {

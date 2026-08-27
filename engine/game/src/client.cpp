@@ -138,7 +138,9 @@ std::vector<ClientEvent> Client::takeEvents() {
 uint8_t Client::PlanetInfo::freeSlots() const {
     uint8_t free = 0;
     for (uint8_t i = 0; i < slots && i < sim::kMaxSlots; ++i) {
-        if (buildings[i] == uint8_t(sim::Building::None)) ++free;
+        if (buildings[i] != uint8_t(sim::Building::None)) continue;
+        if (i == buildSlot) continue;  // слот занят стройкой
+        ++free;
     }
     return free;
 }
@@ -164,9 +166,18 @@ std::vector<Client::PlanetInfo> Client::planetsAt(uint32_t system) const {
 
             const auto found = view().planets.find(info.id);
             if (found != view().planets.end()) {
-                info.specialization = found->second.specialization;
+                const PlanetView& live = found->second;
+                info.specialization = live.specialization;
+                info.owner = live.owner;
+                info.readiness = live.readiness;
+                info.siegeEmpire = live.siegeEmpire;
+                info.siegeProgress = live.siegeProgress;
+                info.buildSlot = live.buildSlot;
+                info.buildBuilding = live.buildBuilding;
+                info.buildPercent = live.buildPercent;
+                info.buildQueued = live.buildQueued;
                 for (uint8_t i = 0; i < sim::kMaxSlots; ++i) {
-                    info.buildings[i] = found->second.buildings[i];
+                    info.buildings[i] = live.buildings[i];
                 }
             }
             out.push_back(info);

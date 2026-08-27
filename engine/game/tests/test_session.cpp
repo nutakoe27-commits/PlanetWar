@@ -23,12 +23,17 @@ namespace {
 class Session {
 public:
     Session(uint32_t systems, uint32_t lossPercent = 0, uint32_t maxDelay = 0,
-            uint64_t seed = 0x5E5510)
+            uint64_t seed = 0x5E5510, uint32_t speed = 1)
         : rng_(seed, /*stream=*/41), loss_(lossPercent), delay_(maxDelay) {
         ServerConfig config;
         config.galaxy.seed = 0xC0FFEE;
         config.galaxy.systemCount = systems;
         config.maxPlayers = 8;
+        // Ускорение мира. Стройки и осады идут минутами, и гонять их
+        // в реальном темпе значит держать в наборе тесты по полминуты
+        // каждый. Сеть при этом остаётся настоящей: пакеты ходят с той же
+        // частотой, ускоряется только симуляция.
+        config.speed = speed;
         server.start(config);
     }
 
@@ -297,11 +302,11 @@ TEST_CASE("сессия: игрок видит планеты своей сто�
     }
 }
 
-TEST_CASE("сессия: игрок строит шахту, и минералы начинают расти") {
+TEST_CASE("сессия: шахта строится минуты, и только потом даёт минералы") {
     // Полный игровой цикл: клиент видит планету, отдаёт приказ, сервер
-    // проверяет права, строит, экономика считает, снапшот привозит
-    // и застройку, и выросшие ресурсы.
-    Session session(100);
+    // проверяет права, ВЕДЁТ СТРОЙКУ, экономика считает, снапшот привозит
+    // и ход стройки, и готовое здание, и выросшие ресурсы.
+    Session session(100, 0, 0, 0x5E5510, /*speed=*/8);
     session.addClient("Михаил");
     session.run(2000);
 
@@ -310,22 +315,41 @@ TEST_CASE("сессия: игрок строит шахту, и минералы
     REQUIRE_FALSE(planets.empty());
     const uint32_t planet = planets.front().id;
 
-    const fx mineralsBefore = client.view().empire.minerals;
     REQUIRE(client.orderBuildBuilding(planet, 0, sim::Building::Mine));
-    session.run(60000);   // минута игры
+    session.run(1000);
 
-    // Постройка видна игроку.
+    // Стройка видна игроку сразу — а здания ещё нет.
+    {
+        const auto during = client.planetsAt(client.capital());
+        REQUIRE_FALSE(during.empty());
+        CHECK(during.front().buildings[0] == uint8_t(sim::Building::None));
+        CHECK(during.front().buildSlot == 0);
+        CHECK(during.front().buildBuilding == uint8_t(sim::Building::Mine));
+        // Занятый стройкой слот больше не считается свободным.
+        CHECK(during.front().freeSlots() == during.front().slots - 1);
+    }
+
+    // Шахта стоит 60 минералов при темпе 0.5 в секунду — две минуты игры.
+    session.run(20000);   // 160 секунд игры при ускорении восемь
+
     const auto after = client.planetsAt(client.capital());
     REQUIRE_FALSE(after.empty());
     CHECK(after.front().buildings[0] == uint8_t(sim::Building::Mine));
+    CHECK_FALSE(after.front().building());
+
     // И она работает.
+    const fx mineralsBefore = client.view().empire.minerals;
+    session.run(5000);
     CHECK(client.view().empire.minerals > mineralsBefore);
 }
 
 TEST_CASE("сессия: цепочка шахта-литейная даёт сплавы") {
     // Сплавы — единственный ресурс для флота, и получить их можно только
     // переработкой минералов. Проверяем всю цепочку, а не отдельное здание.
-    Session session(100);
+    //
+    // Три заказа подряд — это ещё и проверка очереди: без неё второй щелчок
+    // отменял бы первый, и игрок получил бы одну литейную вместо цепочки.
+    Session session(100, 0, 0, 0x5E5510, /*speed=*/16);
     session.addClient("Михаил");
     session.run(2000);
 
@@ -337,10 +361,18 @@ TEST_CASE("сессия: цепочка шахта-литейная даёт с�
     REQUIRE(client.orderBuildBuilding(planet, 0, sim::Building::Mine));
     REQUIRE(client.orderBuildBuilding(planet, 1, sim::Building::Mine));
     REQUIRE(client.orderBuildBuilding(planet, 2, sim::Building::Foundry));
-    session.run(2000);
+    session.run(1000);
+    CHECK(client.planetsAt(client.capital()).front().buildQueued == 2);
+
+    // 60 + 60 + 90 минералов при темпе 0.5 в секунду — семь минут игры.
+    session.run(35000);
+    const auto after = client.planetsAt(client.capital());
+    CHECK(after.front().buildings[0] == uint8_t(sim::Building::Mine));
+    CHECK(after.front().buildings[1] == uint8_t(sim::Building::Mine));
+    CHECK(after.front().buildings[2] == uint8_t(sim::Building::Foundry));
 
     const fx alloysBefore = client.view().empire.alloys;
-    session.run(120000);   // две минуты игры
+    session.run(10000);
     CHECK(client.view().empire.alloys > alloysBefore);
 }
 
@@ -474,7 +506,7 @@ TEST_CASE("уведомления: слияние флотов не считае
     // слиянии: два отряда становятся одним, количество падает, а не
     // потеряно ни одного корабля. Тест обязан это ловить, поэтому
     // проверяет, что слияние действительно произошло.
-    Session session(120);
+    Session session(120, 0, 0, 0x5E5510, /*speed=*/16);
     session.addClient("Михаил");
     session.run(2000);
 
@@ -509,7 +541,17 @@ TEST_CASE("уведомления: слияние флотов не считае
     REQUIRE(client.orderBuildBuilding(planet, 1, sim::Building::Mine));
     REQUIRE(client.orderBuildBuilding(planet, 2, sim::Building::Mine));
     REQUIRE(client.orderBuildBuilding(planet, 3, sim::Building::Foundry));
-    session.run(5000);
+
+    // Верфь строится семь минут игры, вся цепочка — почти двадцать.
+    // Ждём, пока она действительно встанет: заказ корабля в систему без
+    // верфи не выполняется вовсе.
+    for (int round = 0; round < 40 && !client.planetsAt(client.capital()).empty(); ++round) {
+        session.run(5000);
+        const auto state = client.planetsAt(client.capital());
+        if (state.front().buildings[3] == uint8_t(sim::Building::Foundry)) break;
+    }
+    REQUIRE(client.planetsAt(client.capital()).front().buildings[0] ==
+            uint8_t(sim::Building::Shipyard));
 
     REQUIRE(client.orderBuildShip(client.capital(), sim::Hull::Corvette, 6));
 
@@ -569,29 +611,41 @@ TEST_CASE("уведомления: о бое узнают обе стороны,
     REQUIRE(first.orderMove(defender, battlefield));
     REQUIRE(second.orderMove(attacker, battlefield));
 
+    const auto isBattle = [](NoticeKind kind) {
+        return kind == NoticeKind::BattleWon || kind == NoticeKind::BattleLost ||
+               kind == NoticeKind::BattleDraw;
+    };
+
     bool firstHeard = false, secondHeard = false;
     NoticeKind firstKind = NoticeKind::None, secondKind = NoticeKind::None;
 
     for (int round = 0; round < 60 && !(firstHeard && secondHeard); ++round) {
         session.run(20000);
         for (const ClientEvent& event : first.takeEvents()) {
-            if (event.kind == NoticeKind::BattleWon || event.kind == NoticeKind::BattleLost) {
-                firstHeard = true;
-                firstKind = event.kind;
-            }
+            if (!isBattle(event.kind)) continue;
+            firstHeard = true;
+            firstKind = event.kind;
         }
         for (const ClientEvent& event : second.takeEvents()) {
-            if (event.kind == NoticeKind::BattleWon || event.kind == NoticeKind::BattleLost) {
-                secondHeard = true;
-                secondKind = event.kind;
-            }
+            if (!isBattle(event.kind)) continue;
+            secondHeard = true;
+            secondKind = event.kind;
         }
     }
 
     REQUIRE(firstHeard);
     REQUIRE(secondHeard);
-    // Один выиграл, другой проиграл — не оба одно и то же.
-    CHECK(firstKind != secondKind);
+
+    // Исход зависит от бросков боя, и требовать от теста конкретного
+    // победителя значило бы привязать его к сиду. Проверяется правило,
+    // а не удача: у решённого боя две РАЗНЫЕ новости, у ничьей — одна
+    // и та же ОБЕИМ сторонам. Молчания нет ни в одном из случаев.
+    if (firstKind == NoticeKind::BattleDraw || secondKind == NoticeKind::BattleDraw) {
+        CHECK(firstKind == NoticeKind::BattleDraw);
+        CHECK(secondKind == NoticeKind::BattleDraw);
+    } else {
+        CHECK(firstKind != secondKind);
+    }
 }
 
 TEST_CASE("приказ: заказ корабля без верфи отвергается вслух") {
@@ -618,7 +672,7 @@ TEST_CASE("приказ: заказ корабля без верфи отвер�
 }
 
 TEST_CASE("приказ: с верфью заказ принимается") {
-    Session session(80);
+    Session session(80, 0, 0, 0x5E5510, /*speed=*/16);
     session.addClient("Михаил");
     session.run(2000);
 
@@ -626,7 +680,12 @@ TEST_CASE("приказ: с верфью заказ принимается") {
     const auto planets = client.planetsAt(client.capital());
     REQUIRE_FALSE(planets.empty());
     REQUIRE(client.orderBuildBuilding(planets.front().id, 0, sim::Building::Shipyard));
-    session.run(3000);
+
+    // Верфь в 200 минералов при темпе 0.5 в секунду — почти семь минут игры.
+    // Раньше она появлялась по щелчку, и тест этого не замечал.
+    session.run(30000);
+    REQUIRE(client.planetsAt(client.capital()).front().buildings[0] ==
+            uint8_t(sim::Building::Shipyard));
     client.takeEvents();
 
     REQUIRE(client.orderBuildShip(client.capital(), sim::Hull::Corvette, 1));

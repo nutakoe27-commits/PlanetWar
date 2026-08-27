@@ -3,6 +3,7 @@
 #include "pw/sim/control.h"
 #include "pw/sim/fleet.h"
 #include "pw/sim/galaxy.h"
+#include "pw/sim/production.h"
 
 using namespace pw;
 using namespace pw::sim;
@@ -30,10 +31,43 @@ struct Realm {
     }
 
     Entity systemAt(uint32_t index) { return galaxy.systemEntity(index); }
+    Entity planetAt(uint32_t system, uint32_t orbit) {
+        return galaxy.planetEntity(system, orbit);
+    }
+    uint32_t planetCount(uint32_t system) { return galaxy.planetCount(system); }
 
+    /// Первая система ровно с таким числом планет.
+    ///
+    /// Именно поиском, а не константой: число планет выводится из сида,
+    /// и захардкоженный номер системы развалился бы от любой правки
+    /// генератора — причём молча, превратив тест про одну планету в тест
+    /// про четыре.
+    uint32_t systemWith(uint32_t planets) {
+        for (uint32_t i = 0; i < galaxy.systemCount(); ++i) {
+            if (galaxy.planetCount(i) == planets) return i;
+        }
+        return UINT32_MAX;
+    }
+    uint32_t systemWithAtLeast(uint32_t planets) {
+        for (uint32_t i = 0; i < galaxy.systemCount(); ++i) {
+            if (galaxy.planetCount(i) >= planets) return i;
+        }
+        return UINT32_MAX;
+    }
+
+    void setPlanetOwner(uint32_t system, uint32_t orbit, uint32_t empire, fx readiness) {
+        const Entity planet = planetAt(system, orbit);
+        REQUIRE(planet.valid());
+        world.get<Owner>(planet)->empire = empire;
+        world.get<PlanetDefense>(planet)->readiness = readiness;
+    }
+
+    /// Отдать одной империи всю систему целиком.
     void setOwner(uint32_t system, uint32_t empire, fx readiness) {
+        for (uint32_t orbit = 0; orbit < planetCount(system); ++orbit) {
+            setPlanetOwner(system, orbit, empire, readiness);
+        }
         world.get<Owner>(systemAt(system))->empire = empire;
-        world.get<SystemDefense>(systemAt(system))->readiness = readiness;
     }
 
     Entity garrison(uint32_t system, uint32_t empire, const Fleet& composition) {
@@ -49,14 +83,28 @@ struct Realm {
         for (int64_t i = 0; i < ticks; ++i) {
             TickContext context;
             context.tick = uint64_t(i);
+            systemControlRollup(world, context);
             systemPresence(world, context);
             systemSiege(world, context);
         }
     }
 
     uint32_t ownerOf(uint32_t system) { return world.get<Owner>(systemAt(system))->empire; }
-    fx readinessOf(uint32_t system) {
-        return world.get<SystemDefense>(systemAt(system))->readiness;
+    uint32_t planetOwner(uint32_t system, uint32_t orbit) {
+        return world.get<Owner>(planetAt(system, orbit))->empire;
+    }
+    fx readinessOf(uint32_t system, uint32_t orbit = 0) {
+        return world.get<PlanetDefense>(planetAt(system, orbit))->readiness;
+    }
+    const SiegeState* siegeOf(uint32_t system, uint32_t orbit = 0) {
+        return world.get<SiegeState>(planetAt(system, orbit));
+    }
+    uint32_t planetsOwnedBy(uint32_t system, uint32_t empire) {
+        uint32_t total = 0;
+        for (uint32_t orbit = 0; orbit < planetCount(system); ++orbit) {
+            if (planetOwner(system, orbit) == empire) ++total;
+        }
+        return total;
     }
 };
 
@@ -66,31 +114,113 @@ constexpr int64_t kMinute = 60 * kSecond;
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// Занятие ничьих систем
+// Производное владение системой
 // ---------------------------------------------------------------------------
 
 TEST_CASE("владение: галактика начинается ничьей") {
     Realm realm;
     for (uint32_t i = 0; i < realm.galaxy.systemCount(); ++i) {
         CHECK(realm.ownerOf(i) == kNoEmpire);
-        CHECK(realm.readinessOf(i) == fx::zero());
+        CHECK(realm.planetCount(i) > 0);  // владеть должно быть чем в КАЖДОЙ системе
+        for (uint32_t orbit = 0; orbit < realm.planetCount(i); ++orbit) {
+            CHECK(realm.planetOwner(i, orbit) == kNoEmpire);
+            CHECK(realm.readinessOf(i, orbit) == fx::zero());
+        }
     }
 }
 
-TEST_CASE("владение: флот занимает ничью систему за пять минут") {
+TEST_CASE("владение: у чёрной дыры есть станция") {
+    // Без ownable-тела ценнейшая система карты выпала бы из игры целиком:
+    // её нельзя было бы ни взять, ни оборонять, ни застроить.
+    Realm realm(0xB1AC, 400);
+    uint32_t holes = 0;
+    for (uint32_t i = 0; i < realm.galaxy.systemCount(); ++i) {
+        if (realm.galaxy.starClass(i) != uint8_t(StarClass::BlackHole)) continue;
+        ++holes;
+        REQUIRE(realm.planetCount(i) >= 1);
+        const Planet* body = realm.world.get<Planet>(realm.planetAt(i, 0));
+        REQUIRE(body != nullptr);
+        CHECK(body->planetClass == uint8_t(PlanetClass::Station));
+        CHECK(body->slots > 0);
+    }
+    CHECK(holes > 0);  // иначе тест ничего не проверил
+}
+
+TEST_CASE("владение: система достаётся тому, у кого больше планет") {
+    Realm realm;
+    const uint32_t system = realm.systemWithAtLeast(3);
+    REQUIRE(system != UINT32_MAX);
+
+    realm.setPlanetOwner(system, 0, /*empire=*/1, kReadinessMax);
+    realm.setPlanetOwner(system, 1, /*empire=*/1, kReadinessMax);
+    realm.setPlanetOwner(system, 2, /*empire=*/2, kReadinessMax);
+
+    TickContext context;
+    systemControlRollup(realm.world, context);
+    CHECK(realm.ownerOf(system) == 1u);
+}
+
+TEST_CASE("владение: поровну — система спорная") {
+    // Спорная система не тыл никому: она не даёт своему «владельцу»
+    // ни права строить флот, ни статуса на карте.
+    Realm realm;
+    const uint32_t system = realm.systemWithAtLeast(2);
+    REQUIRE(system != UINT32_MAX);
+
+    realm.setPlanetOwner(system, 0, /*empire=*/1, kReadinessMax);
+    realm.setPlanetOwner(system, 1, /*empire=*/2, kReadinessMax);
+    for (uint32_t orbit = 2; orbit < realm.planetCount(system); ++orbit) {
+        realm.setPlanetOwner(system, orbit, kNoEmpire, fx::zero());
+    }
+
+    TickContext context;
+    systemControlRollup(realm.world, context);
+    CHECK(realm.ownerOf(system) == kNoEmpire);
+}
+
+// ---------------------------------------------------------------------------
+// Занятие ничьих планет
+// ---------------------------------------------------------------------------
+
+TEST_CASE("владение: флот занимает ничью планету за пять минут") {
     Realm realm;
     realm.garrison(3, /*empire=*/1, Fleet{2, 0, 0, 0});
 
     realm.run(4 * kMinute + 50 * kSecond);
-    CHECK(realm.ownerOf(3) == kNoEmpire);  // ещё рано
+    CHECK(realm.planetOwner(3, 0) == kNoEmpire);  // ещё рано
 
     realm.run(20 * kSecond);
-    CHECK(realm.ownerOf(3) == 1u);
-    // Занятая ничья система сразу боеспособна: воюют не за пустоту.
-    CHECK(realm.readinessOf(3) == kReadinessMax);
+    CHECK(realm.planetOwner(3, 0) == 1u);
+    // Занятая ничья планета сразу боеспособна: воюют не за пустоту.
+    CHECK(realm.readinessOf(3, 0) == kReadinessMax);
 }
 
-TEST_CASE("владение: два своих флота не мешают занять систему") {
+TEST_CASE("владение: планеты занимаются по одной, от звезды наружу") {
+    // Это и есть перенос захвата с систем на планеты: система с четырьмя
+    // планетами больше не берётся одним щелчком за то же время, что
+    // и система с одной.
+    Realm realm;
+    const uint32_t system = realm.systemWithAtLeast(3);
+    REQUIRE(system != UINT32_MAX);
+    realm.garrison(system, /*empire=*/1, Fleet{4, 0, 0, 0});
+
+    realm.run(5 * kMinute + 10 * kSecond);
+    CHECK(realm.planetOwner(system, 0) == 1u);
+    // Вторая ещё ничья: пять минут дают ОДНУ планету, а не систему.
+    CHECK(realm.planetOwner(system, 1) == kNoEmpire);
+    CHECK(realm.planetsOwnedBy(system, 1) == 1u);
+
+    realm.run(5 * kMinute);
+    CHECK(realm.planetOwner(system, 1) == 1u);
+    CHECK(realm.planetsOwnedBy(system, 1) == 2u);
+
+    // Вся система целиком — только когда занята каждая планета.
+    realm.run(5 * kMinute * int64_t(realm.planetCount(system)));
+    CHECK(realm.planetsOwnedBy(system, 1) == realm.planetCount(system));
+    CHECK(realm.ownerOf(system) == 1u);
+}
+
+TEST_CASE("владение: два своих флота не мешают занять планету") {
     // Правило «занимает только единственный претендент» считает ИМПЕРИИ,
     // а не флоты. Пока считались флоты, империя, приведшая два отряда,
     // блокировала занятие сама себе, и экспансия вставала намертво.
@@ -101,7 +231,7 @@ TEST_CASE("владение: два своих флота не мешают за
     realm.garrison(4, /*empire=*/1, Fleet{2, 0, 0, 0});
 
     realm.run(5 * kMinute + 10 * kSecond);
-    CHECK(realm.ownerOf(4) == 1u);
+    CHECK(realm.planetOwner(4, 0) == 1u);
 }
 
 TEST_CASE("владение: два претендента не занимают ничего") {
@@ -110,11 +240,12 @@ TEST_CASE("владение: два претендента не занимают
     realm.garrison(5, /*empire=*/2, Fleet{5, 0, 0, 0});
 
     realm.run(20 * kMinute);
-    // Пока не разобрались между собой, система остаётся ничьей.
+    // Пока не разобрались между собой, планета остаётся ничьей.
+    CHECK(realm.planetOwner(5, 0) == kNoEmpire);
     CHECK(realm.ownerOf(5) == kNoEmpire);
 }
 
-TEST_CASE("владение: ушедший флот не дозанимает систему") {
+TEST_CASE("владение: ушедший флот не дозанимает планету") {
     Realm realm;
     const Entity fleet = realm.garrison(7, /*empire=*/1, Fleet{3, 0, 0, 0});
 
@@ -124,29 +255,29 @@ TEST_CASE("владение: ушедший флот не дозанимает �
         realm.galaxy.neighbors(7)[0];
 
     realm.run(4 * kMinute);
-    CHECK(realm.ownerOf(7) == kNoEmpire);
+    CHECK(realm.planetOwner(7, 0) == kNoEmpire);
 }
 
 // ---------------------------------------------------------------------------
 // Осада
 // ---------------------------------------------------------------------------
 
-TEST_CASE("осада: чужая система падает за десятки минут, а не мгновенно") {
+TEST_CASE("осада: чужая планета падает за десятки минут, а не мгновенно") {
     Realm realm;
     realm.setOwner(9, /*empire=*/1, kReadinessMax);
     realm.garrison(9, /*empire=*/2, Fleet{20, 0, 0, 0});  // тоннаж 20
 
-    // Через минуту система ещё держится. Это и есть главное свойство:
+    // Через минуту планета ещё держится. Это и есть главное свойство:
     // мгновенных потерь в игре нет.
     realm.run(1 * kMinute);
-    CHECK(realm.ownerOf(9) == 1u);
-    CHECK(realm.readinessOf(9) < kReadinessMax);
+    CHECK(realm.planetOwner(9, 0) == 1u);
+    CHECK(realm.readinessOf(9, 0) < kReadinessMax);
 
     realm.run(29 * kMinute);
-    CHECK(realm.ownerOf(9) == 1u);  // и через полчаса тоже
+    CHECK(realm.planetOwner(9, 0) == 1u);  // и через полчаса тоже
 
     realm.run(45 * kMinute);
-    CHECK(realm.ownerOf(9) == 2u);
+    CHECK(realm.planetOwner(9, 0) == 2u);
 }
 
 TEST_CASE("осада: укладывается в обещанные дизайном 30–90 минут") {
@@ -158,7 +289,7 @@ TEST_CASE("осада: укладывается в обещанные дизай
 
         for (int64_t minute = 1; minute <= 240; ++minute) {
             realm.run(kMinute);
-            if (realm.ownerOf(11) == 2u) return minute;
+            if (realm.planetOwner(11, 0) == 2u) return minute;
         }
         return int64_t(-1);
     };
@@ -173,7 +304,7 @@ TEST_CASE("осада: укладывается в обещанные дизай
     CHECK(large >= 30);
     CHECK(large < small);
 
-    // Втрое больший флот НЕ берёт систему втрое быстрее: иначе выигрывал бы
+    // Втрое больший флот НЕ берёт планету втрое быстрее: иначе выигрывал бы
     // просто тот, кто собрал всё в один кулак, и делить силы стало бы незачем.
     CHECK(double(small) / double(large) < 2.5);
 }
@@ -184,18 +315,18 @@ TEST_CASE("осада: защитники срывают её немедленн
     realm.garrison(13, /*empire=*/2, Fleet{50, 0, 0, 0});
 
     realm.run(10 * kMinute);
-    const fx damaged = realm.readinessOf(13);
+    const fx damaged = realm.readinessOf(13, 0);
     CHECK(damaged < kReadinessMax);
 
     // Деблокирующий удар: пришли свои — осада снята.
     realm.garrison(13, /*empire=*/1, Fleet{1, 0, 0, 0});
     realm.run(1 * kSecond);
-    CHECK(realm.world.get<SiegeState>(realm.systemAt(13))->besieger == kNoEmpire);
+    CHECK(realm.siegeOf(13, 0)->besieger == kNoEmpire);
 
     // И оборона начинает восстанавливаться.
     realm.run(10 * kMinute);
-    CHECK(realm.readinessOf(13) > damaged);
-    CHECK(realm.ownerOf(13) == 1u);
+    CHECK(realm.readinessOf(13, 0) > damaged);
+    CHECK(realm.planetOwner(13, 0) == 1u);
 }
 
 TEST_CASE("осада: свежий захват слаб") {
@@ -203,15 +334,15 @@ TEST_CASE("осада: свежий захват слаб") {
     realm.setOwner(15, /*empire=*/1, kReadinessMax);
     realm.garrison(15, /*empire=*/2, Fleet{0, 0, 0, 30});  // тяжёлый флот
 
-    for (int64_t minute = 0; minute < 200 && realm.ownerOf(15) != 2u; ++minute) {
+    for (int64_t minute = 0; minute < 200 && realm.planetOwner(15, 0) != 2u; ++minute) {
         realm.run(kMinute);
     }
-    REQUIRE(realm.ownerOf(15) == 2u);
+    REQUIRE(realm.planetOwner(15, 0) == 2u);
 
-    // Взятая система достаётся четвертью готовности: отбить её обратно
+    // Взятая планета достаётся четвертью готовности: отбить её обратно
     // реально, и фронт может ходить, а не застывать после первого удара.
-    CHECK(realm.readinessOf(15) <= kReadinessMax * kCaptureReadinessShare + fx::one());
-    CHECK(realm.readinessOf(15) > fx::zero());
+    CHECK(realm.readinessOf(15, 0) <= kReadinessMax * kCaptureReadinessShare + fx::one());
+    CHECK(realm.readinessOf(15, 0) > fx::zero());
 }
 
 TEST_CASE("осада: оборона восстанавливается в мирное время") {
@@ -219,14 +350,14 @@ TEST_CASE("осада: оборона восстанавливается в ми
     realm.setOwner(17, /*empire=*/1, fx::zero());
 
     realm.run(50 * kMinute);
-    const fx half = realm.readinessOf(17);
+    const fx half = realm.readinessOf(17, 0);
     CHECK(half > fx::zero());
     CHECK(half < kReadinessMax);
 
     realm.run(60 * kMinute);
-    // Полное восстановление около ста минут: система, пережившая осаду,
+    // Полное восстановление около ста минут: планета, пережившая осаду,
     // ещё долго остаётся уязвимой.
-    CHECK(realm.readinessOf(17) == kReadinessMax);
+    CHECK(realm.readinessOf(17, 0) == kReadinessMax);
 }
 
 TEST_CASE("осада: флот в пути не участвует ни в чём") {
@@ -238,8 +369,8 @@ TEST_CASE("осада: флот в пути не участвует ни в чё
     realm.world.get<FleetLocation>(raider)->nextSystem = realm.galaxy.neighbors(19)[0];
 
     realm.run(30 * kMinute);
-    CHECK(realm.readinessOf(19) == kReadinessMax);
-    CHECK(realm.ownerOf(19) == 1u);
+    CHECK(realm.readinessOf(19, 0) == kReadinessMax);
+    CHECK(realm.planetOwner(19, 0) == 1u);
 }
 
 TEST_CASE("осада: смена осаждающего обнуляет счётчик") {
@@ -248,8 +379,8 @@ TEST_CASE("осада: смена осаждающего обнуляет счё
     const Entity first = realm.garrison(21, /*empire=*/2, Fleet{40, 0, 0, 0});
 
     realm.run(5 * kMinute);
-    CHECK(realm.world.get<SiegeState>(realm.systemAt(21))->besieger == 2u);
-    const uint32_t ticksBefore = realm.world.get<SiegeState>(realm.systemAt(21))->ticks;
+    CHECK(realm.siegeOf(21, 0)->besieger == 2u);
+    const uint32_t ticksBefore = realm.siegeOf(21, 0)->ticks;
     CHECK(ticksBefore > 0);
 
     // Первый ушёл, пришёл третий — счёт осады начинается заново, но
@@ -258,10 +389,47 @@ TEST_CASE("осада: смена осаждающего обнуляет счё
     realm.garrison(21, /*empire=*/3, Fleet{40, 0, 0, 0});
     realm.run(1 * kSecond);
 
-    const SiegeState* siege = realm.world.get<SiegeState>(realm.systemAt(21));
+    const SiegeState* siege = realm.siegeOf(21, 0);
     CHECK(siege->besieger == 3u);
     CHECK(siege->ticks < ticksBefore);
-    CHECK(realm.readinessOf(21) < kReadinessMax);
+    CHECK(realm.readinessOf(21, 0) < kReadinessMax);
+}
+
+TEST_CASE("осада: анклав в чужом тылу обороняется сам") {
+    // Держать планету в чужой системе — законный ход. Флот соседа её
+    // не обороняет: защитники считаются по владельцу ПЛАНЕТЫ, а не системы.
+    Realm realm;
+    const uint32_t system = realm.systemWithAtLeast(2);
+    REQUIRE(system != UINT32_MAX);
+
+    realm.setOwner(system, /*empire=*/1, kReadinessMax);
+    realm.setPlanetOwner(system, 1, /*empire=*/2, kReadinessMax);
+
+    // Империя 1 стоит в системе своим флотом: её собственная планета
+    // защищена, а вот анклав империи 2 — нет.
+    realm.garrison(system, /*empire=*/1, Fleet{60, 0, 0, 0});
+
+    realm.run(10 * kMinute);
+    CHECK(realm.readinessOf(system, 0) == kReadinessMax);   // своя цела
+    CHECK(realm.readinessOf(system, 1) < kReadinessMax);    // анклав под осадой
+    CHECK(realm.siegeOf(system, 1)->besieger == 1u);
+}
+
+TEST_CASE("осада: занятая планета не мешает осаждать следующую") {
+    // Флот идёт по орбитам: взял первую — принялся за вторую. Иначе
+    // «одна планета за раз» превращалась бы в «одна планета навсегда».
+    Realm realm;
+    const uint32_t system = realm.systemWithAtLeast(2);
+    REQUIRE(system != UINT32_MAX);
+
+    realm.setOwner(system, /*empire=*/1, kReadinessMax);
+    realm.garrison(system, /*empire=*/2, Fleet{0, 0, 0, 40});
+
+    for (int64_t minute = 0; minute < 400 && realm.planetOwner(system, 1) != 2u; ++minute) {
+        realm.run(kMinute);
+    }
+    CHECK(realm.planetOwner(system, 0) == 2u);
+    CHECK(realm.planetOwner(system, 1) == 2u);
 }
 
 TEST_CASE("владение: воспроизводится тик в тик") {
@@ -281,5 +449,5 @@ TEST_CASE("владение: воспроизводится тик в тик") {
     CHECK(first.world.hash() == second.world.hash());
 
     // И что-то действительно произошло, а не просто ничего не менялось.
-    CHECK(first.ownerOf(12) == 3u);
+    CHECK(first.planetOwner(12, 0) == 3u);
 }

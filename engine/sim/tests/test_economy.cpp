@@ -40,16 +40,30 @@ struct Economy {
 
     Empire& empire() { return *world.get<Empire>(empireEntity); }
 
+    /// Отдать империи систему целиком — со всеми её планетами.
+    ///
+    /// Выработка достаётся владельцу ПЛАНЕТЫ, а не системы, поэтому
+    /// проставить одно поле у системы больше недостаточно: она пустая
+    /// запись, производят планеты.
     void own(uint32_t system, uint32_t who = 0) {
         world.get<Owner>(galaxy.systemEntity(system))->empire = who;
+        world.each<Planet, Owner>([&](Entity, Planet& planet, Owner& owner) {
+            if (planet.system == system) owner.empire = who;
+        });
     }
 
     /// Планета с заданным классом и застройкой.
+    ///
+    /// Владелец ставится тут же: планета создаётся уже после
+    /// initialiseControl, и навесить на неё владение задним числом
+    /// значило бы менять таблицы посреди обхода.
     Entity colonise(uint32_t system, PlanetClass klass, Specialization spec,
-                    std::initializer_list<Building> buildings) {
+                    std::initializer_list<Building> buildings, uint32_t who = 0) {
         const Entity planet = world.create();
         world.add<Planet>(planet, Planet{system, uint8_t(klass), kMaxSlots,
                                          uint8_t(spec), /*orbit=*/0});
+        world.add<Owner>(planet, Owner{who, 0});
+        world.add<PlanetDefense>(planet, PlanetDefense{fx::zero(), kReadinessMax});
 
         PlanetDevelopment development{};
         uint8_t slot = 0;
@@ -100,11 +114,11 @@ TEST_CASE("экономика: шахта даёт минералы") {
     CHECK(near(world.empire().minerals, 20.0));
 }
 
-TEST_CASE("экономика: ничья система не даёт ничего") {
+TEST_CASE("экономика: ничья планета не даёт ничего") {
     Economy world;
     // Владельца не назначаем.
     world.colonise(1, PlanetClass::Desert, Specialization::None,
-                   {Building::Mine, Building::Mine, Building::Mine});
+                   {Building::Mine, Building::Mine, Building::Mine}, kNoEmpire);
 
     world.run(100 * kSecond);
     CHECK(world.empire().minerals == fx::zero());
@@ -252,23 +266,24 @@ TEST_CASE("содержание: ресурсы не уходят в минус"
 // Крепости
 // ---------------------------------------------------------------------------
 
-TEST_CASE("крепость: поднимает потолок обороны системы") {
+TEST_CASE("крепость: поднимает потолок обороны СВОЕЙ планеты") {
+    // Раньше крепости считались по системе, и крепость на пустом камне
+    // укрепляла соседний мир-столицу: оборона строилась там, где дешевле,
+    // а не там, где важно. Теперь укрепление — выбор конкретной планеты.
     Economy world;
     world.own(1);
-    world.colonise(1, PlanetClass::Barren, Specialization::Fortress,
-                   {Building::Fortress, Building::Fortress});
+    const Entity fortified = world.colonise(1, PlanetClass::Barren, Specialization::Fortress,
+                                            {Building::Fortress, Building::Fortress});
+    const Entity plain = world.colonise(1, PlanetClass::Barren, Specialization::None,
+                                        {Building::Mine});
 
     TickContext context;
-    systemDefenceCap(world.world, context);
+    planetDefenceCap(world.world, context);
 
-    const SystemDefense* defense =
-        world.world.get<SystemDefense>(world.galaxy.systemEntity(1));
-    CHECK(defense->maxReadiness == kReadinessMax + kFortressReadiness * fx::fromInt(2));
-
-    // А система без крепостей остаётся при базовом потолке.
-    const SystemDefense* plain =
-        world.world.get<SystemDefense>(world.galaxy.systemEntity(2));
-    CHECK(plain->maxReadiness == kReadinessMax);
+    CHECK(world.world.get<PlanetDefense>(fortified)->maxReadiness ==
+          kReadinessMax + kFortressReadiness * fx::fromInt(2));
+    // Соседняя планета той же системы остаётся при базовом потолке.
+    CHECK(world.world.get<PlanetDefense>(plain)->maxReadiness == kReadinessMax);
 }
 
 TEST_CASE("крепость: снос обрезает уже накопленную готовность") {
@@ -277,15 +292,15 @@ TEST_CASE("крепость: снос обрезает уже накопленн
     const Entity planet = world.colonise(1, PlanetClass::Barren, Specialization::None,
                                          {Building::Fortress});
     TickContext context;
-    systemDefenceCap(world.world, context);
+    planetDefenceCap(world.world, context);
 
-    SystemDefense* defense = world.world.get<SystemDefense>(world.galaxy.systemEntity(1));
+    PlanetDefense* defense = world.world.get<PlanetDefense>(planet);
     defense->readiness = defense->maxReadiness;
     CHECK(defense->readiness > kReadinessMax);
 
     // Крепость снесли — оборона обязана просесть сразу, а не остаться висеть.
     world.world.get<PlanetDevelopment>(planet)->buildings[0] = uint8_t(Building::None);
-    systemDefenceCap(world.world, context);
+    planetDefenceCap(world.world, context);
     CHECK(defense->readiness == kReadinessMax);
 }
 

@@ -116,9 +116,11 @@ const char* noticeText(game::NoticeKind kind) {
         case game::NoticeKind::SystemLost:     return "система потеряна";
         case game::NoticeKind::BattleWon:      return "бой выигран";
         case game::NoticeKind::BattleLost:     return "бой проигран";
+        case game::NoticeKind::BattleDraw:     return "бой без победителя";
         case game::NoticeKind::FleetDestroyed: return "флот уничтожен";
         case game::NoticeKind::OrderRejected:  return "приказ отвергнут";
-        case game::NoticeKind::None:           return "";
+        case game::NoticeKind::None:
+        case game::NoticeKind::Count:          return "";
     }
     return "";
 }

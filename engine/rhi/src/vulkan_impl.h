@@ -101,6 +101,15 @@ struct FrameBufferVk {
     VkDeviceSize capacity = 0;
 };
 
+/// Загруженная сетка: вершины и индексы в памяти устройства.
+struct MeshVk {
+    VkBuffer vertices = VK_NULL_HANDLE;
+    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+    VkBuffer indices = VK_NULL_HANDLE;
+    VkDeviceMemory indexMemory = VK_NULL_HANDLE;
+    uint32_t indexCount = 0;
+};
+
 /// Загруженная текстура.
 struct TextureVk {
     VkImage image = VK_NULL_HANDLE;
@@ -139,6 +148,14 @@ struct Device::Impl {
     VkBuffer readBuffer = VK_NULL_HANDLE;
     VkDeviceMemory readMemory = VK_NULL_HANDLE;
 
+    // Буфер глубины. Один на цель: проходов у нас один, и разделять
+    // глубину между кадрами swapchain не нужно — кадры не пересекаются
+    // во времени, потому что кадр ждёт забора.
+    VkImage depthImage = VK_NULL_HANDLE;
+    VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+    VkImageView depthView = VK_NULL_HANDLE;
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+
     VkRenderPass renderPass = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> framebuffers;
 
@@ -150,6 +167,14 @@ struct Device::Impl {
     VkPipeline spritePipeline = VK_NULL_HANDLE;
     VkPipelineLayout lineLayout = VK_NULL_HANDLE;
     VkPipeline linePipeline = VK_NULL_HANDLE;
+
+    // --- сетки ---
+    VkPipelineLayout meshLayout = VK_NULL_HANDLE;
+    VkPipeline meshPipeline = VK_NULL_HANDLE;
+    FrameBufferVk meshBuffer;
+    VkDeviceSize meshUsed = 0;
+    std::vector<MeshVk> meshes;
+    Camera3D camera3d;
 
     VkDescriptorSetLayout samplerLayout = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
@@ -175,7 +200,14 @@ struct Device::Impl {
                        const VkVertexInputBindingDescription* bindings, uint32_t bindingCount,
                        const VkVertexInputAttributeDescription* attributes,
                        uint32_t attributeCount,
-                       VkPipelineLayout& outLayout, VkPipeline& outPipeline);
+                       VkPipelineLayout& outLayout, VkPipeline& outPipeline,
+                       uint32_t pushBytes = 16, bool depth = false, bool cull = false,
+                       bool blend = true);
+    /// Залить данные в свежий буфер, живущий до конца работы устройства.
+    bool uploadStaticBuffer(const void* data, VkDeviceSize bytes, VkBufferUsageFlags usage,
+                            VkBuffer& outBuffer, VkDeviceMemory& outMemory);
+    bool createDepthTarget();
+    void destroyMeshes();
     void destroyDrawing();
 
     VkCommandPool pool = VK_NULL_HANDLE;

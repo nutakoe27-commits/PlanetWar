@@ -4,18 +4,19 @@
 
 #include "pw/sim/control.h"
 #include "pw/sim/economy.h"
+#include "pw/sim/production.h"
 
 namespace pw::game {
 
 namespace {
 
-/// Сколько байт занимает одна система в дельте: индекс плюс четыре поля.
-constexpr size_t kSystemEntryBound = 5 + 4;
+/// Сколько байт занимает одна система в дельте: индекс плюс шесть полей.
+constexpr size_t kSystemEntryBound = 5 + 6;
 /// Верхняя оценка на флот: идентификатор, империя, две системы, прогресс
 /// и четыре счётчика — всё varint'ами.
 constexpr size_t kFleetEntryBound = 5 + 1 + 5 + 5 + 10 + 4 * 5;
-/// Планета: номер, специализация и слоты застройки.
-constexpr size_t kPlanetEntryBound = 5 + 1 + sim::kMaxSlots;
+/// Планета: номер, девять однобайтовых полей и слоты застройки.
+constexpr size_t kPlanetEntryBound = 5 + 9 + sim::kMaxSlots;
 
 void writeSystem(ByteWriter& writer, uint32_t index, const SystemView& system) {
     writer.varint(index);
@@ -23,6 +24,8 @@ void writeSystem(ByteWriter& writer, uint32_t index, const SystemView& system) {
     writer.u8(system.readiness);
     writer.u8(system.siegeEmpire);
     writer.u8(system.siegeProgress);
+    writer.u8(system.ownedPlanets);
+    writer.u8(system.totalPlanets);
 }
 
 bool readSystem(ByteReader& reader, uint32_t& index, SystemView& system) {
@@ -31,6 +34,8 @@ bool readSystem(ByteReader& reader, uint32_t& index, SystemView& system) {
     system.readiness = reader.u8();
     system.siegeEmpire = reader.u8();
     system.siegeProgress = reader.u8();
+    system.ownedPlanets = reader.u8();
+    system.totalPlanets = reader.u8();
     return !reader.failed();
 }
 
@@ -61,13 +66,29 @@ bool readFleet(ByteReader& reader, FleetView& fleet) {
 
 void writePlanet(ByteWriter& writer, uint32_t id, const PlanetView& planet) {
     writer.varint(id);
+    writer.u8(planet.owner);
     writer.u8(planet.specialization);
+    writer.u8(planet.readiness);
+    writer.u8(planet.siegeEmpire);
+    writer.u8(planet.siegeProgress);
+    writer.u8(planet.buildSlot);
+    writer.u8(planet.buildBuilding);
+    writer.u8(planet.buildPercent);
+    writer.u8(planet.buildQueued);
     for (uint8_t i = 0; i < sim::kMaxSlots; ++i) writer.u8(planet.buildings[i]);
 }
 
 bool readPlanet(ByteReader& reader, uint32_t& id, PlanetView& planet) {
     id = uint32_t(reader.varint());
+    planet.owner = reader.u8();
     planet.specialization = reader.u8();
+    planet.readiness = reader.u8();
+    planet.siegeEmpire = reader.u8();
+    planet.siegeProgress = reader.u8();
+    planet.buildSlot = reader.u8();
+    planet.buildBuilding = reader.u8();
+    planet.buildPercent = reader.u8();
+    planet.buildQueued = reader.u8();
     for (uint8_t i = 0; i < sim::kMaxSlots; ++i) planet.buildings[i] = reader.u8();
     return !reader.failed();
 }
@@ -108,20 +129,38 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
     if (out.systems.size() != systemCount) out.resize(systemCount);
     else std::fill(out.systems.begin(), out.systems.end(), SystemView{});
     out.fleets.clear();
+    out.planets.clear();
 
-    // Сколько тиков осады нужно, чтобы застолбить ничью систему. По этому
+    // Сколько тиков осады нужно, чтобы застолбить ничью планету. По этому
     // же числу считается процент для полосы прогресса в интерфейсе.
     constexpr int64_t kClaimTicks = sim::kClaimSeconds * sim::kTicksPerSecond;
 
-    world.each<sim::StarSystem, sim::Owner, sim::SystemDefense, sim::SiegeState>(
-        [&](sim::Entity, sim::StarSystem& system, sim::Owner& owner,
-            sim::SystemDefense& defense, sim::SiegeState& siege) {
+    // --- владельцы систем (производные) ---
+    world.each<sim::StarSystem, sim::Owner>(
+        [&](sim::Entity, sim::StarSystem& system, sim::Owner& owner) {
             if (system.index >= systemCount) return;
-            SystemView& view = out.systems[system.index];
-            view.owner = uint8_t(owner.empire == sim::kNoEmpire ? 0xFFu : owner.empire & 0xFFu);
+            out.systems[system.index].owner =
+                uint8_t(owner.empire == sim::kNoEmpire ? 0xFFu : owner.empire & 0xFFu);
+        });
 
-            // Готовность обороны — доля от потолка этой системы, а не
-            // абсолютное число: потолок зависит от построенных крепостей,
+    // --- планеты: владение, оборона, осада, стройка ---
+    //
+    // Сводка по системе набирается ЗДЕСЬ ЖЕ, одним проходом: карта галактики
+    // показывает средние по своим планетам, а подробности игрок смотрит
+    // в виде системы. Второй проход ради тех же данных был бы лишним обходом
+    // самой многочисленной таблицы мира.
+    std::vector<uint32_t> readinessSum(systemCount, 0);
+
+    world.each<sim::Planet, sim::Owner, sim::PlanetDefense, sim::SiegeState>(
+        [&](sim::Entity entity, sim::Planet& planet, sim::Owner& owner,
+            sim::PlanetDefense& defense, sim::SiegeState& siege) {
+            PlanetView view;
+            view.owner =
+                uint8_t(owner.empire == sim::kNoEmpire ? 0xFFu : owner.empire & 0xFFu);
+            view.specialization = planet.specialization;
+
+            // Готовность — доля от потолка ЭТОЙ планеты, а не абсолютное
+            // число: потолок зависит от построенных на ней крепостей,
             // и без нормировки полоска в интерфейсе ничего не значила бы.
             int64_t readiness = 0;
             if (defense.maxReadiness > fx::zero()) {
@@ -132,10 +171,56 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
 
             view.siegeEmpire =
                 uint8_t(siege.besieger == sim::kNoEmpire ? 0xFFu : siege.besieger & 0xFFu);
-            const int64_t progress =
-                kClaimTicks > 0 ? int64_t(siege.ticks) * 100 / kClaimTicks : 0;
+
+            // Знаменатель разный: ничью планету занимают за kClaimSeconds,
+            // чужую грызут до нуля обороны. Один процент на оба случая
+            // означал бы полосу, которая для половины ситуаций врёт.
+            int64_t progress = 0;
+            if (owner.empire == sim::kNoEmpire) {
+                progress = kClaimTicks > 0 ? int64_t(siege.ticks) * 100 / kClaimTicks : 0;
+            } else if (siege.besieger != sim::kNoEmpire) {
+                progress = 100 - int64_t(view.readiness);
+            }
             view.siegeProgress = uint8_t(std::clamp<int64_t>(progress, 0, 100));
+
+            if (const sim::PlanetConstruction* site =
+                    world.get<sim::PlanetConstruction>(entity)) {
+                view.buildSlot = site->slot;
+                view.buildBuilding = site->building;
+                view.buildPercent = uint8_t(sim::constructionPercent(*site));
+                view.buildQueued = site->queued;
+            }
+
+            if (const sim::PlanetDevelopment* development =
+                    world.get<sim::PlanetDevelopment>(entity)) {
+                for (uint8_t slot = 0; slot < sim::kMaxSlots; ++slot) {
+                    view.buildings[slot] = development->buildings[slot];
+                }
+            }
+
+            out.planets[entity.index] = view;
+
+            if (planet.system >= systemCount) return;
+            SystemView& summary = out.systems[planet.system];
+            ++summary.totalPlanets;
+            if (view.owner != 0xFF && view.owner == summary.owner) {
+                ++summary.ownedPlanets;
+                readinessSum[planet.system] += view.readiness;
+            }
+            // На карте видна ТА осада, что идёт прямо сейчас. Их в системе
+            // может идти не больше одной: флот работает по планетам
+            // по очереди.
+            if (siege.besieger != sim::kNoEmpire) {
+                summary.siegeEmpire = view.siegeEmpire;
+                summary.siegeProgress = view.siegeProgress;
+            }
         });
+
+    for (uint32_t index = 0; index < systemCount; ++index) {
+        SystemView& summary = out.systems[index];
+        if (summary.ownedPlanets == 0) continue;
+        summary.readiness = uint8_t(readinessSum[index] / summary.ownedPlanets);
+    }
 
     world.each<sim::Fleet, sim::FleetLocation, sim::Owner>(
         [&](sim::Entity entity, sim::Fleet& fleet, sim::FleetLocation& location,
@@ -149,17 +234,6 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
             view.progress = location.progress;
             view.composition = fleet;
             out.fleets[view.id] = view;
-        });
-
-    out.planets.clear();
-    world.each<sim::Planet, sim::PlanetDevelopment>(
-        [&](sim::Entity entity, sim::Planet& planet, sim::PlanetDevelopment& development) {
-            PlanetView view;
-            view.specialization = planet.specialization;
-            for (uint8_t slot = 0; slot < sim::kMaxSlots; ++slot) {
-                view.buildings[slot] = development.buildings[slot];
-            }
-            out.planets[entity.index] = view;
         });
 
     out.empire = EmpireView{};

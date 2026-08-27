@@ -314,7 +314,8 @@ bool Device::Impl::buildPipeline(const std::vector<uint8_t>& vertexSpirv,
                                  uint32_t bindingCount,
                                  const VkVertexInputAttributeDescription* attributes,
                                  uint32_t attributeCount, VkPipelineLayout& outLayout,
-                                 VkPipeline& outPipeline) {
+                                 VkPipeline& outPipeline, uint32_t pushBytes, bool depth,
+                                 bool cull, bool blendEnabled) {
     if (vertexSpirv.empty() || fragmentSpirv.empty()) {
         return fail("пустой SPIR-V: шейдеры не собраны или не найдены");
     }
@@ -367,7 +368,10 @@ bool Device::Impl::buildPipeline(const std::vector<uint8_t>& vertexSpirv,
     VkPipelineRasterizationStateCreateInfo raster{
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE;
+    // Отсечение задних граней включается только для сеток. У спрайтов
+    // и линий его быть не должно: квадрат строится в шейдере и может
+    // оказаться намотан в любую сторону.
+    raster.cullMode = cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
     raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     raster.lineWidth = 1.0f;
 
@@ -378,7 +382,7 @@ bool Device::Impl::buildPipeline(const std::vector<uint8_t>& vertexSpirv,
     // Обычное смешивание по альфе: спрайты кораблей и звёзд прозрачны
     // по краям, и без него на карте были бы чёрные прямоугольники.
     VkPipelineColorBlendAttachmentState blendAttachment{};
-    blendAttachment.blendEnable = VK_TRUE;
+    blendAttachment.blendEnable = blendEnabled ? VK_TRUE : VK_FALSE;
     blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
@@ -392,10 +396,24 @@ bool Device::Impl::buildPipeline(const std::vector<uint8_t>& vertexSpirv,
     blend.attachmentCount = 1;
     blend.pAttachments = &blendAttachment;
 
+    // Push-константы видны обеим стадиям: сеточному фрагментному шейдеру
+    // нужны и положение камеры, и свет, а держать их вторым буфером ради
+    // тридцати двух байт — это дескрипторы и синхронизация на пустом месте.
     VkPushConstantRange push{};
-    push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     push.offset = 0;
-    push.size = sizeof(CameraPush);
+    push.size = pushBytes;
+
+    // Глубина: сетки пишут и проверяют, плоские конвейеры не делают ни того,
+    // ни другого. Проход один на всех, поэтому вложение глубины в нём есть
+    // всегда, и выключается оно здесь, в состоянии конвейера.
+    VkPipelineDepthStencilStateCreateInfo depthState{
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthState.depthTestEnable = depth ? VK_TRUE : VK_FALSE;
+    depthState.depthWriteEnable = depth ? VK_TRUE : VK_FALSE;
+    depthState.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthState.minDepthBounds = 0.0f;
+    depthState.maxDepthBounds = 1.0f;
 
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layoutInfo.pushConstantRangeCount = 1;
@@ -418,6 +436,7 @@ bool Device::Impl::buildPipeline(const std::vector<uint8_t>& vertexSpirv,
     info.pViewportState = &viewportState;
     info.pRasterizationState = &raster;
     info.pMultisampleState = &multisample;
+    info.pDepthStencilState = &depthState;
     info.pColorBlendState = &blend;
     info.layout = outLayout;
     info.renderPass = renderPass;
@@ -575,6 +594,7 @@ void Device::Impl::destroyDrawing() {
 
     destroyBuffer(spriteBuffer);
     destroyBuffer(lineBuffer);
+    destroyMeshes();
 
     for (TextureVk& texture : textures) {
         if (texture.view) vkDestroyImageView(device, texture.view, nullptr);
