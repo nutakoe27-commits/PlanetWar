@@ -633,6 +633,20 @@ int main(int argc, char** argv) {
             case render::ActionKind::LeaveSystem:
                 state.inSystem = false;
                 break;
+            case render::ActionKind::Colonize:
+                if (client.orderColonize(action.value, action.planet)) {
+                    messages.add("высаживаем колонию", kInfo, now, state.system,
+                                 "hull_colonizer");
+                }
+                break;
+            case render::ActionKind::SplitFleet:
+                if (client.orderSplitFleet(action.value, sim::Hull(action.slot), 1)) {
+                    messages.add(std::string("выделен ") +
+                                     render::hullName(uint8_t(action.slot)),
+                                 kInfo, now, state.system,
+                                 render::hullIcon(uint8_t(action.slot)));
+                }
+                break;
             case render::ActionKind::SelectPlanet:
                 state.planetIndex = action.value;
                 state.slot = kNoSlot;

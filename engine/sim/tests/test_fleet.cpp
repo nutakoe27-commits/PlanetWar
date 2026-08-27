@@ -32,7 +32,7 @@ struct Space {
     Entity spawnFleet(uint32_t system, const Fleet& composition) {
         const Entity e = world.create();
         world.add<Fleet>(e, composition);
-        world.add<FleetLocation>(e, FleetLocation{system, system, fx::zero()});
+        world.add<FleetLocation>(e, standingAt(system));
         world.add<MoveOrder>(e, MoveOrder{kNoSystem, 0});
         return e;
     }
@@ -292,7 +292,7 @@ TEST_CASE("движение: без графа в ресурсах ничего 
 
     const Entity fleet = world.create();
     world.add<Fleet>(fleet, makeFleet({{Hull::Corvette, 1}}));
-    world.add<FleetLocation>(fleet, FleetLocation{0, 0, fx::zero()});
+    world.add<FleetLocation>(fleet, standingAt(0));
     world.add<MoveOrder>(fleet, MoveOrder{5, 0});
 
     TickContext context;

@@ -28,7 +28,7 @@ void Commands::apply(World& world) {
     for (const SpawnFleet& spawn : spawns_) {
         const Entity entity = world.create();
         world.add<Fleet>(entity, spawn.composition);
-        world.add<FleetLocation>(entity, FleetLocation{spawn.system, spawn.system, fx::zero()});
+        world.add<FleetLocation>(entity, standingAt(spawn.system));
         world.add<MoveOrder>(entity, MoveOrder{kNoSystem, 0});
         world.add<Owner>(entity, Owner{spawn.empire, 0});
         // Сбалансированное вооружение по умолчанию. Без него флот не попал бы

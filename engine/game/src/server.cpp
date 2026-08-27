@@ -4,6 +4,7 @@
 
 #include "pw/sim/battle_system.h"
 #include "pw/sim/combat.h"
+#include "pw/sim/colony.h"
 #include "pw/sim/control.h"
 
 namespace pw::game {
@@ -196,18 +197,50 @@ void Server::receive(const net::Address& from, const uint8_t* data, size_t size,
         // а казну — каждый тик, и таскать одно через другое незачем.
         world_.add<sim::Prestige>(player.empireEntity, sim::Prestige{});
 
-        // Столица — это ПЛАНЕТЫ родной системы, все до одной. Владение
-        // теперь лежит на них, и отдать игроку одну лишь запись в системе
-        // значило бы посадить его на пустое место: ни дохода, ни обороны,
-        // ни права строить.
+        // СТОЛИЦА — ОДНА ПЛАНЕТА, а не вся родная система.
+        //
+        // Раньше игрок получал всю систему целиком и первые полчаса просто
+        // застраивал выданное. Решений в этом нет: что построить — вопрос,
+        // но КУДА расти вопросом не был, потому что расти было некуда.
+        // Империя начиналась готовой, и вся первая стадия сезона сводилась
+        // к ожиданию, пока накопятся сплавы.
+        //
+        // Теперь у игрока один мир, а вокруг — ничьи планеты его же родной
+        // системы. Первое настоящее решение принимается на второй минуте:
+        // колонизатор стоит как два с половиной корвета, и это выбор между
+        // «ещё одна планета» и «чем её защищать».
+        //
+        // Выбирается САМАЯ ВМЕСТИТЕЛЬНАЯ планета системы, а при равенстве —
+        // ближняя к звезде. Не первая попавшаяся: стартовые условия обязаны
+        // быть одинаковы у всех, а число слотов у планет разное, и выдать
+        // одному игроку мир на двенадцать слотов, а другому на четыре
+        // значило бы решить партию броском кубика.
+        uint32_t capitalOrbit = 0;
+        uint8_t capitalSlots = 0;
         for (uint32_t orbit = 0; orbit < galaxy_.planetCount(player.home); ++orbit) {
             const sim::Entity planet = galaxy_.planetEntity(player.home, orbit);
             if (!planet.valid()) continue;
-            if (sim::Owner* owner = world_.get<sim::Owner>(planet)) owner->empire = empire;
-            if (sim::PlanetDefense* defense = world_.get<sim::PlanetDefense>(planet)) {
+            const sim::Planet* record = world_.get<sim::Planet>(planet);
+            if (record == nullptr) continue;
+            if (record->slots > capitalSlots) {
+                capitalSlots = record->slots;
+                capitalOrbit = orbit;
+            }
+        }
+
+        const sim::Entity capital = galaxy_.planetEntity(player.home, capitalOrbit);
+        if (capital.valid()) {
+            if (sim::Owner* owner = world_.get<sim::Owner>(capital)) owner->empire = empire;
+            if (sim::PlanetDefense* defense = world_.get<sim::PlanetDefense>(capital)) {
+                // Столица начинается с ПОЛНОЙ обороны, в отличие от колоний.
+                // Дом обязан быть крепостью с первой секунды: игрок, у
+                // которого столицу берут, пока он ищет первую кнопку,
+                // больше не вернётся.
                 defense->readiness = defense->maxReadiness;
             }
         }
+        player.capitalOrbit = capitalOrbit;
+
         // Владелец системы производный и пересчитается в ближайшем тике,
         // но проставляется и здесь: снапшот собирается раньше первого тика.
         if (sim::Owner* owner = world_.get<sim::Owner>(galaxy_.systemEntity(player.home))) {
@@ -223,7 +256,7 @@ void Server::receive(const net::Address& from, const uint8_t* data, size_t size,
         const sim::Entity fleet = world_.create();
         world_.add<sim::Fleet>(fleet, config_.startingFleet);
         world_.add<sim::FleetLocation>(
-            fleet, sim::FleetLocation{player.home, player.home, fx::zero()});
+            fleet, sim::standingAt(player.home));
         world_.add<sim::MoveOrder>(fleet, sim::MoveOrder{sim::kNoSystem, 0});
         world_.add<sim::Owner>(fleet, sim::Owner{empire, 0});
         world_.add<sim::FleetArmament>(fleet, sim::balancedArmament());
@@ -300,6 +333,18 @@ void Server::handleMessage(Player& player, const uint8_t* data, size_t size,
             applyBuildBuilding(player, message);
             return;
         }
+        case MessageType::Colonize: {
+            ColonizeMessage message;
+            if (!readColonize(reader, message)) return;
+            applyColonize(player, message);
+            return;
+        }
+        case MessageType::SplitFleet: {
+            SplitFleetMessage message;
+            if (!readSplitFleet(reader, message)) return;
+            applySplitFleet(player, message);
+            return;
+        }
         // Уведомления идут только от сервера. Пришедшее от клиента —
         // либо ошибка версии, либо попытка что-то подделать.
         case MessageType::Welcome:
@@ -344,6 +389,124 @@ void Server::applyMove(Player& player, const MoveFleetMessage& message) {
         });
 
     if (!applied) reject(NoticeKind::OrderRejected, message.target);
+}
+
+void Server::applyColonize(Player& player, const ColonizeMessage& message) {
+    const auto reject = [&](uint32_t system) {
+        ++rejectedOrders_;
+        uint8_t buffer[32];
+        net::ByteWriter writer(buffer, sizeof(buffer));
+        writeNotice(writer, NoticeMessage{NoticeKind::OrderRejected, system});
+        if (!writer.overflowed()) player.connection.sendReliable(buffer, writer.size());
+    };
+
+    // Планета ищется ОБХОДОМ по номеру, а не собирается из номера обратно
+    // в сущность.
+    //
+    // Собранная руками `Entity{index, 0}` не находит ничего: у живой
+    // сущности поколение не ноль, и `get` честно отвечает «такой нет».
+    // Приказ отвергался всегда, а выглядело это как «колонизация не
+    // работает» — без единой подсказки, где именно она не работает.
+    uint32_t planetSystem = sim::kNoSystem;
+    uint32_t planetEmpire = sim::kNoEmpire;
+    bool planetFound = false;
+    world_.each<sim::Planet, sim::Owner>(
+        [&](sim::Entity entity, sim::Planet& planet, sim::Owner& owner) {
+            if (entity.index != message.planet) return;
+            planetSystem = planet.system;
+            planetEmpire = owner.empire;
+            planetFound = true;
+        });
+    if (!planetFound) {
+        reject(sim::kNoSystem);
+        return;
+    }
+
+    // Правила живут в pw_sim и одни на всех: сервер, бот и тест зовут одну
+    // и ту же функцию. Клиент зовёт её же, чтобы погасить кнопку заранее,
+    // и потому отказ после нажатия становится невозможен.
+    bool landed = false;
+    world_.each<sim::Fleet, sim::FleetLocation, sim::Owner>(
+        [&](sim::Entity entity, sim::Fleet& fleet, sim::FleetLocation& location,
+            sim::Owner& owner) {
+            if (entity.index != message.fleet) return;
+            if (owner.empire != player.empire) return;
+            if (sim::colonizeCheck(player.empire, fleet, location, planetEmpire,
+                                   planetSystem) != sim::ColonyRefusal::Ok) {
+                return;
+            }
+            // Колонизатор списывается здесь же: если бы списание жило
+            // отдельно от проверки, между ними однажды вклинилось бы
+            // условие, и корабль тратился бы впустую.
+            --fleet[sim::Hull::Colonizer];
+            landed = true;
+        });
+
+    if (!landed) {
+        reject(planetSystem);
+        return;
+    }
+
+    world_.each<sim::Planet, sim::Owner, sim::PlanetDefense>(
+        [&](sim::Entity entity, sim::Planet&, sim::Owner& owner,
+            sim::PlanetDefense& defense) {
+            if (entity.index != message.planet) return;
+            owner.empire = player.empire;
+            defense.readiness = sim::kColonyStartReadiness;
+        });
+
+    // Свежая колония сразу считается «была нашей»: иначе первое, что
+    // увидит игрок, — уведомление «система захвачена» о собственной
+    // только что основанной колонии.
+    if (planetSystem < previousOwners_.size()) {
+        previousOwners_[planetSystem] = uint8_t(player.empire & 0xFFu);
+    }
+    notify(player.empire, NoticeKind::ColonyFounded, planetSystem);
+}
+
+void Server::applySplitFleet(Player& player, const SplitFleetMessage& message) {
+    sim::Fleet taken{};
+    uint32_t system = sim::kNoSystem;
+    uint32_t orbit = sim::kNoOrbit;
+    bool applied = false;
+    const sim::FleetArmament* armament = nullptr;
+
+    world_.each<sim::Fleet, sim::FleetLocation, sim::Owner>(
+        [&](sim::Entity entity, sim::Fleet& fleet, sim::FleetLocation& location,
+            sim::Owner& owner) {
+            if (entity.index != message.fleet) return;
+            if (owner.empire != player.empire) return;
+            if (sim::splitCheck(fleet, location, sim::Hull(message.hull), message.count) !=
+                sim::SplitRefusal::Ok) {
+                return;
+            }
+            taken = sim::applySplit(fleet, sim::Hull(message.hull), message.count);
+            system = location.system;
+            orbit = location.orbit;
+            armament = world_.get<sim::FleetArmament>(entity);
+            applied = true;
+        });
+
+    if (!applied) {
+        ++rejectedOrders_;
+        uint8_t buffer[32];
+        net::ByteWriter writer(buffer, sizeof(buffer));
+        writeNotice(writer, NoticeMessage{NoticeKind::OrderRejected, system});
+        if (!writer.overflowed()) player.connection.sendReliable(buffer, writer.size());
+        return;
+    }
+
+    // Новый флот появляется через буфер команд: создавать сущности
+    // в обходе нельзя, это правило самого World.
+    //
+    // Вооружение копируется с исходного: выделенный отряд — это часть
+    // того же флота, а не свежая постройка. Иначе выделенные корветы
+    // молча меняли бы оружие, и разделение флота стало бы способом
+    // переоснастить его бесплатно.
+    if (sim::Commands* commands = world_.resource<sim::Commands>()) {
+        commands->spawnFleet(player.empire, system, taken, armament);
+    }
+    (void)orbit;
 }
 
 void Server::applyBuildShip(Player& player, const BuildShipMessage& message) {
@@ -482,6 +645,7 @@ void Server::step() {
     sim::systemSeason(world_, context);
     sim::systemControlRollup(world_, context);
     sim::systemFleetMovement(world_, context);
+    sim::systemFleetStation(world_, context);
     sim::systemBattles(world_, context);
     sim::systemPresence(world_, context);
     sim::systemSiege(world_, context);

@@ -50,6 +50,21 @@
       "sprite_size": 96
     },
     {
+      "id": "colonizer",
+      "display_name": "Колонизатор",
+      "role": "colony",
+      "length": 1.9,
+      "beam": 0.86,
+      "height": 0.62,
+      "engines": 2,
+      "weapon_slots": 0,
+      "defense_slots": 0,
+      "utility_slots": 3,
+      "hangars": 0,
+      "fins": 2,
+      "sprite_size": 80
+    },
+    {
       "id": "destroyer",
       "display_name": "Эсминец",
       "role": "line",

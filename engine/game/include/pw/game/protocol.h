@@ -41,6 +41,10 @@ enum class MessageType : uint8_t {
     BuildShip = 11,
     /// Постройка здания в слоте планеты.
     BuildBuilding = 12,
+    /// Высадка колонии на ничью планету.
+    Colonize = 13,
+    /// Выделить корабли одного класса в отдельный флот.
+    SplitFleet = 14,
     /// Сервер сообщает о событии, которое игрок обязан заметить.
     Notice = 20,
 };
@@ -72,6 +76,9 @@ enum class NoticeKind : uint8_t {
     PlanetLost = 9,
     /// Планета взята.
     PlanetCaptured = 10,
+    /// Колония основана. Отдельно от «планета взята»: это разные события
+    /// с разной ценой, и в журнале они обязаны выглядеть по-разному.
+    ColonyFounded = 11,
 
     /// Граница допустимых значений. Существует ради разбора пакета.
     ///
@@ -116,6 +123,22 @@ struct BuildBuildingMessage {
     uint8_t building = 0;
 };
 
+struct ColonizeMessage {
+    uint32_t fleet = 0;
+    /// Номер сущности планеты. Не «орбита в системе»: планета —
+    /// самостоятельная сущность, и адресовать её парой чисел значило бы
+    /// заставить сервер повторять поиск, который клиент уже сделал.
+    uint32_t planet = 0;
+};
+
+struct SplitFleetMessage {
+    uint32_t fleet = 0;
+    uint8_t hull = 0;
+    /// Сколько кораблей выделить. Два байта, а не один: выделить сотню
+    /// корветов из тысячи — обычное дело в поздней партии.
+    uint16_t count = 1;
+};
+
 struct NoticeMessage {
     NoticeKind kind = NoticeKind::None;
     uint32_t system = 0;
@@ -143,6 +166,12 @@ bool readBuildShip(ByteReader& reader, BuildShipMessage& message);
 
 void writeBuildBuilding(ByteWriter& writer, const BuildBuildingMessage& message);
 bool readBuildBuilding(ByteReader& reader, BuildBuildingMessage& message);
+
+void writeColonize(ByteWriter& writer, const ColonizeMessage& message);
+bool readColonize(ByteReader& reader, ColonizeMessage& message);
+
+void writeSplitFleet(ByteWriter& writer, const SplitFleetMessage& message);
+bool readSplitFleet(ByteReader& reader, SplitFleetMessage& message);
 
 void writeNotice(ByteWriter& writer, const NoticeMessage& message);
 bool readNotice(ByteReader& reader, NoticeMessage& message);

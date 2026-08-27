@@ -541,6 +541,71 @@ def _build_titan_prow(bm, spec: HullSpec) -> None:
     _tag({f for v in core["verts"] for f in v.link_faces}, MAT_GLOW)
 
 
+def _build_colony_pods(bm, spec: HullSpec) -> None:
+    """Колонизатор: гроздь посадочных капсул вместо оружия.
+
+    СИЛУЭТ РЕШАЕТ ВСЁ, и читаться он обязан В ПЛАНЕ: камера карты смотрит
+    почти отвесно, и корабль, отличающийся от соседа только высотой рубки,
+    на карте не отличается ничем.
+
+    Поэтому у колонизатора три толстые капсулы, посаженные ПОПЕРЁК корпуса
+    и выходящие за борта. Сверху это три жирных овала в ряд — не спутать
+    ни с линейным кораблём (гладкий корпус, точки башен), ни с тендером
+    (тонкие фермы-лесенка), ни с носителем (открытая палуба).
+
+    Капсулы отделяемые и это видно: между ними и корпусом узкие пилоны.
+    Корабль читается как транспорт, который приехал что-то выгрузить,
+    а не как военный, у которого забыли пушки.
+    """
+    pod_r = spec.beam * 0.46
+    pod_h = spec.height * 0.52
+    z = spec.height * 0.30
+
+    for index, x in enumerate((spec.length * 0.22, -spec.length * 0.02,
+                               -spec.length * 0.26)):
+        for side in (1.0, -1.0):
+            y = side * spec.beam * 0.62
+            # Пилон: узкая перемычка от корпуса к капсуле.
+            _box(bm, [
+                (x + pod_r * 0.22, side * spec.beam * 0.18, z),
+                (x + pod_r * 0.22, y, z),
+                (x - pod_r * 0.22, y, z),
+                (x - pod_r * 0.22, side * spec.beam * 0.18, z),
+                (x + pod_r * 0.18, side * spec.beam * 0.18, z + pod_h * 0.30),
+                (x + pod_r * 0.18, y, z + pod_h * 0.30),
+                (x - pod_r * 0.18, y, z + pod_h * 0.30),
+                (x - pod_r * 0.18, side * spec.beam * 0.18, z + pod_h * 0.30),
+            ], MAT_HULL)
+
+            # Сама капсула: скошенная сверху и снизу бочка.
+            top = z + pod_h
+            base = z - pod_h * 0.35
+            _box(bm, [
+                (x + pod_r, y - pod_r * 0.72, base),
+                (x + pod_r, y + pod_r * 0.72, base),
+                (x - pod_r, y + pod_r * 0.72, base),
+                (x - pod_r, y - pod_r * 0.72, base),
+                (x + pod_r * 0.68, y - pod_r * 0.50, top),
+                (x + pod_r * 0.68, y + pod_r * 0.50, top),
+                (x - pod_r * 0.68, y + pod_r * 0.50, top),
+                (x - pod_r * 0.68, y - pod_r * 0.50, top),
+            ], MAT_ACCENT if index == 1 else MAT_HULL)
+
+            # Светящийся люк сверху: он же отличает капсулу от груза
+            # и даёт кораблю опознавательный огонь на тёмной карте.
+            hatch = pod_r * 0.34
+            _box(bm, [
+                (x + hatch, y - hatch, top),
+                (x + hatch, y + hatch, top),
+                (x - hatch, y + hatch, top),
+                (x - hatch, y - hatch, top),
+                (x + hatch * 0.8, y - hatch * 0.8, top + pod_h * 0.10),
+                (x + hatch * 0.8, y + hatch * 0.8, top + pod_h * 0.10),
+                (x - hatch * 0.8, y + hatch * 0.8, top + pod_h * 0.10),
+                (x - hatch * 0.8, y - hatch * 0.8, top + pod_h * 0.10),
+            ], MAT_GLOW)
+
+
 def _build_fins(bm, spec: HullSpec) -> None:
     """Стреловидные клинья у кормы.
 
@@ -589,6 +654,8 @@ def build_hull_object(spec: HullSpec, materials: list[bpy.types.Material]):
         _build_siege_gun(bm, spec)
     elif spec.role == "support":
         _build_cranes(bm, spec)
+    elif spec.role == "colony":
+        _build_colony_pods(bm, spec)
     else:
         _build_turrets(bm, spec)
     if spec.role == "titan":

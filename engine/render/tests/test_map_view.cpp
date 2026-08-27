@@ -143,7 +143,7 @@ TEST_CASE("карта: флот виден и стоит в своей сист�
     fleet.empire = 0;
     fleet.system = 7;
     fleet.nextSystem = 7;
-    fleet.composition = sim::Fleet{4, 0, 0, 0};
+    fleet.composition = sim::makeFleet({{sim::Hull::Corvette, 4}});
     scene.view.fleets[1] = fleet;
 
     scene.build();
@@ -170,7 +170,12 @@ TEST_CASE("карта: флот не крупнее системы, за кот�
     fleet.empire = 0;
     fleet.system = 7;
     fleet.nextSystem = 7;
-    fleet.composition = sim::Fleet{0, 0, 0, 40};   // сорок линкоров
+    // СОРОК ЛИНКОРОВ, как и написано. Раньше здесь стояло `Fleet{0,0,0,40}`
+    // с этим же комментарием — и означало сорок эсминцев, потому что
+    // позиционная запись писалась на четыре класса корпусов, а их стало
+    // девять. Проверка на «флот не крупнее звезды» проверяла корабль
+    // вдвое мельче того, ради которого затевалась.
+    fleet.composition = sim::makeFleet({{sim::Hull::Battleship, 40}});
     scene.view.fleets[1] = fleet;
     scene.build();
 
@@ -193,7 +198,7 @@ TEST_CASE("карта: летящий флот стоит между узлам�
     fleet.system = from;
     fleet.nextSystem = to;
     fleet.progress = fx::fromFraction(1, 2);
-    fleet.composition = sim::Fleet{1, 0, 0, 0};
+    fleet.composition = sim::makeFleet({{sim::Hull::Corvette, 1}});
     scene.view.fleets[1] = fleet;
 
     scene.build();
@@ -219,7 +224,7 @@ TEST_CASE("карта: нос флота смотрит туда, куда он 
     fleet.system = from;
     fleet.nextSystem = to;
     fleet.progress = fx::fromFraction(1, 4);
-    fleet.composition = sim::Fleet{1, 0, 0, 0};
+    fleet.composition = sim::makeFleet({{sim::Hull::Corvette, 1}});
     scene.view.fleets[1] = fleet;
     scene.build();
 
@@ -240,13 +245,16 @@ TEST_CASE("карта: крупный флот виден крупнее") {
     small.empire = 0;
     small.system = 2;
     small.nextSystem = 2;
-    small.composition = sim::Fleet{1, 0, 0, 0};
+    small.composition = sim::makeFleet({{sim::Hull::Corvette, 1}});
 
     game::FleetView big = small;
     big.id = 2;
     big.system = 4;
     big.nextSystem = 4;
-    big.composition = sim::Fleet{40, 20, 10, 5};
+    // Значок растёт и от тоннажа, и от старшего корпуса — поэтому в крупном
+    // отряде есть и то, и другое.
+    big.composition = sim::makeFleet({{sim::Hull::Corvette, 40}, {sim::Hull::Destroyer, 20},
+                                 {sim::Hull::Cruiser, 10}, {sim::Hull::Battleship, 5}});
 
     scene.view.fleets[1] = small;
     scene.view.fleets[2] = big;
@@ -362,7 +370,7 @@ TEST_CASE("карта: флот в несуществующей системе �
     fleet.empire = 0;
     fleet.system = 999999;
     fleet.nextSystem = 888888;
-    fleet.composition = sim::Fleet{1, 0, 0, 0};
+    fleet.composition = sim::makeFleet({{sim::Hull::Corvette, 1}});
     scene.view.fleets[1] = fleet;
 
     scene.build();

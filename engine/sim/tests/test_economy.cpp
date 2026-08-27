@@ -77,7 +77,7 @@ struct Economy {
     Entity garrison(uint32_t system, const Fleet& composition, uint32_t who = 0) {
         const Entity e = world.create();
         world.add<Fleet>(e, composition);
-        world.add<FleetLocation>(e, FleetLocation{system, system, fx::zero()});
+        world.add<FleetLocation>(e, standingAt(system));
         world.add<Owner>(e, Owner{who, 0});
         return e;
     }
@@ -232,7 +232,7 @@ TEST_CASE("содержание: здания и флот едят энерги�
     CHECK(near(afterBuildings, 980.0));
 
     // Флот в двадцать корветов добавляет расход.
-    world.garrison(1, Fleet{20, 0, 0, 0});
+    world.garrison(1, makeFleet({{Hull::Corvette, 20}}));
     world.run(100 * kSecond);
     CHECK(world.empire().energy < afterBuildings - fx::fromInt(20));
 }
@@ -254,7 +254,7 @@ TEST_CASE("содержание: ресурсы не уходят в минус"
     world.own(1);
     // Ни одного производящего здания, зато большой флот.
     world.colonise(1, PlanetClass::Desert, Specialization::None, {Building::Fortress});
-    world.garrison(1, Fleet{0, 0, 0, 50});
+    world.garrison(1, makeFleet({{Hull::Destroyer, 50}}));
 
     world.run(500 * kSecond);
     // Дефицит — это сигнал, а не долг: отключения появятся отдельной
@@ -318,7 +318,7 @@ TEST_CASE("экономика: воспроизводится тик в тик")
                             {Building::Mine, Building::Foundry, Building::PowerPlant,
                              Building::Laboratory});
         }
-        world->garrison(1, Fleet{12, 4, 2, 1});
+        world->garrison(1, makeFleet({{Hull::Corvette, 12}, {Hull::Tender, 4}, {Hull::Colonizer, 2}, {Hull::Destroyer, 1}}));
     }
     REQUIRE(first.world.hash() == second.world.hash());
 

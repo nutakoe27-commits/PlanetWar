@@ -20,6 +20,7 @@
 
 #include "pw/sim/battle_system.h"
 #include "pw/sim/commands.h"
+#include "pw/sim/colony.h"
 #include "pw/sim/control.h"
 #include "pw/sim/economy.h"
 #include "pw/sim/fleet.h"
@@ -57,6 +58,13 @@ struct Bot {
     /// контр-система никак себя не проявит.
     FleetArmament doctrine{};
     const char* name = "";
+    /// Сколько колоний основал. Поле стоит ПОСЛЕДНИМ намеренно: список
+    /// ботов заполняется позиционными скобками, и вставка поля в середину
+    /// молча сдвинула бы имя в доктрину.
+    ///
+    /// Ноль за прогон означает, что расширение сломано: империя начинается
+    /// с одной планеты, и без колонизации она не растёт вообще.
+    uint32_t colonised = 0;
 };
 
 /// Слепок одного флота: чтобы после боя увидеть, что именно он потерял.
@@ -292,8 +300,9 @@ int main(int argc, char** argv) {
 
         // Стартовый флот.
         const Entity fleet = world.create();
-        world.add<Fleet>(fleet, makeFleet({{Hull::Corvette, 8}, {Hull::Destroyer, 2}}));
-        world.add<FleetLocation>(fleet, FleetLocation{bots[i].home, bots[i].home, fx::zero()});
+        world.add<Fleet>(fleet, makeFleet({{Hull::Corvette, 8}, {Hull::Destroyer, 2},
+                                           {Hull::Colonizer, 1}}));
+        world.add<FleetLocation>(fleet, standingAt(bots[i].home));
         world.add<MoveOrder>(fleet, MoveOrder{kNoSystem, 0});
         world.add<Owner>(fleet, Owner{bots[i].empire, 0});
         world.add<FleetArmament>(fleet, bots[i].doctrine);
@@ -372,7 +381,7 @@ int main(int argc, char** argv) {
                 starving[i] = flow.foundryIdle > fx::zero();
             }
 
-            for (const Bot& bot : bots) {
+            for (Bot& bot : bots) {
                 // Сколько в каждой системе планет, ещё не принадлежащих
                 // ЭТОМУ боту. Это и есть «есть ли здесь что захватывать»:
                 // система-владелец больше не отвечает на этот вопрос,
@@ -462,10 +471,36 @@ int main(int argc, char** argv) {
                     : empire->alloys > fx::fromInt(kCostCorvette)      ? kCostCorvette
                                                                       : 0u;
                 if (affordable > 0) {
-                    const Hull hull = affordable == kCostBattleship ? Hull::Battleship
-                                    : affordable == kCostCruiser    ? Hull::Cruiser
-                                    : affordable == kCostDestroyer  ? Hull::Destroyer
-                                                                    : Hull::Corvette;
+                    Hull hull = affordable == kCostBattleship ? Hull::Battleship
+                              : affordable == kCostCruiser    ? Hull::Cruiser
+                              : affordable == kCostDestroyer  ? Hull::Destroyer
+                                                              : Hull::Corvette;
+
+                    // КОЛОНИЗАТОР ВНЕ ОЧЕРЕДИ, пока рядом есть что занимать.
+                    //
+                    // Без этого прогон вырождался на первом же часу: боты
+                    // тратили стартового колониста, вырастали до двух систем
+                    // и застывали навсегда — строить новых было некому,
+                    // а занимать пустые планаты флотом больше нельзя.
+                    // Сезон превращался в четыре неподвижные империи,
+                    // и проверять в нём становилось нечего.
+                    uint32_t colonists = 0;
+                    world.each<Fleet, Owner>([&](Entity, Fleet& f, Owner& o) {
+                        if (o.empire == bot.empire) colonists += f[Hull::Colonizer];
+                    });
+                    bool freeLand = false;
+                    for (uint32_t target = 0; target < count && !freeLand; ++target) {
+                        if (unclaimed[target] == 0) continue;
+                        if (owners[target] != kNoEmpire &&
+                            owners[target] != bot.empire) {
+                            continue;
+                        }
+                        freeLand = true;
+                    }
+                    if (colonists == 0 && freeLand &&
+                        empire->alloys > fx::fromInt(kCostColonizer)) {
+                        hull = Hull::Colonizer;
+                    }
                     // Заказываем ПАРТИЮ, а не по одному кораблю.
                     //
                     // По одному верфь простаивала между циклами политики,
@@ -474,9 +509,15 @@ int main(int argc, char** argv) {
                     // считается от казны: богатый строит крупнее, бедный
                     // по одному, и никто не заказывает больше, чем сможет
                     // оплатить.
-                    const uint32_t batch = std::clamp(
-                        uint32_t(empire->alloys.floorToInt() / int64_t(affordable * 4)),
-                        1u, 8u);
+                    // Колонизаторов заказываем ПО ОДНОМУ: колонист без цели
+                    // это выброшенные сплавы, а цели появляются по мере
+                    // продвижения флота, а не пачками.
+                    const uint32_t batch =
+                        hull == Hull::Colonizer
+                            ? 1u
+                            : std::clamp(uint32_t(empire->alloys.floorToInt() /
+                                                  int64_t(affordable * 4)),
+                                         1u, 8u);
                     world.each<StarSystem, Owner, BuildQueue>(
                         [&](Entity, StarSystem&, Owner& o, BuildQueue& queue) {
                             if (o.empire != bot.empire) return;
@@ -484,6 +525,40 @@ int main(int argc, char** argv) {
                             enqueueBuild(queue, hull, batch);
                         });
                 }
+
+                // 2.5. Высадить колонию, если флот стоит над ничьей планетой
+                //      с колонизатором на борту.
+                //
+                // Идёт ПЕРЕД отправкой: флот, доехавший до цели, обязан
+                // сначала разгрузиться, а уже потом думать, куда дальше.
+                // Иначе колонизатор катается по галактике до самой гибели,
+                // а бот не растёт вовсе — империя-то теперь начинается
+                // с одной планеты.
+                world.each<Fleet, FleetLocation, Owner>(
+                    [&](Entity, Fleet& fleet, FleetLocation& location, Owner& owner) {
+                        if (owner.empire != bot.empire) return;
+                        if (fleet[Hull::Colonizer] == 0) return;
+                        if (location.system != location.nextSystem) return;
+
+                        for (uint32_t orbit = 0;
+                             orbit < galaxy.planetCount(location.system); ++orbit) {
+                            const Entity planet =
+                                galaxy.planetEntity(location.system, orbit);
+                            if (!planet.valid()) continue;
+                            Owner* planetOwner = world.get<Owner>(planet);
+                            PlanetDefense* defense = world.get<PlanetDefense>(planet);
+                            if (planetOwner == nullptr || defense == nullptr) continue;
+                            if (colonizeCheck(bot.empire, fleet, location,
+                                              planetOwner->empire,
+                                              location.system) != ColonyRefusal::Ok) {
+                                continue;
+                            }
+                            applyColonize(fleet, planetOwner->empire, defense->readiness,
+                                          bot.empire);
+                            ++bot.colonised;
+                            return;
+                        }
+                    });
 
                 // 3. Отправить простаивающий флот: сначала к ближайшей ничьей
                 //    системе, а когда ничьих не осталось — к ближайшей чужой.
@@ -537,6 +612,7 @@ int main(int argc, char** argv) {
         }
         systemControlRollup(world, context);
         systemFleetMovement(world, context);
+        systemFleetStation(world, context);
 
         // Журнал сражений. Снимок делается ПОСЛЕ движения: флот, прилетевший
         // в этом же тике, тоже участвует в бою, и без него разбор потерь
@@ -647,12 +723,12 @@ int main(int argc, char** argv) {
                         static_cast<long long>(minutes % 60), fighting);
             for (size_t i = 0; i < bots.size(); ++i) {
                 const Empire* empire = world.get<Empire>(bots[i].entity);
-                std::printf("   %-11s систем %3u  планет %3u  зданий %3u  верфей %2u  "
-                            "заказов %2u  флот %5u т в %2u отрядах  "
+                std::printf("   %-11s систем %3u  планет %3u  колоний %3u  зданий %3u  "
+                            "верфей %2u  заказов %2u  флот %5u т в %2u отрядах  "
                             "сплавы %6lld  энергия %6lld\n",
                             bots[i].name, stats[i].systems, stats[i].planets,
-                            stats[i].buildings, stats[i].shipyards, stats[i].queued,
-                            stats[i].tonnage, stats[i].fleets,
+                            bots[i].colonised, stats[i].buildings, stats[i].shipyards,
+                            stats[i].queued, stats[i].tonnage, stats[i].fleets,
                             static_cast<long long>(empire->alloys.floorToInt()),
                             static_cast<long long>(empire->energy.floorToInt()));
             }
@@ -680,6 +756,13 @@ int main(int argc, char** argv) {
         if (peakSystems[i] < 2) {
             std::printf("НАРУШЕНИЕ: %s ни разу не вышли за пределы одной системы\n",
                         bots[i].name);
+            ++violations;
+        }
+        // Империя начинается с ОДНОЙ планеты, и вырасти она может только
+        // колонизацией. Ноль колоний за сезон означает не «бот плохо
+        // играл», а сломанное расширение — и прогон обязан это назвать.
+        if (bots[i].colonised == 0) {
+            std::printf("НАРУШЕНИЕ: %s не основали ни одной колонии\n", bots[i].name);
             ++violations;
         }
     }

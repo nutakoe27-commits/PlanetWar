@@ -18,6 +18,7 @@ std::string hullAssetId(sim::Hull hull) {
     switch (hull) {
         case sim::Hull::Corvette:   return "corvette";
         case sim::Hull::Tender:     return "tender";
+        case sim::Hull::Colonizer:  return "colonizer";
         case sim::Hull::Destroyer:  return "destroyer";
         case sim::Hull::Carrier:    return "carrier";
         case sim::Hull::Cruiser:    return "cruiser";

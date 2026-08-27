@@ -42,9 +42,20 @@ struct ServerConfig {
     int64_t startingEnergy = 200;
     int64_t startingMinerals = 300;
     int64_t startingAlloys = 500;
-    /// Стартовый флот.
-    sim::Fleet startingFleet =
-        sim::makeFleet({{sim::Hull::Corvette, 8}, {sim::Hull::Destroyer, 2}});
+    /// Стартовый флот. ОДИН КОЛОНИЗАТОР В НЁМ ОБЯЗАТЕЛЕН.
+    ///
+    /// Империя начинается с одной планеты, и без колонизатора расширяться
+    /// было бы нечем: чтобы построить первого, нужна верфь, чтобы верфь —
+    /// минералы и время, а всё это добывается ровно с той одной планеты.
+    /// Игрок первые двадцать минут смотрел бы на застройку единственного
+    /// мира, не имея ни одного решения, кроме порядка зданий.
+    ///
+    /// С колонизатором на борту первое решение принимается на второй
+    /// минуте и оно настоящее: КУДА его послать. Обратно этот корабль
+    /// не вернётся — он тратится, — и выбор соседа определяет, с кем
+    /// игрок будет граничить весь сезон.
+    sim::Fleet startingFleet = sim::makeFleet(
+        {{sim::Hull::Corvette, 8}, {sim::Hull::Destroyer, 2}, {sim::Hull::Colonizer, 1}});
 
     /// Длительность стадий сезона.
     ///
@@ -79,6 +90,10 @@ struct Player {
     sim::Entity empireEntity;
     uint32_t empire = 0;
     uint32_t home = 0;
+    /// Орбита столицы в родной системе. Империя начинается с ОДНОЙ
+    /// планеты, и надо помнить, с какой именно: на неё встаёт стартовый
+    /// флот, и от неё игрок расширяется.
+    uint32_t capitalOrbit = 0;
     std::string name;
     bool joined = false;
     /// Номер снапшота, который игрок подтвердил последним.
@@ -170,6 +185,8 @@ private:
     void applyMove(Player& player, const MoveFleetMessage& message);
     void applyBuildShip(Player& player, const BuildShipMessage& message);
     void applyBuildBuilding(Player& player, const BuildBuildingMessage& message);
+    void applyColonize(Player& player, const ColonizeMessage& message);
+    void applySplitFleet(Player& player, const SplitFleetMessage& message);
     void sendWelcome(Player& player);
     /// Разослать уведомления о том, что изменилось за тик.
     void notifyChanges();

@@ -70,6 +70,8 @@ bool readMessageType(ByteReader& reader, MessageType& type) {
         case uint8_t(MessageType::Welcome):
         case uint8_t(MessageType::MoveFleet):
         case uint8_t(MessageType::BuildShip):
+        case uint8_t(MessageType::Colonize):
+        case uint8_t(MessageType::SplitFleet):
         case uint8_t(MessageType::BuildBuilding):
         case uint8_t(MessageType::Notice):
             type = MessageType(raw);
@@ -154,6 +156,38 @@ bool readBuildBuilding(ByteReader& reader, BuildBuildingMessage& message) {
     if (reader.failed()) return false;
     if (message.slot >= sim::kMaxSlots) return false;
     if (message.building >= uint8_t(sim::Building::Count)) return false;
+    return true;
+}
+
+void writeColonize(ByteWriter& writer, const ColonizeMessage& message) {
+    writeMessageType(writer, MessageType::Colonize);
+    writer.varint(message.fleet);
+    writer.varint(message.planet);
+}
+
+bool readColonize(ByteReader& reader, ColonizeMessage& message) {
+    message.fleet = uint32_t(reader.varint());
+    message.planet = uint32_t(reader.varint());
+    return !reader.failed();
+}
+
+void writeSplitFleet(ByteWriter& writer, const SplitFleetMessage& message) {
+    writeMessageType(writer, MessageType::SplitFleet);
+    writer.varint(message.fleet);
+    writer.u8(message.hull);
+    writer.varint(message.count);
+}
+
+bool readSplitFleet(ByteReader& reader, SplitFleetMessage& message) {
+    message.fleet = uint32_t(reader.varint());
+    message.hull = reader.u8();
+    const uint64_t count = reader.varint();
+    if (reader.failed()) return false;
+    // Проверка здесь, а не у вызывающего: тот, кто забудет её сделать,
+    // получит выход за границу таблицы корпусов.
+    if (message.hull == 0 || message.hull >= uint8_t(sim::Hull::Count)) return false;
+    if (count == 0 || count > 0xFFFFu) return false;
+    message.count = uint16_t(count);
     return true;
 }
 

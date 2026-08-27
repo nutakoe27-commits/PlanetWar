@@ -50,6 +50,10 @@ public:
     bool orderMove(uint32_t fleet, uint32_t target);
     bool orderBuildShip(uint32_t system, sim::Hull hull, uint8_t count = 1);
     bool orderBuildBuilding(uint32_t planet, uint8_t slot, sim::Building building);
+    /// Высадить колонию: флот с колонизатором занимает ничью планету.
+    bool orderColonize(uint32_t fleet, uint32_t planet);
+    /// Выделить корабли одного класса в отдельный флот.
+    bool orderSplitFleet(uint32_t fleet, sim::Hull hull, uint16_t count);
 
     // --- состояние ---
 

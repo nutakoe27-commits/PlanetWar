@@ -199,7 +199,22 @@ TEST_CASE("сессия: флот идёт туда, куда приказано
     const uint32_t target = client.galaxy().neighbors(home)[0];
 
     REQUIRE(client.orderMove(fleet, target));
-    session.run(60000);   // минута игры
+
+    // Ждём прибытия ЦИКЛОМ, а не «минуту игры».
+    //
+    // Раньше здесь стояла ровно минута, и её хватало: стартовый флот шёл
+    // со скоростью эсминца. Теперь в нём есть колонизатор, скорость флота
+    // задаёт самый медленный корабль, и минуты стало мало. Тест упал
+    // на верном поведении — просто потому, что знал скорость наизусть.
+    //
+    // Цикл не знает ни скоростей, ни длин линий: он ждёт события,
+    // а не отсчитывает время. Такой тест переживёт и следующую правку
+    // баланса.
+    for (int round = 0; round < 60; ++round) {
+        session.run(10000);
+        const FleetView& moving = client.view().fleets.at(fleet);
+        if (moving.system == target && moving.nextSystem == target) break;
+    }
 
     const FleetView& seen = client.view().fleets.at(fleet);
     CHECK(seen.system == target);
@@ -255,13 +270,47 @@ TEST_CASE("сессия: чужую систему застроить нельз
     CHECK(session.server.rejectedOrders() > before);
 }
 
+
+/// Довести флот до системы и высадить колонию на её первую ничью планету.
+///
+/// Общий помощник, потому что этот путь проверяется четырьмя тестами
+/// подряд, и каждый обязан идти ЧЕРЕЗ НАСТОЯЩИЙ ПРОТОКОЛ: приказ на
+/// движение, ожидание прибытия, приказ на высадку. Проверка, срезающая
+/// дорогу через мир сервера, не доказала бы ничего про игру.
+///
+/// Возвращает ложь, если колонизировать не удалось: у вызывающего должна
+/// быть возможность сказать «не доехало», а не зависнуть.
+bool colonizeFirstNeutral(Session& session, Client& client, uint32_t fleet,
+                          uint32_t target) {
+    if (!client.orderMove(fleet, target)) return false;
+
+    // Ждём прибытия. Колонизатор медленный, поэтому срок щедрый.
+    for (int round = 0; round < 120; ++round) {
+        session.run(5000);
+        const auto standing = client.fleetsAt(target);
+        if (standing.empty()) continue;
+
+        for (const auto& planet : client.planetsAt(target)) {
+            if (planet.owner != 0xFF) continue;
+            if (!client.orderColonize(standing.front(), planet.id)) return false;
+            session.run(3000);
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
-// Захват — то, ради чего всё это
+// Расширение — то, ради чего всё это
 // ---------------------------------------------------------------------------
 
-TEST_CASE("сессия: игрок захватывает ничью систему") {
+TEST_CASE("сессия: игрок колонизирует ничью систему") {
     // Это и есть определение играбельности из дорожной карты: игрок
     // подключается, видит галактику, отправляет флот и получает планету.
+    //
+    // Путь изменился: раньше хватало привести любой флот и подождать,
+    // теперь нужен колонизатор и приказ на высадку. Проверка стала длиннее
+    // ровно настолько, насколько длиннее стала сама игра.
     Session session(150);
     session.addClient("Михаил");
     session.run(1500);
@@ -275,11 +324,7 @@ TEST_CASE("сессия: игрок захватывает ничью систе
     REQUIRE(client.view().systems[target].owner != uint8_t(client.empire()));
 
     const uint32_t fleet = client.fleetsAt(home).front();
-    REQUIRE(client.orderMove(fleet, target));
-
-    // Осада ничьей системы длится kClaimSeconds; даём с запасом.
-    const int64_t needed = (sim::kClaimSeconds + 120) * 1000;
-    session.run(needed);
+    REQUIRE(colonizeFirstNeutral(session, client, fleet, target));
 
     CHECK(client.view().systems[target].owner == uint8_t(client.empire()));
 }
@@ -411,11 +456,9 @@ TEST_CASE("сессия: игра идёт через канал с четвер
     const uint32_t home = client.capital();
     const uint32_t target = client.galaxy().neighbors(home)[0];
     const uint32_t fleet = client.fleetsAt(home).front();
-    REQUIRE(client.orderMove(fleet, target));
+    REQUIRE(colonizeFirstNeutral(session, client, fleet, target));
 
-    session.run((sim::kClaimSeconds + 180) * 1000);
-
-    // Приказ дошёл, флот дошёл, система захвачена — несмотря на то, что
+    // Оба приказа дошли, флот дошёл, колония стоит — несмотря на то, что
     // каждый четвёртый пакет не доехал.
     CHECK(client.view().systems[target].owner == uint8_t(client.empire()));
     CHECK(client.lossPercent() > 5);
@@ -457,7 +500,7 @@ TEST_CASE("сессия: сервер отказывает, когда мест 
 // в MMO он часто смотрит в другую её часть, а то и вовсе не смотрит.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("уведомления: захват системы доезжает до игрока") {
+TEST_CASE("уведомления: основание колонии доезжает до игрока") {
     Session session(150);
     session.addClient("Михаил");
     session.run(2000);
@@ -468,14 +511,12 @@ TEST_CASE("уведомления: захват системы доезжает 
     const uint32_t home = client.capital();
     const uint32_t target = client.galaxy().neighbors(home)[0];
     const uint32_t fleet = client.fleetsAt(home).front();
-    REQUIRE(client.orderMove(fleet, target));
-
-    session.run((sim::kClaimSeconds + 180) * 1000);
+    REQUIRE(colonizeFirstNeutral(session, client, fleet, target));
     REQUIRE(client.view().systems[target].owner == uint8_t(client.empire()));
 
     bool told = false;
     for (const ClientEvent& event : client.takeEvents()) {
-        if (event.kind == NoticeKind::SystemCaptured && event.system == target) told = true;
+        if (event.kind == NoticeKind::ColonyFounded && event.system == target) told = true;
     }
     CHECK(told);
 }
@@ -619,7 +660,11 @@ TEST_CASE("уведомления: о бое узнают обе стороны,
     bool firstHeard = false, secondHeard = false;
     NoticeKind firstKind = NoticeKind::None, secondKind = NoticeKind::None;
 
-    for (int round = 0; round < 60 && !(firstHeard && secondHeard); ++round) {
+    // Двести кругов, а не шестьдесят: в стартовом флоте теперь есть
+    // колонизатор, скорость флота задаёт самый медленный корабль, и путь
+    // до поля боя стал вдвое длиннее по времени. Цикл всё равно выходит
+    // по СОБЫТИЮ, а не по счётчику, — предел лишь страхует от зависания.
+    for (int round = 0; round < 200 && !(firstHeard && secondHeard); ++round) {
         session.run(20000);
         for (const ClientEvent& event : first.takeEvents()) {
             if (!isBattle(event.kind)) continue;
@@ -743,16 +788,13 @@ TEST_CASE("уведомления: о взятой планете узнаёт �
     const uint32_t home = client.capital();
     const uint32_t target = client.galaxy().neighbors(home)[0];
     const uint32_t fleet = client.fleetsAt(home).front();
-    REQUIRE(client.orderMove(fleet, target));
+    REQUIRE(colonizeFirstNeutral(session, client, fleet, target));
 
-    bool captured = false;
-    for (int round = 0; round < 80 && !captured; ++round) {
-        session.run(10000);
-        for (const ClientEvent& event : client.takeEvents()) {
-            if (event.kind == NoticeKind::PlanetCaptured && event.system == target) {
-                captured = true;
-            }
+    bool founded = false;
+    for (const ClientEvent& event : client.takeEvents()) {
+        if (event.kind == NoticeKind::ColonyFounded && event.system == target) {
+            founded = true;
         }
     }
-    CHECK(captured);
+    CHECK(founded);
 }

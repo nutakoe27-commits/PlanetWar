@@ -4,6 +4,8 @@
 #include <cmath>
 #include <vector>
 
+#include "pw/sim/colony.h"
+#include "pw/sim/control.h"
 #include "pw/sim/production.h"
 #include "pw/sim/season.h"
 
@@ -130,6 +132,7 @@ const char* hullName(uint8_t hull) {
     switch (sim::Hull(hull)) {
         case sim::Hull::Corvette:   return "корвет";
         case sim::Hull::Tender:     return "тендер";
+        case sim::Hull::Colonizer:  return "колонизатор";
         case sim::Hull::Destroyer:  return "эсминец";
         case sim::Hull::Carrier:    return "носитель";
         case sim::Hull::Cruiser:    return "крейсер";
@@ -144,6 +147,7 @@ const char* hullNameAccusative(uint8_t hull) {
     switch (sim::Hull(hull)) {
         case sim::Hull::Corvette:   return "корвет";
         case sim::Hull::Tender:     return "тендер";
+        case sim::Hull::Colonizer:  return "колонизатор";
         case sim::Hull::Destroyer:  return "эсминец";
         case sim::Hull::Carrier:    return "носитель";
         case sim::Hull::Cruiser:    return "крейсер";
@@ -160,6 +164,8 @@ const char* hullHint(uint8_t hull) {
             return "дёшев и быстр, принимает потери на себя";
         case sim::Hull::Tender:
             return "не стреляет, но весь отряд теряет меньше кораблей";
+        case sim::Hull::Colonizer:
+            return "не воюет вовсе — ЕДИНСТВЕННЫЙ способ занять ничью планету";
         case sim::Hull::Destroyer:
             return "рабочая лошадь линии";
         case sim::Hull::Carrier:
@@ -181,6 +187,7 @@ const char* hullIcon(uint8_t hull) {
     switch (sim::Hull(hull)) {
         case sim::Hull::Corvette:   return "hull_corvette";
         case sim::Hull::Tender:     return "hull_tender";
+        case sim::Hull::Colonizer:  return "hull_colonizer";
         case sim::Hull::Destroyer:  return "hull_destroyer";
         case sim::Hull::Carrier:    return "hull_carrier";
         case sim::Hull::Cruiser:    return "hull_cruiser";
@@ -289,6 +296,7 @@ std::string noticeText(game::NoticeKind kind) {
         case game::NoticeKind::PlanetSieged:   return "ОСАДА ПЛАНЕТЫ";
         case game::NoticeKind::PlanetLost:     return "планета потеряна";
         case game::NoticeKind::PlanetCaptured: return "планета взята";
+        case game::NoticeKind::ColonyFounded:  return "колония основана";
         default:                               return "";
     }
 }
@@ -300,6 +308,7 @@ const char* noticeIcon(game::NoticeKind kind) {
         case game::NoticeKind::SystemLost:
         case game::NoticeKind::PlanetCaptured:
         case game::NoticeKind::SystemCaptured: return "icon_planet";
+        case game::NoticeKind::ColonyFounded:  return "hull_colonizer";
         case game::NoticeKind::BattleWon:
         case game::NoticeKind::BattleLost:
         case game::NoticeKind::BattleDraw:
@@ -905,6 +914,32 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
     // красной кляксой поверх иконки.
     const bool detailOpen = slotPicked && !paletteOpen;
 
+    // КОЛОНИЗАЦИЯ. Ничью планету занимают не осадой, а высадкой,
+    // и для этого во флоте в этой системе нужен колонизатор.
+    //
+    // Кнопка показывается на ЛЮБОЙ ничьей планете, даже когда высадить
+    // некем: она объясняет правило. Кнопка, появляющаяся только когда
+    // всё готово, ничему не учит — игрок так и не узнает, что расширение
+    // вообще существует, пока случайно не построит нужный корабль.
+    uint32_t colonizerFleet = kNoSystem;
+    sim::ColonyRefusal colonyRefusal = sim::ColonyRefusal::NoColonizer;
+    const bool neutral = planet.owner == 0xFF;
+    if (neutral) {
+        for (uint32_t id : client.fleetsAt(state.system)) {
+            const auto& fleet = client.view().fleets.at(id);
+            const sim::FleetLocation where =
+                sim::standingAt(fleet.system, fleet.orbit);
+            const sim::ColonyRefusal refusal = sim::colonizeCheck(
+                client.empire(), fleet.composition, where, sim::kNoEmpire, planet.system);
+            if (refusal == sim::ColonyRefusal::Ok) {
+                colonizerFleet = id;
+                colonyRefusal = refusal;
+                break;
+            }
+            colonyRefusal = refusal;
+        }
+    }
+
     const uint8_t slots = std::min<uint8_t>(planet.slots, sim::kMaxSlots);
     const float gridPad = unit * 0.5f;
     const int columns = std::max(1, std::min(6, int(slots)));
@@ -920,6 +955,7 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
     Column column(unit);
     column.row(line * 1.25f);                          // «Планета K · класс»
     column.row(line * 1.35f, unit * 0.7f);             // состояние
+    if (neutral) column.row(line * 2.0f, unit * 0.6f); // «Колонизировать»
     for (int r = 0; r < gridRows; ++r) column.row(cell, r + 1 < gridRows ? gridPad : 0.0f);
     // ПАЛИТРА ЗАСТРОЙКИ В СТОЛБЕЦ НЕ ВХОДИТ.
     //
@@ -991,6 +1027,26 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
                     ? "щёлкните пустой слот, чтобы построить"
                     : "все слоты заняты — сносите или стройте на другой",
                 planet.freeSlots() > 0 ? ui.theme().textAccent : ui.theme().textDim);
+    }
+
+    // --- высадка колонии ---
+    if (neutral) {
+        const Rect box = column.next();
+        const bool ready = colonyRefusal == sim::ColonyRefusal::Ok;
+        const ButtonResult hit = ui.iconButton(
+            uiId("colonize"), box, "hull_colonizer", "Колонизировать",
+            ready ? ButtonStyle::Accent : ButtonStyle::Quiet, ready);
+        if (hit.hovered) {
+            ui.tooltip(ready ? "высадить колонию · колонизатор будет потрачен, "
+                               "планета станет вашей с малой обороной"
+                             : std::string(sim::colonyRefusalText(colonyRefusal)) +
+                                   " · колонизатор заказывают на верфи");
+        }
+        if (hit.clicked && ready) {
+            action.kind = ActionKind::Colonize;
+            action.value = colonizerFleet;
+            action.planet = planet.id;
+        }
     }
 
     // --- сетка слотов ---
@@ -1182,7 +1238,8 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
         column.row(line * 1.3f, unit * 0.8f);
     } else {
         for (size_t i = 0; i < fleets.size(); ++i) column.row(fleetRow);
-        column.row(line * 2.0f, unit * 0.8f);         // «Отправить флот»
+        column.row(line * 2.0f, unit * 0.4f);         // «Отправить флот»
+        column.row(line * 2.1f, unit * 0.8f);         // «Выделить: значки»
     }
     column.row(line * 1.25f, unit * 0.5f);            // «Заказать корабль»
     if (shipyards == 0) {
@@ -1292,6 +1349,54 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
                                   "туда и начнёт занимать её планеты");
         }
         if (hit.clicked) action.kind = armed ? ActionKind::CancelMove : ActionKind::BeginMove;
+
+        // --- выделить корабль из отряда ---
+        //
+        // Флоты в одной системе сливаются в один — иначе игрок утонул бы
+        // в микроменеджменте. Но у слияния есть цена: построенный
+        // колонизатор немедленно оказывается в общей куче с боевым флотом
+        // и уходит воевать вместе с ним.
+        //
+        // Ряд значков под кнопкой приказа — обратная операция: щелчок
+        // по классу отцепляет ОДИН корабль в отдельный отряд. Одно
+        // движение мышью, потому что делать это придётся часто.
+        const Rect strip = column.next();
+        const uint32_t chosen = state.fleet;
+        if (chosen != 0xFFFFFFFFu && client.view().fleets.count(chosen) != 0) {
+            const auto& fleet = client.view().fleets.at(chosen);
+            const sim::FleetLocation where = sim::standingAt(fleet.system, fleet.orbit);
+
+            ui.text(strip.x, strip.y + (strip.h - line) * 0.5f, "Выделить:",
+                    ui.theme().textDim);
+            float x = strip.x + ui.textWidth("Выделить: ") + unit * 0.4f;
+            const float chip = strip.h * 0.92f;
+            for (uint8_t hull = 1; hull < uint8_t(sim::Hull::Count); ++hull) {
+                if (fleet.composition[sim::Hull(hull)] == 0) continue;
+                if (x + chip > strip.right()) break;
+
+                const sim::SplitRefusal refusal =
+                    sim::splitCheck(fleet.composition, where, sim::Hull(hull), 1);
+                const bool can = refusal == sim::SplitRefusal::Ok;
+                const Rect box{x, strip.y + (strip.h - chip) * 0.5f, chip, chip};
+                const ButtonResult chipHit =
+                    ui.slot(uiId("split", hull), box, hullIcon(hull), false, can);
+                if (chipHit.hovered) {
+                    ui.tooltip(can ? std::string("отцепить один ") + hullName(hull) +
+                                         " в отдельный отряд"
+                                   : sim::splitRefusalText(refusal));
+                }
+                if (chipHit.clicked && can) {
+                    action.kind = ActionKind::SplitFleet;
+                    action.value = chosen;
+                    action.slot = hull;
+                }
+                x += chip + unit * 0.35f;
+            }
+        } else {
+            ui.text(strip.x, strip.y + (strip.h - line) * 0.5f,
+                    "выберите отряд, чтобы выделить из него корабль",
+                    ui.theme().textDim);
+        }
     }
 
     // --- заказ кораблей ---
@@ -1891,6 +1996,8 @@ const char* actionName(ActionKind kind) {
         case ActionKind::CancelMove: return "отменить-приказ";
         case ActionKind::FocusSystem: return "навести";
         case ActionKind::ResetView: return "обзор";
+        case ActionKind::Colonize: return "колонизировать";
+        case ActionKind::SplitFleet: return "выделить";
         case ActionKind::Quit: return "выход";
         case ActionKind::Count: break;
     }

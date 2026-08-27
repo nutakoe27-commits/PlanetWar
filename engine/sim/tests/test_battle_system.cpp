@@ -33,7 +33,7 @@ struct War {
                    const FleetArmament& armament) {
         const Entity e = world.create();
         world.add<Fleet>(e, composition);
-        world.add<FleetLocation>(e, FleetLocation{system, system, fx::zero()});
+        world.add<FleetLocation>(e, standingAt(system));
         world.add<MoveOrder>(e, MoveOrder{kNoSystem, 0});
         world.add<Owner>(e, Owner{empire, 0});
         world.add<FleetArmament>(e, armament);
@@ -71,7 +71,7 @@ constexpr int64_t kMinute = 60 * kSecond;
 
 TEST_CASE("сведение: один флот в системе не воюет сам с собой") {
     War war;
-    const Entity lone = war.station(5, 1, Fleet{20, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
+    const Entity lone = war.station(5, 1, makeFleet({{Hull::Corvette, 20}}), armed(50, 50, 0, 50, 50, 0));
 
     war.run(5 * kMinute);
     CHECK(war.tonnageOf(lone) == 20u);
@@ -79,8 +79,8 @@ TEST_CASE("сведение: один флот в системе не воюет
 
 TEST_CASE("сведение: союзники в одной системе не дерутся") {
     War war;
-    const Entity a = war.station(5, 1, Fleet{20, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
-    const Entity b = war.station(5, 1, Fleet{15, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
+    const Entity a = war.station(5, 1, makeFleet({{Hull::Corvette, 20}}), armed(50, 50, 0, 50, 50, 0));
+    const Entity b = war.station(5, 1, makeFleet({{Hull::Corvette, 15}}), armed(50, 50, 0, 50, 50, 0));
 
     war.run(5 * kMinute);
     CHECK(war.tonnageOf(a) == 20u);
@@ -89,8 +89,8 @@ TEST_CASE("сведение: союзники в одной системе не 
 
 TEST_CASE("сведение: враги в одной системе несут потери") {
     War war;
-    const Entity blue = war.station(5, 1, Fleet{40, 0, 0, 0}, armed(100, 0, 0, 50, 50, 0));
-    const Entity red = war.station(5, 2, Fleet{40, 0, 0, 0}, armed(100, 0, 0, 50, 50, 0));
+    const Entity blue = war.station(5, 1, makeFleet({{Hull::Corvette, 40}}), armed(100, 0, 0, 50, 50, 0));
+    const Entity red = war.station(5, 2, makeFleet({{Hull::Corvette, 40}}), armed(100, 0, 0, 50, 50, 0));
 
     war.run(1);
     CHECK(war.tonnageOf(blue) < 40u);
@@ -99,8 +99,8 @@ TEST_CASE("сведение: враги в одной системе несут 
 
 TEST_CASE("сведение: летящий флот в сражении не участвует") {
     War war;
-    const Entity defender = war.station(5, 1, Fleet{40, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
-    const Entity passing = war.station(5, 2, Fleet{40, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
+    const Entity defender = war.station(5, 1, makeFleet({{Hull::Corvette, 40}}), armed(50, 50, 0, 50, 50, 0));
+    const Entity passing = war.station(5, 2, makeFleet({{Hull::Corvette, 40}}), armed(50, 50, 0, 50, 50, 0));
     // Второй уже вышел из системы: он между узлами.
     war.world.get<FleetLocation>(passing)->nextSystem = war.galaxy.neighbors(5)[0];
 
@@ -111,8 +111,8 @@ TEST_CASE("сведение: летящий флот в сражении не у
 
 TEST_CASE("сведение: сражение идёт раз в минуту, а не каждый тик") {
     War war;
-    const Entity blue = war.station(5, 1, Fleet{0, 0, 0, 30}, armed(50, 50, 0, 50, 50, 50));
-    war.station(5, 2, Fleet{0, 0, 0, 30}, armed(50, 50, 0, 50, 50, 50));
+    const Entity blue = war.station(5, 1, makeFleet({{Hull::Destroyer, 30}}), armed(50, 50, 0, 50, 50, 50));
+    war.station(5, 2, makeFleet({{Hull::Destroyer, 30}}), armed(50, 50, 0, 50, 50, 50));
 
     war.run(1);
     const uint32_t afterFirst = war.tonnageOf(blue);
@@ -129,9 +129,9 @@ TEST_CASE("сведение: сражение идёт раз в минуту, �
 
 TEST_CASE("сведение: потери разносятся по флотам стороны") {
     War war;
-    const Entity big = war.station(5, 1, Fleet{60, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
-    const Entity small = war.station(5, 1, Fleet{20, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
-    war.station(5, 2, Fleet{80, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
+    const Entity big = war.station(5, 1, makeFleet({{Hull::Corvette, 60}}), armed(50, 50, 0, 50, 50, 0));
+    const Entity small = war.station(5, 1, makeFleet({{Hull::Corvette, 20}}), armed(50, 50, 0, 50, 50, 0));
+    war.station(5, 2, makeFleet({{Hull::Corvette, 80}}), armed(50, 50, 0, 50, 50, 0));
 
     war.run(1);
     const uint32_t lostBig = 60u - war.tonnageOf(big);
@@ -150,8 +150,8 @@ TEST_CASE("сведение: разбитый отходит в соседнюю
     war.own(5, 1);
     // Империя 1 защищается щитами от кинетики, империя 2 идёт с кинетикой
     // и бронёй — заведомо проигрышный выбор против щитов.
-    war.station(5, 1, Fleet{0, 0, 0, 40}, armed(0, 100, 0, 100, 0, 60));
-    const Entity doomed = war.station(5, 2, Fleet{0, 0, 0, 25}, armed(100, 0, 0, 0, 100, 0));
+    war.station(5, 1, makeFleet({{Hull::Destroyer, 40}}), armed(0, 100, 0, 100, 0, 60));
+    const Entity doomed = war.station(5, 2, makeFleet({{Hull::Destroyer, 25}}), armed(100, 0, 0, 0, 100, 0));
 
     war.run(1);
     const MoveOrder* order = war.world.get<MoveOrder>(doomed);
@@ -171,8 +171,8 @@ TEST_CASE("сведение: разбитый отходит в соседнюю
 TEST_CASE("сведение: победитель остаётся в системе") {
     War war;
     war.own(5, 1);
-    const Entity winner = war.station(5, 1, Fleet{0, 0, 0, 40}, armed(0, 100, 0, 100, 0, 60));
-    war.station(5, 2, Fleet{0, 0, 0, 20}, armed(100, 0, 0, 0, 100, 0));
+    const Entity winner = war.station(5, 1, makeFleet({{Hull::Destroyer, 40}}), armed(0, 100, 0, 100, 0, 60));
+    war.station(5, 2, makeFleet({{Hull::Destroyer, 20}}), armed(100, 0, 0, 0, 100, 0));
 
     war.run(1);
     // Система за победителем: приказа уходить он не получает.
@@ -184,9 +184,9 @@ TEST_CASE("сведение: владелец системы сражается 
     war.own(5, 3);
     // Слабый хозяин и два сильных чужака. Хозяин обязан быть одной
     // из сторон: это его дом, отсидеться не выйдет.
-    const Entity host = war.station(5, 3, Fleet{10, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
-    war.station(5, 1, Fleet{60, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
-    war.station(5, 2, Fleet{50, 0, 0, 0}, armed(50, 50, 0, 50, 50, 0));
+    const Entity host = war.station(5, 3, makeFleet({{Hull::Corvette, 10}}), armed(50, 50, 0, 50, 50, 0));
+    war.station(5, 1, makeFleet({{Hull::Corvette, 60}}), armed(50, 50, 0, 50, 50, 0));
+    war.station(5, 2, makeFleet({{Hull::Corvette, 50}}), armed(50, 50, 0, 50, 50, 0));
 
     war.run(1);
     CHECK(war.tonnageOf(host) < 10u);
@@ -197,12 +197,12 @@ TEST_CASE("сведение: воспроизводится тик в тик") {
 
     for (War* war : {&first, &second}) {
         war->own(5, 1);
-        war->station(5, 1, Fleet{30, 5, 2, 1}, armed(60, 20, 20, 70, 30, 20));
-        war->station(5, 1, Fleet{10, 2, 0, 0}, armed(40, 40, 20, 50, 50, 40));
-        war->station(5, 2, Fleet{25, 8, 3, 1}, armed(20, 50, 30, 30, 70, 50));
-        war->station(9, 2, Fleet{15, 0, 0, 0}, armed(0, 0, 100, 50, 50, 0));
+        war->station(5, 1, makeFleet({{Hull::Corvette, 30}, {Hull::Tender, 5}, {Hull::Colonizer, 2}, {Hull::Destroyer, 1}}), armed(60, 20, 20, 70, 30, 20));
+        war->station(5, 1, makeFleet({{Hull::Corvette, 10}, {Hull::Tender, 2}}), armed(40, 40, 20, 50, 50, 40));
+        war->station(5, 2, makeFleet({{Hull::Corvette, 25}, {Hull::Tender, 8}, {Hull::Colonizer, 3}, {Hull::Destroyer, 1}}), armed(20, 50, 30, 30, 70, 50));
+        war->station(9, 2, makeFleet({{Hull::Corvette, 15}}), armed(0, 0, 100, 50, 50, 0));
         war->own(9, 1);
-        war->station(9, 1, Fleet{18, 0, 0, 0}, armed(50, 0, 50, 60, 40, 60));
+        war->station(9, 1, makeFleet({{Hull::Corvette, 18}}), armed(50, 0, 50, 60, 40, 60));
     }
     REQUIRE(first.world.hash() == second.world.hash());
 

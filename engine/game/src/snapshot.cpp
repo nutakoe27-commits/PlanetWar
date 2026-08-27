@@ -45,11 +45,13 @@ void writeFleet(ByteWriter& writer, const FleetView& fleet) {
     writer.u8(fleet.empire);
     writer.varint(fleet.system);
     writer.varint(fleet.nextSystem);
+    writer.varint(fleet.orbit == sim::kNoOrbit ? 0u : fleet.orbit + 1u);
     writer.fixed(fleet.progress);
-    writer.varint(fleet.composition[sim::Hull::Corvette]);
-    writer.varint(fleet.composition[sim::Hull::Destroyer]);
-    writer.varint(fleet.composition[sim::Hull::Cruiser]);
-    writer.varint(fleet.composition[sim::Hull::Battleship]);
+    // ВЕСЬ состав циклом. Перечисление классов руками пропустило четыре
+    // из восьми — см. FleetView::operator==.
+    for (size_t index = 0; index < sim::kHullClasses; ++index) {
+        writer.varint(fleet.composition.ships[index]);
+    }
 }
 
 bool readFleet(ByteReader& reader, FleetView& fleet) {
@@ -57,11 +59,15 @@ bool readFleet(ByteReader& reader, FleetView& fleet) {
     fleet.empire = reader.u8();
     fleet.system = uint32_t(reader.varint());
     fleet.nextSystem = uint32_t(reader.varint());
+    // Орбита едет со сдвигом на единицу: ноль означает «нет орбиты».
+    // Так kNoOrbit (все единицы) не превращается в пятибайтовый varint
+    // в каждом пакете про каждый идущий флот.
+    const uint64_t orbit = reader.varint();
+    fleet.orbit = orbit == 0 ? sim::kNoOrbit : uint32_t(orbit - 1);
     fleet.progress = reader.fixed();
-    fleet.composition[sim::Hull::Corvette] = uint32_t(reader.varint());
-    fleet.composition[sim::Hull::Destroyer] = uint32_t(reader.varint());
-    fleet.composition[sim::Hull::Cruiser] = uint32_t(reader.varint());
-    fleet.composition[sim::Hull::Battleship] = uint32_t(reader.varint());
+    for (size_t index = 0; index < sim::kHullClasses; ++index) {
+        fleet.composition.ships[index] = uint32_t(reader.varint());
+    }
     return !reader.failed();
 }
 
@@ -279,6 +285,7 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
             view.empire = uint8_t(owner.empire == sim::kNoEmpire ? 0xFFu : owner.empire & 0xFFu);
             view.system = location.system;
             view.nextSystem = location.nextSystem;
+            view.orbit = location.orbit;
             view.progress = location.progress;
             view.composition = fleet;
             out.fleets[view.id] = view;

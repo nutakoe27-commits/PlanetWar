@@ -16,7 +16,7 @@
     {
       "hull": "corvette",
       "rotation": 0,
-      "x": 1368,
+      "x": 2008,
       "y": 672,
       "w": 40,
       "h": 40
@@ -24,151 +24,215 @@
     {
       "hull": "corvette",
       "rotation": 1,
-      "x": 1408,
-      "y": 672,
+      "x": 0,
+      "y": 760,
       "w": 40,
       "h": 40
     },
     {
       "hull": "corvette",
       "rotation": 2,
-      "x": 1448,
-      "y": 672,
+      "x": 40,
+      "y": 760,
       "w": 40,
       "h": 40
     },
     {
       "hull": "corvette",
       "rotation": 3,
-      "x": 1488,
-      "y": 672,
+      "x": 80,
+      "y": 760,
       "w": 40,
       "h": 40
     },
     {
       "hull": "corvette",
       "rotation": 4,
-      "x": 1528,
-      "y": 672,
+      "x": 120,
+      "y": 760,
       "w": 40,
       "h": 40
     },
     {
       "hull": "corvette",
       "rotation": 5,
-      "x": 1568,
-      "y": 672,
+      "x": 160,
+      "y": 760,
       "w": 40,
       "h": 40
     },
     {
       "hull": "corvette",
       "rotation": 6,
-      "x": 1608,
-      "y": 672,
+      "x": 200,
+      "y": 760,
       "w": 40,
       "h": 40
     },
     {
       "hull": "corvette",
       "rotation": 7,
-      "x": 1648,
-      "y": 672,
+      "x": 240,
+      "y": 760,
       "w": 40,
       "h": 40
     },
     {
       "hull": "tender",
       "rotation": 0,
-      "x": 344,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "tender",
-      "rotation": 1,
-      "x": 408,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "tender",
-      "rotation": 2,
-      "x": 472,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "tender",
-      "rotation": 3,
-      "x": 536,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "tender",
-      "rotation": 4,
-      "x": 600,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "tender",
-      "rotation": 5,
-      "x": 664,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "tender",
-      "rotation": 6,
-      "x": 728,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "tender",
-      "rotation": 7,
-      "x": 792,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "destroyer",
-      "rotation": 0,
-      "x": 856,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "destroyer",
-      "rotation": 1,
-      "x": 920,
-      "y": 672,
-      "w": 64,
-      "h": 64
-    },
-    {
-      "hull": "destroyer",
-      "rotation": 2,
       "x": 984,
       "y": 672,
       "w": 64,
       "h": 64
     },
     {
+      "hull": "tender",
+      "rotation": 1,
+      "x": 1048,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "hull": "tender",
+      "rotation": 2,
+      "x": 1112,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "hull": "tender",
+      "rotation": 3,
+      "x": 1176,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "hull": "tender",
+      "rotation": 4,
+      "x": 1240,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "hull": "tender",
+      "rotation": 5,
+      "x": 1304,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "hull": "tender",
+      "rotation": 6,
+      "x": 1368,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "hull": "tender",
+      "rotation": 7,
+      "x": 1432,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "hull": "colonizer",
+      "rotation": 0,
+      "x": 264,
+      "y": 672,
+      "w": 80,
+      "h": 80
+    },
+    {
+      "hull": "colonizer",
+      "rotation": 1,
+      "x": 344,
+      "y": 672,
+      "w": 80,
+      "h": 80
+    },
+    {
+      "hull": "colonizer",
+      "rotation": 2,
+      "x": 424,
+      "y": 672,
+      "w": 80,
+      "h": 80
+    },
+    {
+      "hull": "colonizer",
+      "rotation": 3,
+      "x": 504,
+      "y": 672,
+      "w": 80,
+      "h": 80
+    },
+    {
+      "hull": "colonizer",
+      "rotation": 4,
+      "x": 584,
+      "y": 672,
+      "w": 80,
+      "h": 80
+    },
+    {
+      "hull": "colonizer",
+      "rotation": 5,
+      "x": 664,
+      "y": 672,
+      "w": 80,
+      "h": 80
+    },
+    {
+      "hull": "colonizer",
+      "rotation": 6,
+      "x": 744,
+      "y": 672,
+      "w": 80,
+      "h": 80
+    },
+    {
+      "hull": "colonizer",
+      "rotation": 7,
+      "x": 824,
+      "y": 672,
+      "w": 80,
+      "h": 80
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 0,
+      "x": 1496,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 1,
+      "x": 1560,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
+      "hull": "destroyer",
+      "rotation": 2,
+      "x": 1624,
+      "y": 672,
+      "w": 64,
+      "h": 64
+    },
+    {
       "hull": "destroyer",
       "rotation": 3,
-      "x": 1048,
+      "x": 1688,
       "y": 672,
       "w": 64,
       "h": 64
@@ -176,7 +240,7 @@
     {
       "hull": "destroyer",
       "rotation": 4,
-      "x": 1112,
+      "x": 1752,
       "y": 672,
       "w": 64,
       "h": 64
@@ -184,7 +248,7 @@
     {
       "hull": "destroyer",
       "rotation": 5,
-      "x": 1176,
+      "x": 1816,
       "y": 672,
       "w": 64,
       "h": 64
@@ -192,7 +256,7 @@
     {
       "hull": "destroyer",
       "rotation": 6,
-      "x": 1240,
+      "x": 1880,
       "y": 672,
       "w": 64,
       "h": 64
@@ -200,7 +264,7 @@
     {
       "hull": "destroyer",
       "rotation": 7,
-      "x": 1304,
+      "x": 1944,
       "y": 672,
       "w": 64,
       "h": 64
@@ -528,7 +592,7 @@
     {
       "hull": "star_red",
       "rotation": 0,
-      "x": 264,
+      "x": 904,
       "y": 672,
       "w": 80,
       "h": 80

@@ -64,16 +64,32 @@ struct FleetView {
     uint8_t empire = 0xFF;
     uint32_t system = 0;
     uint32_t nextSystem = 0;
+    /// Возле какой планеты стоит. kNoOrbit — в пути или на общей стоянке.
+    uint32_t orbit = sim::kNoOrbit;
     fx progress = fx::zero();
     sim::Fleet composition{};
 
+    /// Сравнение идёт ПО ВСЕМУ СОСТАВУ, циклом.
+    ///
+    /// Раньше здесь были выписаны четыре класса корпусов — те, что
+    /// существовали, когда это писалось. Классов стало восемь, и четыре
+    /// из них — тендер, носитель, монитор, титан — не участвовали
+    /// ни в сравнении, ни в записи в пакет. Клиент их просто НЕ ВИДЕЛ:
+    /// флот из десяти титанов выглядел пустым, а построенный монитор
+    /// не появлялся в списке вовсе.
+    ///
+    /// Найдено при добавлении колонизатора — он стал бы девятым
+    /// невидимым. Цикл исключает этот класс ошибок целиком: новый
+    /// корпус попадает в снапшот сам, без правки в трёх местах.
     bool operator==(const FleetView& o) const {
-        return empire == o.empire && system == o.system && nextSystem == o.nextSystem &&
-               progress.raw() == o.progress.raw() &&
-               composition[sim::Hull::Corvette] == o.composition[sim::Hull::Corvette] &&
-               composition[sim::Hull::Destroyer] == o.composition[sim::Hull::Destroyer] &&
-               composition[sim::Hull::Cruiser] == o.composition[sim::Hull::Cruiser] &&
-               composition[sim::Hull::Battleship] == o.composition[sim::Hull::Battleship];
+        if (empire != o.empire || system != o.system || nextSystem != o.nextSystem ||
+            orbit != o.orbit || progress.raw() != o.progress.raw()) {
+            return false;
+        }
+        for (size_t index = 0; index < sim::kHullClasses; ++index) {
+            if (composition.ships[index] != o.composition.ships[index]) return false;
+        }
+        return true;
     }
     bool operator!=(const FleetView& o) const { return !(*this == o); }
 };

@@ -74,6 +74,8 @@ void Client::handleMessage(const uint8_t* data, size_t size) {
         case MessageType::MoveFleet:
         case MessageType::BuildShip:
         case MessageType::BuildBuilding:
+        case MessageType::Colonize:
+        case MessageType::SplitFleet:
             return;
     }
 }
@@ -108,6 +110,20 @@ bool Client::orderMove(uint32_t fleet, uint32_t target) {
     uint8_t buffer[64];
     net::ByteWriter writer(buffer, sizeof(buffer));
     writeMoveFleet(writer, MoveFleetMessage{fleet, target});
+    return !writer.overflowed() && send(buffer, writer.size());
+}
+
+bool Client::orderColonize(uint32_t fleet, uint32_t planet) {
+    uint8_t buffer[64];
+    net::ByteWriter writer(buffer, sizeof(buffer));
+    writeColonize(writer, ColonizeMessage{fleet, planet});
+    return !writer.overflowed() && send(buffer, writer.size());
+}
+
+bool Client::orderSplitFleet(uint32_t fleet, sim::Hull hull, uint16_t count) {
+    uint8_t buffer[64];
+    net::ByteWriter writer(buffer, sizeof(buffer));
+    writeSplitFleet(writer, SplitFleetMessage{fleet, uint8_t(hull), count});
     return !writer.overflowed() && send(buffer, writer.size());
 }
 

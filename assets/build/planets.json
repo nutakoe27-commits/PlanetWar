@@ -179,31 +179,36 @@
     },
     {
       "hull": 3,
+      "id": "colonizer",
+      "mesh": "meshes/hull_colonizer.pwm"
+    },
+    {
+      "hull": 4,
       "id": "destroyer",
       "mesh": "meshes/hull_destroyer.pwm"
     },
     {
-      "hull": 4,
+      "hull": 5,
       "id": "carrier",
       "mesh": "meshes/hull_carrier.pwm"
     },
     {
-      "hull": 5,
+      "hull": 6,
       "id": "cruiser",
       "mesh": "meshes/hull_cruiser.pwm"
     },
     {
-      "hull": 6,
+      "hull": 7,
       "id": "monitor",
       "mesh": "meshes/hull_monitor.pwm"
     },
     {
-      "hull": 7,
+      "hull": 8,
       "id": "battleship",
       "mesh": "meshes/hull_battleship.pwm"
     },
     {
-      "hull": 8,
+      "hull": 9,
       "id": "titan",
       "mesh": "meshes/hull_titan.pwm"
     }

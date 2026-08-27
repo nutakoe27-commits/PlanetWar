@@ -21,6 +21,8 @@
 #include <vector>
 
 #include "pw/game/client.h"
+#include "pw/sim/colony.h"
+#include "pw/sim/control.h"
 #include "pw/net/socket.h"
 
 using namespace pw;
@@ -75,12 +77,14 @@ public:
 
         buildSomething(client);
         orderShips(client);
+        colonize(client);
         expand(client);
     }
 
     uint32_t built() const { return built_; }
     uint32_t ordered() const { return ordered_; }
     uint32_t dispatched() const { return dispatched_; }
+    uint32_t colonised() const { return colonised_; }
 
 private:
     void buildSomething(Client& client) {
@@ -176,8 +180,22 @@ private:
             sim::Hull::Destroyer, sim::Hull::Tender,    sim::Hull::Monitor,
             sim::Hull::Destroyer, sim::Hull::Cruiser,
         };
-        const sim::Hull hull =
+        sim::Hull hull =
             kPattern[(ordered_ / 1) % (sizeof(kPattern) / sizeof(kPattern[0]))];
+
+        // КОЛОНИЗАТОР ВНЕ ОЧЕРЕДИ, пока рядом есть что занимать.
+        //
+        // Империя теперь начинается с одной планеты, и бот, покупающий
+        // только боевые корабли, не вырастет НИКОГДА: воевать ему нечем
+        // будет с самого начала. Расширение для него — не одна из стратегий,
+        // а условие существования, поэтому оно и стоит первым.
+        //
+        // Держит одного колонизатора в запасе, а не строит их пачками:
+        // колонизатор без цели — это выброшенные сплавы, а цель
+        // появляется по мере продвижения флота.
+        if (colonizersOnHand(client) == 0 && reachableNeutral(client)) {
+            hull = sim::Hull::Colonizer;
+        }
 
         // Копим до цены корпуса с запасом: заказ, на который не хватит
         // сплавов, встанет в очередь и заблокирует верфь.
@@ -187,6 +205,58 @@ private:
             if (client.view().systems[system].owner != uint8_t(client.empire())) continue;
             if (client.orderBuildShip(system, hull, 1)) ++ordered_;
             return;
+        }
+    }
+
+    /// Сколько колонизаторов у бота на руках.
+    static uint32_t colonizersOnHand(const Client& client) {
+        uint32_t total = 0;
+        for (const auto& [id, fleet] : client.view().fleets) {
+            if (fleet.empire != uint8_t(client.empire())) continue;
+            total += fleet.composition[sim::Hull::Colonizer];
+        }
+        return total;
+    }
+
+    /// Есть ли поблизости ничья планета, ради которой стоит строить колониста.
+    static bool reachableNeutral(const Client& client) {
+        for (uint32_t system = 0; system < client.galaxy().systemCount(); ++system) {
+            const auto& view = client.view().systems[system];
+            if (view.totalPlanets == 0) continue;
+            // Чужие системы колонизатором не берут — только осадой.
+            if (view.owner != 0xFF && view.owner != uint8_t(client.empire())) continue;
+            if (view.ownedPlanets < view.totalPlanets) return true;
+        }
+        return false;
+    }
+
+    /// Высадить колонию, если есть куда и есть чем.
+    ///
+    /// Идёт ПЕРЕД отправкой флота: флот, стоящий над ничьей планетой
+    /// с колонизатором на борту, обязан сначала высадиться, а уже потом
+    /// думать, куда лететь дальше. Иначе он уходит, так и не разгрузившись,
+    /// и колонизатор катается по галактике до самой своей гибели.
+    void colonize(Client& client) {
+        if (ticks_ % 5 != 2) return;
+
+        for (uint32_t system = 0; system < client.galaxy().systemCount(); ++system) {
+            for (uint32_t id : client.fleetsAt(system)) {
+                const auto& fleet = client.view().fleets.at(id);
+                if (fleet.composition[sim::Hull::Colonizer] == 0) continue;
+
+                for (const auto& planet : client.planetsAt(system)) {
+                    if (planet.owner != 0xFF) continue;
+                    const sim::FleetLocation where =
+                        sim::standingAt(fleet.system, fleet.orbit);
+                    if (sim::colonizeCheck(client.empire(), fleet.composition, where,
+                                           sim::kNoEmpire,
+                                           system) != sim::ColonyRefusal::Ok) {
+                        continue;
+                    }
+                    if (client.orderColonize(id, planet.id)) ++colonised_;
+                    return;
+                }
+            }
         }
     }
 
@@ -238,6 +308,7 @@ private:
     uint64_t ticks_ = 0;
     uint32_t built_ = 0;
     uint32_t ordered_ = 0;
+    uint32_t colonised_ = 0;
     uint32_t dispatched_ = 0;
 };
 
@@ -251,6 +322,7 @@ const char* noticeText(NoticeKind kind) {
         case NoticeKind::PlanetSieged:   return "ОСАДА ПЛАНЕТЫ";
         case NoticeKind::PlanetLost:     return "планета потеряна";
         case NoticeKind::PlanetCaptured: return "планета взята";
+        case NoticeKind::ColonyFounded:  return "колония основана";
         case NoticeKind::FleetDestroyed: return "флот уничтожен";
         case NoticeKind::OrderRejected:  return "приказ отвергнут";
         case NoticeKind::None:
@@ -408,9 +480,13 @@ int main(int argc, char** argv) {
     }
 
     if (!quiet) {
+        // Колонизации в отчёте отдельной цифрой: империя теперь начинается
+        // с одной планеты, и ноль здесь означает, что бот не вырос вообще —
+        // а это не «он плохо играл», это сломанное расширение.
         std::printf("\nитог: построено зданий %u, заказано кораблей %u, "
-                    "отправлено флотов %u\n",
-                    brain.built(), brain.ordered(), brain.dispatched());
+                    "отправлено флотов %u, основано колоний %u\n",
+                    brain.built(), brain.ordered(), brain.dispatched(),
+                    brain.colonised());
     }
 
     // Прощаемся явно: сервер освободит место сразу, а не через пять секунд.

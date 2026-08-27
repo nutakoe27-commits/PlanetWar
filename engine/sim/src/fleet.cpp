@@ -36,6 +36,7 @@ const HullSpec& specOf(Hull hull) {
     static const HullSpec table[kHullClasses] = {
         /* корвет  */ {kCostCorvette,   kSpeedCorvette,   1,  0},
         /* тендер  */ {kCostTender,     kSpeedTender,     2,  0},
+        /* колониз.*/ {kCostColonizer,  kSpeedColonizer,  2,  0},
         /* эсминец */ {kCostDestroyer,  kSpeedDestroyer,  3,  1},
         /* носитель*/ {kCostCarrier,    kSpeedCarrier,    7,  2},
         /* крейсер */ {kCostCruiser,    kSpeedCruiser,    8,  3},
@@ -175,6 +176,88 @@ void systemFleetMovement(World& world, const TickContext& context) {
                 }
             }
         });
+}
+
+const char* splitRefusalText(SplitRefusal refusal) {
+    switch (refusal) {
+        case SplitRefusal::Ok:         return "можно выделить";
+        case SplitRefusal::NotYours:   return "это не ваш флот";
+        case SplitRefusal::InTransit:  return "флот в пути — перестроиться нельзя";
+        case SplitRefusal::NotEnough:  return "столько кораблей этого класса нет";
+        case SplitRefusal::WholeFleet: return "это весь флот — выделять не из чего";
+        case SplitRefusal::Count:      break;
+    }
+    return "нельзя";
+}
+
+SplitRefusal splitCheck(const Fleet& composition, const FleetLocation& location,
+                        Hull hull, uint32_t count) {
+    if (hull == Hull::None || hull >= Hull::Count) return SplitRefusal::NotEnough;
+    if (count == 0) return SplitRefusal::NotEnough;
+    if (location.nextSystem != location.system) return SplitRefusal::InTransit;
+    if (composition[hull] < count) return SplitRefusal::NotEnough;
+
+    // Выделить всё до последнего корабля — это не выделение: исходный флот
+    // опустеет и будет распущен, а новый займёт его место. Игрок получит
+    // тот же флот с новым номером и решит, что игра его обманула.
+    uint32_t total = 0;
+    for (size_t index = 0; index < kHullClasses; ++index) total += composition.ships[index];
+    if (total <= count) return SplitRefusal::WholeFleet;
+    return SplitRefusal::Ok;
+}
+
+Fleet applySplit(Fleet& composition, Hull hull, uint32_t count) {
+    Fleet taken{};
+    if (hull == Hull::None || hull >= Hull::Count) return taken;
+    const uint32_t moved = std::min(count, composition[hull]);
+    composition[hull] -= moved;
+    taken[hull] = moved;
+    return taken;
+}
+
+void systemFleetStation(World& world, const TickContext&) {
+    // Стоящий флот встаёт на орбиту планеты, а не висит «в системе вообще».
+    //
+    // Правило выбора простое и оттого предсказуемое: САМАЯ БЛИЖНЯЯ К ЗВЕЗДЕ
+    // СВОЯ планета, а если своих нет — первая попавшаяся. Предсказуемость
+    // здесь важнее «умности»: игрок должен уметь сказать, где окажется
+    // флот, ещё до того, как отдаст приказ. Умный выбор, который игрок
+    // не может повторить в голове, ощущается как чужая воля.
+    //
+    // Раз выбранную орбиту флот не меняет, пока стоит: перепрыгивание
+    // между планетами при каждом захвате соседа выглядело бы как дёрганье.
+    const Galaxy* galaxy = world.resource<Galaxy>();
+    if (galaxy == nullptr) return;
+
+    world.each<FleetLocation, Owner>([&](Entity, FleetLocation& location, Owner& owner) {
+        if (location.system != location.nextSystem) {
+            // В пути орбиты нет. Флот между звёздами не стоит ни у чего,
+            // и показывать его у планеты значило бы врать.
+            location.orbit = kNoOrbit;
+            return;
+        }
+        if (location.system >= galaxy->systemCount()) return;
+
+        const uint32_t planets = galaxy->planetCount(location.system);
+        if (planets == 0) {
+            location.orbit = kNoOrbit;
+            return;
+        }
+        // Уже стоит на существующей орбите — не трогаем.
+        if (location.orbit < planets) return;
+
+        uint32_t chosen = 0;
+        for (uint32_t orbit = 0; orbit < planets; ++orbit) {
+            const Entity planet = galaxy->planetEntity(location.system, orbit);
+            if (!planet.valid()) continue;
+            const Owner* planetOwner = world.get<Owner>(planet);
+            if (planetOwner != nullptr && planetOwner->empire == owner.empire) {
+                chosen = orbit;
+                break;
+            }
+        }
+        location.orbit = chosen;
+    });
 }
 
 namespace {

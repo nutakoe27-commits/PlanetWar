@@ -252,14 +252,33 @@ TEST_CASE("протокол: столица вне галактики отвер
 }
 
 TEST_CASE("протокол: неизвестный тип сообщения отвергается") {
+    // Список ИМЕНАМИ, а не числами. Числами он читался как заклинание
+    // «1 || 2 || 10 || 11 || 12 || 20», и понять, что именно перестало
+    // сходиться после добавления приказа, можно было только сверкой
+    // с перечислением вручную.
+    //
+    // Список намеренно написан руками, а не выведен из перечисления:
+    // проверка ловит РАСШИРЕНИЕ ПОВЕРХНОСТИ протокола. Выведи её из того
+    // же источника, что и разбор, — и она станет тавтологией, которая
+    // молча согласится с любым новым типом.
+    const MessageType known[] = {
+        MessageType::Join,     MessageType::Welcome,       MessageType::MoveFleet,
+        MessageType::BuildShip, MessageType::BuildBuilding, MessageType::Colonize,
+        MessageType::SplitFleet, MessageType::Notice,
+    };
+
     for (int raw = 0; raw < 256; ++raw) {
         uint8_t buffer[4] = {uint8_t(raw)};
         ByteReader reader(buffer, 1);
         MessageType type = MessageType::Join;
-        const bool known = readMessageType(reader, type);
-        const bool expected = raw == 1 || raw == 2 || raw == 10 || raw == 11 ||
-                              raw == 12 || raw == 20;
-        CHECK(known == expected);
+        const bool accepted = readMessageType(reader, type);
+
+        bool expected = false;
+        for (MessageType candidate : known) {
+            if (uint8_t(candidate) == uint8_t(raw)) expected = true;
+        }
+        CAPTURE(raw);
+        CHECK(accepted == expected);
     }
 }
 
@@ -281,6 +300,10 @@ TEST_CASE("протокол: мусор вместо сообщения не р�
             case MessageType::BuildShip: { BuildShipMessage m; readBuildShip(reader, m); break; }
             case MessageType::BuildBuilding: {
                 BuildBuildingMessage m; readBuildBuilding(reader, m); break;
+            }
+            case MessageType::Colonize: { ColonizeMessage m; readColonize(reader, m); break; }
+            case MessageType::SplitFleet: {
+                SplitFleetMessage m; readSplitFleet(reader, m); break;
             }
             case MessageType::Notice: { NoticeMessage m; readNotice(reader, m); break; }
         }

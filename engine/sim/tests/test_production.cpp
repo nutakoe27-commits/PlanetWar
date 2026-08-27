@@ -388,7 +388,7 @@ Entity stationed(Yard& yard, uint32_t system, uint32_t empire, const Fleet& comp
                  const FleetArmament& armament) {
     const Entity e = yard.world.create();
     yard.world.add<Fleet>(e, composition);
-    yard.world.add<FleetLocation>(e, FleetLocation{system, system, fx::zero()});
+    yard.world.add<FleetLocation>(e, standingAt(system));
     yard.world.add<MoveOrder>(e, MoveOrder{kNoSystem, 0});
     yard.world.add<Owner>(e, Owner{empire, 0});
     yard.world.add<FleetArmament>(e, armament);

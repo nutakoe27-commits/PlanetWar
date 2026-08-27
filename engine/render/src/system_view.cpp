@@ -729,26 +729,63 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
             const uint32_t tonnage = sim::fleetTonnage(fleet.composition);
             if (tonnage == 0) continue;
 
-            // Самый крупный присутствующий корпус: он и определяет силуэт.
-            uint32_t hull = 0;
-            if (fleet.composition[sim::Hull::Battleship] > 0)   hull = uint32_t(sim::Hull::Battleship);
-            else if (fleet.composition[sim::Hull::Cruiser] > 0) hull = uint32_t(sim::Hull::Cruiser);
-            else if (fleet.composition[sim::Hull::Destroyer] > 0) hull = uint32_t(sim::Hull::Destroyer);
-            else                                     hull = uint32_t(sim::Hull::Corvette);
+            // Силуэт задаёт САМЫЙ СТАРШИЙ присутствующий корпус, и ищется
+            // он циклом с конца.
+            //
+            // Раньше здесь стояла цепочка из четырёх if — линкор, крейсер,
+            // эсминец, иначе корвет. Классов давно восемь, и флот из одних
+            // титанов рисовался корветом: пять минут постройки венца сезона
+            // выглядели как пять минут постройки самого дешёвого корабля.
+            uint32_t hull = uint32_t(sim::Hull::Corvette);
+            for (uint8_t candidate = uint8_t(sim::Hull::Count) - 1; candidate >= 1;
+                 --candidate) {
+                if (fleet.composition[sim::Hull(candidate)] > 0) {
+                    hull = candidate;
+                    break;
+                }
+            }
 
             const uint32_t index = hull - 1u;
             if (index >= assets_->hulls().size()) continue;
 
-            // Место на дуге вокруг светила. Чуть дальше внешней орбиты:
-            // флот виден целиком и не спорит с планетами за один пиксель,
-            // но остаётся в кадре, подобранном под систему.
-            const float outer =
-                kFirstOrbitRadius + kOrbitStep * float(planetCount > 0 ? planetCount - 1 : 0);
-            const float radius = outer + 3.5f;
-            const float angle = kTau * (float(pocket) * 0.081f +
-                                        float(id % 97u) / 97.0f);
-            const float x = radius * std::cos(angle);
-            const float y = radius * std::sin(angle);
+            // ФЛОТ СТОИТ У СВОЕЙ ПЛАНЕТЫ, а не на общей дуге вокруг звезды.
+            //
+            // «Флот в системе» ничего не говорит о том, что он там делает.
+            // Флот на орбите конкретного мира читается с одного взгляда:
+            // это гарнизон вот этой планеты — или, если планета чужая,
+            // то, что её осаждает. Раньше все отряды висели одной гроздью
+            // за внешней орбитой, и понять, кто кого сторожит, было нельзя.
+            //
+            // Орбиту назначает СЕРВЕР (FleetLocation::orbit) — она часть
+            // состояния мира, а не выдумка клиента. Иначе двое игроков
+            // видели бы один и тот же флот у разных планет.
+            float centreX = 0.0f;
+            float centreY = 0.0f;
+            float station = 0.0f;
+            if (fleet.orbit < planetCount) {
+                orbitPosition(fleet.orbit, uint32_t(galaxy.seed()) ^ system, world.tick, centreX, centreY);
+                // Радиус стоянки чуть больше самой планеты: корабли
+                // кружат НАД ней, не вминаясь в поверхность.
+                station = 2.6f + std::sqrt(float(tonnage)) * 0.12f;
+            } else {
+                // Орбиты нет — общая стоянка за внешней планетой, как было.
+                const float outer = kFirstOrbitRadius +
+                                    kOrbitStep * float(planetCount > 0 ? planetCount - 1 : 0);
+                station = outer + 3.5f;
+            }
+
+            // Своя дуга внутри стоянки: два отряда у одной планеты обязаны
+            // стоять в разных точках, иначе они сливаются в один силуэт.
+            // Угол выводится из НОМЕРА ФЛОТА и тика, а не из порядка обхода:
+            // так корабль не прыгает по кругу, когда рядом появляется
+            // или гибнет сосед.
+            const float turn =
+                float(double(int64_t(world.tick) % kOrbitPeriodTicks) /
+                      double(kOrbitPeriodTicks));
+            const float angle =
+                kTau * (turn + float(id % 89u) / 89.0f) + float(pocket) * 0.7f;
+            const float x = centreX + station * std::cos(angle);
+            const float y = centreY + station * std::sin(angle);
             const float z = 2.4f + float(pocket % 3u) * 1.6f;
             ++pocket;
 

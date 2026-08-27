@@ -1,5 +1,6 @@
 #include "doctest.h"
 
+#include "pw/sim/colony.h"
 #include "pw/sim/control.h"
 #include "pw/sim/economy.h"
 #include "pw/sim/season.h"
@@ -75,7 +76,7 @@ struct Realm {
     Entity garrison(uint32_t system, uint32_t empire, const Fleet& composition) {
         const Entity e = world.create();
         world.add<Fleet>(e, composition);
-        world.add<FleetLocation>(e, FleetLocation{system, system, fx::zero()});
+        world.add<FleetLocation>(e, standingAt(system));
         world.add<MoveOrder>(e, MoveOrder{kNoSystem, 0});
         world.add<Owner>(e, Owner{empire, 0});
         return e;
@@ -199,86 +200,55 @@ TEST_CASE("владение: поровну — система спорная") 
 }
 
 // ---------------------------------------------------------------------------
-// Занятие ничьих планет
+// Ничьи планеты
+//
+// ПРАВИЛО ИЗМЕНИЛОСЬ, и это главное изменение геймплея за фазу.
+//
+// Раньше любой флот, постояв над пустой планетой три минуты, делал её своей.
+// Выглядело безобидно — и обесценивало колонизацию целиком: зачем строить
+// дорогой медленный корабль, если то же самое даёт бесплатная стоянка
+// любым корветом.
+//
+// Теперь ничью планету берут ТОЛЬКО высадкой колониста. Флот над ней может
+// стоять сколько угодно: он её охраняет, но не присваивает. Проверки ниже
+// сторожат именно это — потому что откатить правило обратно проще всего
+// случайно, «починив» тест.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("владение: флот занимает ничью планету за kClaimSeconds") {
-    // Срок берётся из константы, а не пишется числом: он балансный
-    // и уже менялся — с пяти минут на три, когда захват переехал
-    // с систем на планеты.
+TEST_CASE("владение: флот НЕ занимает ничью планету, сколько бы ни стоял") {
     Realm realm;
     realm.garrison(3, /*empire=*/1, makeFleet({{Hull::Corvette, 2}}));
 
-    realm.run(kClaimSeconds * kSecond - 10 * kSecond);
-    CHECK(realm.planetOwner(3, 0) == kNoEmpire);  // ещё рано
-
-    realm.run(20 * kSecond);
-    CHECK(realm.planetOwner(3, 0) == 1u);
-    // Занятая ничья планета сразу боеспособна: воюют не за пустоту.
-    CHECK(realm.readinessOf(3, 0) == kReadinessMax);
-}
-
-TEST_CASE("владение: планеты занимаются по одной, от звезды наружу") {
-    // Это и есть перенос захвата с систем на планеты: система с четырьмя
-    // планетами больше не берётся одним щелчком за то же время, что
-    // и система с одной.
-    Realm realm;
-    const uint32_t system = realm.systemWithAtLeast(3);
-    REQUIRE(system != UINT32_MAX);
-    realm.garrison(system, /*empire=*/1, makeFleet({{Hull::Corvette, 4}}));
-
     realm.run(kClaimSeconds * kSecond + 10 * kSecond);
-    CHECK(realm.planetOwner(system, 0) == 1u);
-    // Вторая ещё ничья: срок занятия даёт ОДНУ планету, а не систему.
-    CHECK(realm.planetOwner(system, 1) == kNoEmpire);
-    CHECK(realm.planetsOwnedBy(system, 1) == 1u);
+    CHECK(realm.planetOwner(3, 0) == kNoEmpire);
 
-    realm.run(kClaimSeconds * kSecond);
-    CHECK(realm.planetOwner(system, 1) == 1u);
-    CHECK(realm.planetsOwnedBy(system, 1) == 2u);
-
-    // Вся система целиком — только когда занята каждая планета.
-    realm.run(kClaimSeconds * kSecond * int64_t(realm.planetCount(system)));
-    CHECK(realm.planetsOwnedBy(system, 1) == realm.planetCount(system));
-    CHECK(realm.ownerOf(system) == 1u);
+    // И через полчаса тоже. Дело не в сроке: механики занятия стоянкой
+    // больше нет вовсе.
+    realm.run(30 * kMinute);
+    CHECK(realm.planetOwner(3, 0) == kNoEmpire);
 }
 
-TEST_CASE("владение: два своих флота не мешают занять планету") {
-    // Правило «занимает только единственный претендент» считает ИМПЕРИИ,
-    // а не флоты. Пока считались флоты, империя, приведшая два отряда,
-    // блокировала занятие сама себе, и экспансия вставала намертво.
-    // Юнит-тесты этого не видели — поймал прогон сезона на ботах.
+TEST_CASE("владение: даже огромный флот не занимает пустую планету") {
+    // Ни тоннаж, ни осадная мощь тут ни при чём. Пустую планету не берут
+    // силой — на неё высаживаются.
     Realm realm;
-    realm.garrison(4, /*empire=*/1, makeFleet({{Hull::Corvette, 3}}));
-    realm.garrison(4, /*empire=*/1, makeFleet({{Hull::Corvette, 5}}));
-    realm.garrison(4, /*empire=*/1, makeFleet({{Hull::Corvette, 2}}));
+    realm.garrison(4, /*empire=*/1,
+                   makeFleet({{Hull::Titan, 4}, {Hull::Monitor, 10}}));
 
-    realm.run(kClaimSeconds * kSecond + 10 * kSecond);
-    CHECK(realm.planetOwner(4, 0) == 1u);
+    realm.run(30 * kMinute);
+    CHECK(realm.planetOwner(4, 0) == kNoEmpire);
 }
 
-TEST_CASE("владение: два претендента не занимают ничего") {
+TEST_CASE("владение: над ничьей планетой не начинается осада") {
+    // Осаждать пустоту нечего: обороны там нет, и запись «идёт осада»
+    // в журнале означала бы событие, которого не происходит.
     Realm realm;
     realm.garrison(5, /*empire=*/1, makeFleet({{Hull::Corvette, 5}}));
-    realm.garrison(5, /*empire=*/2, makeFleet({{Hull::Corvette, 5}}));
-
-    realm.run(20 * kMinute);
-    // Пока не разобрались между собой, планета остаётся ничьей.
-    CHECK(realm.planetOwner(5, 0) == kNoEmpire);
-    CHECK(realm.ownerOf(5) == kNoEmpire);
-}
-
-TEST_CASE("владение: ушедший флот не дозанимает планету") {
-    Realm realm;
-    const Entity fleet = realm.garrison(7, /*empire=*/1, makeFleet({{Hull::Corvette, 3}}));
-
-    realm.run(kClaimSeconds * kSecond / 2);
-    // Флот отправился дальше — счётчик занятия обязан обнулиться.
-    realm.world.get<FleetLocation>(fleet)->nextSystem =
-        realm.galaxy.neighbors(7)[0];
-
-    realm.run(kClaimSeconds * kSecond);
-    CHECK(realm.planetOwner(7, 0) == kNoEmpire);
+    realm.run(5 * kMinute);
+    const SiegeState* siege = realm.siegeOf(5, 0);
+    REQUIRE(siege != nullptr);
+    CHECK(siege->ticks == 0u);
+    CHECK(siege->besieger == kNoEmpire);
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +442,14 @@ TEST_CASE("владение: воспроизводится тик в тик") {
     CHECK(first.world.hash() == second.world.hash());
 
     // И что-то действительно произошло, а не просто ничего не менялось.
-    CHECK(first.planetOwner(12, 0) == 3u);
+    //
+    // Раньше признаком «произошло» служило занятие ничьей планеты флотом
+    // империи 3. Занятия стоянкой больше нет, и признаком стала осада:
+    // империя 2 стоит над планетой империи 1 в системе 4 и за восемьдесят
+    // минут обязана её взять. Свойство то же — мир не стоял на месте, —
+    // но опирается оно на механику, которая есть.
+    CHECK(first.planetOwner(4, 0) == 2u);
+    CHECK(second.planetOwner(4, 0) == 2u);
 }
 
 // ---------------------------------------------------------------------------
@@ -655,16 +632,14 @@ TEST_CASE("сезон: на Финале карта заморожена") {
     CHECK(realm.readinessOf(system) == kReadinessMax);
 }
 
-TEST_CASE("сезон: на Расширении ничьи планеты занимают свободно") {
-    // Иначе стадия расширения не давала бы расширяться — а она ровно
-    // для этого и есть.
-    SeasonRealm realm(SeasonStage::Expansion);
-
-    const uint32_t system = realm.systemWith(1);
-    REQUIRE(system != UINT32_MAX);
-    realm.capital(/*empire=*/1, realm.systemWithAtLeast(3));
-    realm.garrison(system, /*empire=*/1, makeFleet({{Hull::Corvette, 5}}));
-
-    realm.run((kClaimSeconds + 5) * kTicksPerSecond);
-    CHECK(realm.planetOwner(system, 0) == 1u);
+TEST_CASE("сезон: убежище Расширения не мешает колонизировать") {
+    // Убежище запрещает ОСАДУ чужих планет возле чужих столиц. Высадку
+    // на ничью планету оно запрещать не должно ни на какой стадии:
+    // расширение — это то, ради чего стадия Расширения и существует,
+    // и запретить его значило бы отменить саму стадию.
+    //
+    // Проверяется правилом, а не прогоном: колонизация не зависит
+    // от стадии вовсе, и это ровно то, что здесь утверждается.
+    const Fleet colonist = makeFleet({{Hull::Colonizer, 1}});
+    CHECK(colonizeCheck(1, colonist, standingAt(7), kNoEmpire, 7) == ColonyRefusal::Ok);
 }
