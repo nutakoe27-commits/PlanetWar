@@ -49,11 +49,24 @@ struct SystemView {
     /// двух чисел частичный захват не виден вообще.
     uint8_t ownedPlanets = 0;
     uint8_t totalPlanets = 0;
+    /// Сколько планет системы НИЧЬИ, то есть годятся под колонизацию.
+    ///
+    /// Главное число новой игры. Империя начинается с одной планеты
+    /// и растёт только высадкой колонистов — значит вопрос «куда лететь»
+    /// задаётся постоянно, и без этого числа ответ на него добывался
+    /// щелчком по каждой звезде по очереди.
+    ///
+    /// Отдельно от `totalPlanets - ownedPlanets`: та разность включает
+    /// и ЧУЖИЕ планеты, а чужие колонизатором не берут — их берут осадой.
+    /// Смешать эти два случая значит послать колониста туда, где его
+    /// встретят.
+    uint8_t freePlanets = 0;
 
     bool operator==(const SystemView& o) const {
         return owner == o.owner && readiness == o.readiness &&
                siegeEmpire == o.siegeEmpire && siegeProgress == o.siegeProgress &&
-               ownedPlanets == o.ownedPlanets && totalPlanets == o.totalPlanets;
+               ownedPlanets == o.ownedPlanets && totalPlanets == o.totalPlanets &&
+               freePlanets == o.freePlanets;
     }
     bool operator!=(const SystemView& o) const { return !(*this == o); }
 };

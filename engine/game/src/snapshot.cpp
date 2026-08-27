@@ -26,6 +26,7 @@ void writeSystem(ByteWriter& writer, uint32_t index, const SystemView& system) {
     writer.u8(system.siegeEmpire);
     writer.u8(system.siegeProgress);
     writer.u8(system.ownedPlanets);
+    writer.u8(system.freePlanets);
     writer.u8(system.totalPlanets);
 }
 
@@ -36,6 +37,7 @@ bool readSystem(ByteReader& reader, uint32_t& index, SystemView& system) {
     system.siegeEmpire = reader.u8();
     system.siegeProgress = reader.u8();
     system.ownedPlanets = reader.u8();
+    system.freePlanets = reader.u8();
     system.totalPlanets = reader.u8();
     return !reader.failed();
 }
@@ -257,6 +259,7 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
             if (planet.system >= systemCount) return;
             SystemView& summary = out.systems[planet.system];
             ++summary.totalPlanets;
+            if (view.owner == 0xFF) ++summary.freePlanets;
             if (view.owner != 0xFF && view.owner == summary.owner) {
                 ++summary.ownedPlanets;
                 readinessSum[planet.system] += view.readiness;

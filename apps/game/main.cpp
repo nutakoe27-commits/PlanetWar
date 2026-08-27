@@ -367,6 +367,11 @@ int main(int argc, char** argv) {
     const int64_t shotAt = int64_t(shotAfterSeconds) * 1000;
     bool shotTaken = false;
     // Состояние обхода: номер точки и фаза щелчка внутри неё.
+    // Ожидание нового отряда после выделения: в какой системе ждём
+    // и кто там был до этого.
+    uint32_t awaitingSplit = kNoSystem;
+    std::vector<uint32_t> knownFleets;
+
     int sweepPoint = 0;
     int sweepPhase = 0;
     int sweepClicks = 0;
@@ -645,6 +650,23 @@ int main(int argc, char** argv) {
                                      render::hullName(uint8_t(action.slot)),
                                  kInfo, now, state.system,
                                  render::hullIcon(uint8_t(action.slot)));
+                    // Запоминаем, какие отряды тут были ДО выделения.
+                    //
+                    // Новый флот создаёт сервер, и его номер приходит
+                    // снапшотом через несколько кадров. Игрок к этому
+                    // моменту уже смотрит на список и не знает, какой
+                    // из двух отрядов новый: они отличаются только числом
+                    // кораблей. Поэтому клиент запоминает старый состав
+                    // списка и выбирает того, кого в нём не было.
+                    //
+                    // Выделяют почти всегда затем, чтобы сразу отправить, —
+                    // и лишний щелчок «а теперь найди новый отряд» съел бы
+                    // ровно ту лёгкость, ради которой выделение и сделано.
+                    knownFleets.clear();
+                    for (uint32_t id : client.fleetsAt(state.system)) {
+                        knownFleets.push_back(id);
+                    }
+                    awaitingSplit = state.system;
                 }
                 break;
             case render::ActionKind::SelectPlanet:
@@ -800,6 +822,20 @@ int main(int argc, char** argv) {
                 const float perPixel = camera.worldHeight / float(height);
                 camera.centerX -= input.mouseDeltaX() * perPixel;
                 camera.centerY += input.mouseDeltaY() * perPixel;
+            }
+        }
+
+        // Новый отряд появился — выбираем его.
+        if (awaitingSplit != kNoSystem && client.ready()) {
+            for (uint32_t id : client.fleetsAt(awaitingSplit)) {
+                if (std::find(knownFleets.begin(), knownFleets.end(), id) !=
+                    knownFleets.end()) {
+                    continue;
+                }
+                state.fleet = id;
+                awaitingSplit = kNoSystem;
+                knownFleets.clear();
+                break;
             }
         }
 

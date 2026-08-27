@@ -29,6 +29,10 @@ constexpr EmpireColor kNeutral{0.42f, 0.45f, 0.52f};
 /// Размер звезды на карте, в мировых единицах.
 constexpr float kStarRadius = 7.0f;
 
+/// Полный оборот. Своё имя, чтобы формулы читались как углы, а не
+/// как арифметика с магическим числом.
+constexpr float kTau = 6.28318530718f;
+
 /// Половина размера флота на карте, по классу корпуса.
 ///
 /// Задаётся В МИРОВЫХ ЕДИНИЦАХ, а не в пикселях атласа. Первая версия
@@ -248,6 +252,31 @@ void MapView::build(const sim::Galaxy& galaxy, const game::WorldView& world, uin
         // пикселе значит потерять оба.
         if (owner != 0xFF) {
             pushCircle(out.lines, star.x, star.y, star.halfWidth * 1.35f, color, 0.95f, 20);
+        }
+
+        // СВОБОДНАЯ ЗЕМЛЯ: точки по кругу, по одной на ничью планету.
+        //
+        // Империя начинается с одной планеты и растёт только колонизацией,
+        // поэтому «где есть свободное» — самый частый вопрос к карте.
+        // Без ответа на него игрок щёлкает по звёздам по очереди.
+        //
+        // Точками, а не кольцом: кольцо сказало бы «здесь есть свободное»,
+        // а точки говорят СКОЛЬКО, и решение «лететь пять прыжков ради
+        // одной планеты или три ради трёх» принимается прямо с карты.
+        // И точками, а не цифрой: цифра требует прочитать, точки —
+        // сосчитать боковым зрением.
+        const uint8_t freePlanets =
+            index < world.systems.size() ? world.systems[index].freePlanets : 0;
+        if (freePlanets > 0) {
+            const float ring = star.halfWidth * 1.75f;
+            const float dot = std::max(0.9f, star.halfWidth * 0.20f);
+            for (uint8_t slot = 0; slot < freePlanets && slot < 12; ++slot) {
+                const float angle =
+                    kTau * (float(slot) / float(freePlanets < 3 ? 3 : freePlanets));
+                pushCircle(out.lines, star.x + ring * std::cos(angle),
+                           star.y + ring * std::sin(angle), dot,
+                           EmpireColor{0.62f, 0.88f, 0.72f}, 0.85f, 6);
+            }
         }
 
         // Осада: дуга вокруг звезды, тем длиннее, чем ближе к захвату.

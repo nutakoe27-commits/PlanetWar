@@ -232,7 +232,7 @@ private:
     /// вообще есть», и это разные вопросы: первый задают раз в минуту,
     /// второй — каждый раз, когда надо что-то найти.
     ScreenAction outliner(Ui& ui, const game::Client& client, const ScreenState& state,
-                          float top, float width);
+                          float top, float width, float bottomLimit);
     /// Мини-карта галактики в правом нижнем углу.
     ///
     /// На двухстах системах вопрос «где я вообще нахожусь» без неё

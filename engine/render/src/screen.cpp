@@ -1790,7 +1790,8 @@ ScreenAction Screen::bottomBar(Ui& ui, const game::Client& client,
 // ---------------------------------------------------------------------------
 
 ScreenAction Screen::outliner(Ui& ui, const game::Client& client,
-                              const ScreenState& state, float top, float width) {
+                              const ScreenState& state, float top, float width,
+                              float bottomLimit) {
     // ЗАЧЕМ ОН НУЖЕН. Панели слева отвечают на вопрос «что я сейчас
     // выбрал». Этот список отвечает на другой: «что у меня вообще есть».
     // Вопросы разные, и задают их с разной частотой — первый раз в минуту,
@@ -1813,6 +1814,36 @@ ScreenAction Screen::outliner(Ui& ui, const game::Client& client,
     for (uint32_t i = 0; i < uint32_t(client.view().systems.size()); ++i) {
         if (client.view().systems[i].owner == mine) systems.push_back(i);
     }
+    // СВОБОДНЫЕ СИСТЕМЫ — куда можно расширяться.
+    //
+    // Империя начинается с одной планеты и растёт только колонизацией,
+    // значит вопрос «куда лететь» игрок задаёт постоянно. Без списка
+    // ответ на него добывался щелчком по каждой звезде по очереди —
+    // на восьмидесяти системах это перестаёт быть игрой.
+    //
+    // Сортировка по РАССТОЯНИЮ от столицы, а не по номеру: ближняя
+    // свободная планета почти всегда и есть правильный ответ, а дальняя
+    // интересна только когда ближних не осталось.
+    struct Free {
+        uint32_t system;
+        int32_t hops;
+        uint8_t planets;
+    };
+    std::vector<Free> freeSystems;
+    for (uint32_t i = 0; i < uint32_t(client.view().systems.size()); ++i) {
+        const auto& view = client.view().systems[i];
+        if (view.freePlanets == 0) continue;
+        // Чужие системы колонизатором не берут: там встретят.
+        if (view.owner != 0xFF && view.owner != mine) continue;
+        const int32_t hops = client.galaxy().hopDistance(client.capital(), i);
+        if (hops < 0) continue;
+        freeSystems.push_back(Free{i, hops, view.freePlanets});
+    }
+    std::sort(freeSystems.begin(), freeSystems.end(), [](const Free& a, const Free& b) {
+        if (a.hops != b.hops) return a.hops < b.hops;
+        return a.system < b.system;
+    });
+
     std::vector<std::pair<uint32_t, const game::FleetView*>> fleets;
     for (const auto& [id, fleet] : client.view().fleets) {
         if (fleet.empire != mine) continue;
@@ -1826,29 +1857,44 @@ ScreenAction Screen::outliner(Ui& ui, const game::Client& client,
 
     const float header = line * 1.7f;
     const float row = line * 1.9f;
-    const float bottomLimit = float(ui.screenHeight()) - line * 3.6f - unit * 2.0f;
+    // Предел приходит СНАРУЖИ: снизу справа стоит мини-карта, и список,
+    // не знающий о ней, наезжал на неё длинным перечнем свободных систем.
+    // Кто расставляет панели, тот и знает, сколько места осталось.
 
     // Сколько строк влезает. Место делится между разделами по потребности,
     // а не поровну: пустой раздел не должен занимать половину списка.
     const auto collapsed = [&](uint32_t section) {
         return (collapsed_ & (1u << section)) != 0;
     };
-    const float available = bottomLimit - top - unit * 2.0f - header * 2.0f;
+    const float available = bottomLimit - top - unit * 2.0f - header * 3.0f;
     int systemRows = collapsed(0) ? 0 : int(systems.size());
     int fleetRows = collapsed(1) ? 0 : int(fleets.size());
+    int freeRows = collapsed(2) ? 0 : int(freeSystems.size());
     if (available > 0.0f) {
         int budget = int(available / row);
         // Флотам гарантируется место: они короче и меняются чаще.
         const int fleetShare = std::min(fleetRows, std::max(0, budget / 3));
         budget -= fleetShare;
+        // Свободным системам место даётся ПЕРЕД своими: своих игрок
+        // и так найдёт на карте по цвету, а свободные искать негде.
+        // Ближайшие восемь и не больше. Свободных систем в начале сезона
+        // почти вся галактика, и список из восьмидесяти строк отвечает
+        // не на вопрос «куда лететь», а на вопрос «где я утону».
+        // Дальние становятся видны сами собой, когда ближние кончатся.
+        freeRows = std::min(freeRows, 8);
+        const int freeShare = std::min(freeRows, std::max(0, budget / 3));
+        budget -= freeShare;
         systemRows = std::min(systemRows, std::max(0, budget));
-        fleetRows = std::min(fleetRows, fleetShare + std::max(0, budget - systemRows));
+        budget -= systemRows;
+        freeRows = std::min(freeRows, freeShare + std::max(0, budget));
+        fleetRows = std::min(fleetRows, fleetShare);
     } else {
-        systemRows = fleetRows = 0;
+        systemRows = fleetRows = freeRows = 0;
     }
 
     const bool systemsCut = systemRows < int(systems.size()) && !collapsed(0);
     const bool fleetsCut = fleetRows < int(fleets.size()) && !collapsed(1);
+    const bool freeCut = freeRows < int(freeSystems.size()) && !collapsed(2);
 
     Column column(unit);
     column.row(header, unit * 0.3f);
@@ -1857,6 +1903,9 @@ ScreenAction Screen::outliner(Ui& ui, const game::Client& client,
     column.row(header, unit * 0.3f);
     for (int i = 0; i < fleetRows; ++i) column.row(row);
     if (fleetsCut) column.row(line * 1.4f);
+    column.row(header, unit * 0.3f);
+    for (int i = 0; i < freeRows; ++i) column.row(row);
+    if (freeCut) column.row(line * 1.4f);
 
     const Rect panel{float(ui.screenWidth()) - width - unit, top, width, column.height()};
     ui.panel(panel, "hud_panel");
@@ -1975,6 +2024,48 @@ ScreenAction Screen::outliner(Ui& ui, const game::Client& client,
                 "ещё " + number(int64_t(fleets.size()) - fleetRows), ui.theme().textDim);
     }
 
+    section(2, "СВОБОДНЫЕ", freeSystems.size());
+
+    for (int i = 0; i < freeRows; ++i) {
+        const Free& spot = freeSystems[size_t(i)];
+        const Rect at = column.next();
+        const Rect card{at.x, at.y, at.w, at.h - 2.0f};
+        const bool selected = spot.system == state.system;
+
+        const ButtonResult hit = ui.hotspot(uiId("out-free", spot.system), card);
+        ui.listRow(card, hit.hovered, selected);
+        if (hit.clicked) {
+            action.kind = ActionKind::FocusSystem;
+            action.value = spot.system;
+        }
+
+        const float mark = card.h * 0.62f;
+        ui.icon(Rect{card.x + unit * 0.5f, card.y + (card.h - mark) * 0.5f, mark, mark},
+                "hull_colonizer");
+        ui.text(card.x + unit * 0.9f + mark, card.y + (card.h - line) * 0.5f,
+                "Система " + number(spot.system),
+                selected ? ui.theme().text : ui.theme().textDim);
+
+        // Свободных планет и сколько прыжков лететь. Два числа, из которых
+        // и складывается решение: близко и мало или далеко и много.
+        const std::string tail = number(spot.planets) + " · " + number(spot.hops) + " пр";
+        ui.textRight(Rect{card.x, card.y + (card.h - line) * 0.5f, card.w - unit * 0.6f,
+                          line},
+                     tail, ui.theme().textGood);
+        if (hit.hovered) {
+            ui.tooltip("свободных планет " + number(spot.planets) + " · " +
+                       number(spot.hops) +
+                       " прыжков от столицы · щёлкните, чтобы навести камеру · "
+                       "занять их можно только колонизатором");
+        }
+    }
+    if (freeCut) {
+        const Rect at = column.next();
+        ui.text(at.x + unit * 0.5f, at.y,
+                "ещё " + number(int64_t(freeSystems.size()) - freeRows),
+                ui.theme().textDim);
+    }
+
     return action;
 }
 
@@ -2051,7 +2142,16 @@ ScreenAction Screen::build(Ui& ui, const game::Client& client, const ScreenState
     take(planetPanel(ui, client, state, leftBottom + unit * 1.2f, leftWidth, planetBottom));
     take(fleetPanel(ui, client, state, planetBottom + unit * 1.2f, leftWidth));
 
-    take(outliner(ui, client, state, top, rightWidth));
+    // Мини-карта занимает правый нижний угол — список обязан кончиться
+    // выше неё. Оба размера считаются здесь, из одних и тех же чисел,
+    // и разъехаться им нечем.
+    const float barHeight = line + unit * 2.6f;
+    const float minimapSize = std::min(float(ui.screenHeight()) * 0.22f, line * 11.0f);
+    const float outlinerBottom = state.inSystem
+                                     ? float(ui.screenHeight()) - barHeight - unit
+                                     : float(ui.screenHeight()) - barHeight - unit * 2.0f -
+                                           minimapSize - line * 1.35f;
+    take(outliner(ui, client, state, top, rightWidth, outlinerBottom));
     take(messagePanel(ui, now, top, unit * 1.5f + leftWidth,
                       float(ui.screenWidth()) - rightWidth - unit * 1.5f));
     // Мини-карта — только на карте галактики. В виде системы она врала бы:
