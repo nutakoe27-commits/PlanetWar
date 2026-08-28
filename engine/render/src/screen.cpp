@@ -374,7 +374,7 @@ void MessageLog::add(const std::string& text, const TextColor& color, int64_t no
         entries_.back().bornAt = now;
         return;
     }
-    entries_.push_back(Entry{text, color, now, system, icon, 1});
+    entries_.push_back(Entry{text, color, now, system, icon, 1, nextSeq_++});
     while (entries_.size() > kMaxVisible) entries_.erase(entries_.begin());
 }
 
@@ -569,7 +569,22 @@ ScreenAction Screen::topBar(Ui& ui, const game::Client& client) const {
         // дробь вроде «0,4», а дробь на приборе, в который смотрят
         // мельком, не читается — её надо расшифровывать.
         const int64_t perMinute = (entry.income * fx::fromInt(60)).roundToInt();
-        const std::string stock = grouped(entry.value);
+
+        // ЧИСЛО ДОГОНЯЕТ ПРАВДУ, А НЕ ПРЫГАЕТ К НЕЙ.
+        //
+        // Склад меняется скачками: заплатили за здание — минус двести
+        // за один кадр. Игрок в этот момент почти всегда смотрит в другую
+        // часть экрана и не видит ни старого числа, ни нового: он видит
+        // только то, что осталось, и не знает, что вообще что-то было.
+        // Полсекунды набегающих цифр притягивают взгляд к месту события
+        // и заодно говорят направление — вверх или вниз — без чтения.
+        //
+        // Приход НЕ анимируется: он и так меняется медленно, и бегущая
+        // «+18» на приборе выглядела бы как неисправность прибора.
+        const int64_t shown =
+            int64_t(std::lround(ui.approach(uiId("res-stock", uint32_t(index)),
+                                            float(entry.value), 0.45f)));
+        const std::string stock = grouped(shown);
         const std::string rate = (perMinute > 0 ? "+" : "") + grouped(perMinute);
 
         const float column = std::max(ui.textWidth(stock), ui.textWidth(rate));
@@ -883,7 +898,7 @@ ScreenAction Screen::systemPanel(Ui& ui, const game::Client& client,
             const Rect bar{card.right() - unit * 0.8f - barWidth,
                            card.y + card.h * 0.5f - 3.0f, barWidth, 6.0f};
             const float value = float(planet.readiness) / 100.0f;
-            ui.progress(bar, value, barTint(value));
+            ui.progress(uiId("planet-readiness", planet.id), bar, value, barTint(value));
         }
 
         // ПОДСКАЗКА ОБЪЯСНЯЕТ, А НЕ ПОВТОРЯЕТ. «Оборона 78%» игрок и так
@@ -1036,7 +1051,7 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
 
         const Rect bar{statusRow.x, statusRow.bottom() - line * 0.45f,
                        cancel.x - statusRow.x - unit, line * 0.35f};
-        ui.progress(bar, float(planet.buildPercent) / 100.0f,
+        ui.progress(uiId("build-bar", planet.id), bar, float(planet.buildPercent) / 100.0f,
                     planet.buildPaid != 0 ? TextColor{0.42f, 0.72f, 0.52f, 1.0f}
                                           : TextColor{0.85f, 0.66f, 0.28f, 1.0f});
     } else if (slotPicked) {
@@ -1133,7 +1148,8 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
             // а не на подпись рядом, и ответ обязан быть там же.
             if (constructing) {
                 const Rect bar{box.x + 3.0f, box.bottom() - 6.0f, box.w - 6.0f, 3.0f};
-                ui.progress(bar, float(planet.buildPercent) / 100.0f,
+                ui.progress(uiId("slot-bar", planet.id * 16u + slot), bar,
+                            float(planet.buildPercent) / 100.0f,
                             planet.buildPaid != 0
                                 ? TextColor{0.42f, 0.72f, 0.52f, 1.0f}
                                 : TextColor{0.85f, 0.66f, 0.28f, 1.0f});
@@ -1520,12 +1536,26 @@ ScreenAction Screen::messagePanel(Ui& ui, int64_t now, float top, float left,
     float y = top;
     size_t index = 0;
     for (const MessageLog::Entry& entry : messages_->entries()) {
-        const float alpha = fade(entry);
-        const Rect card{right - widest, y, widest, rowHeight - 2.0f};
+        // КАРТОЧКА ВЫЕЗЖАЕТ СПРАВА, а не возникает.
+        //
+        // Новость, появившаяся мгновенно, не отличается от новости,
+        // которая висела там всё время: глаз замечает ДВИЖЕНИЕ, а не
+        // наличие. Именно поэтому уведомление, ради которого всё
+        // и затевалось — «вашу планету осаждают», — раньше можно было
+        // не заметить вовсе, глядя ровно на ту часть экрана.
+        const float entrance = ui.appear(uiId("msg-in", entry.seq), 0.22f);
+        // Съезд вверх, когда гаснет соседняя карточка. Стопка, которая
+        // перескакивает, читается как «список перестроился», и глаз
+        // заново ищет в нём то, что уже читал.
+        const float slot = ui.approach(uiId("msg-y", entry.seq), y, 0.16f);
+
+        const float alpha = fade(entry) * (0.25f + 0.75f * entrance);
+        const Rect card{right - widest + (1.0f - entrance) * widest * 0.35f, slot,
+                        widest, rowHeight - 2.0f};
 
         // Подложка отдельной карточкой: новость обязана читаться поверх
         // звёздного неба, а небо местами светлее любой панели.
-        ui.panel(card, "hud_panel", std::min(1.0f, 0.55f + alpha * 0.45f));
+        ui.panel(card, "hud_panel", std::min(1.0f, 0.55f + alpha * 0.45f) * entrance);
         // Цветная полоска слева отвечает на «плохая новость или нет»
         // раньше, чем игрок прочтёт текст.
         TextColor mark = entry.color;

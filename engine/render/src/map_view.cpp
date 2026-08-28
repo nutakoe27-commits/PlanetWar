@@ -285,7 +285,19 @@ void MapView::build(const sim::Galaxy& galaxy, const game::WorldView& world, uin
         if (siegeEmpire != 0xFF) {
             const float progress =
                 float(world.systems[index].siegeProgress) / 100.0f;
-            pushCircle(out.lines, star.x, star.y, star.halfWidth * 2.0f,
+            // ДУГА ДЫШИТ, пока идёт осада.
+            //
+            // Осада длится ЧАСЫ, и её дуга почти не двигается: за минуту
+            // наблюдения она прирастает на волосок. Неподвижная дуга среди
+            // двух сотен звёзд не отличается от узора на карте, и игрок
+            // перестаёт её замечать ровно тогда, когда она важнее всего.
+            // Пульс с периодом в полторы секунды делает её единственным
+            // движущимся местом карты — а движение глаз ловит сам.
+            const float beat =
+                clock_ > 0.0f
+                    ? 1.0f + 0.12f * std::sin(clock_ * kTau / 1.5f)
+                    : 1.0f;
+            pushCircle(out.lines, star.x, star.y, star.halfWidth * 2.0f * beat,
                        empireColor(siegeEmpire), 0.9f, 32, progress);
         }
     }
@@ -310,6 +322,35 @@ void MapView::build(const sim::Galaxy& galaxy, const game::WorldView& world, uin
             y += (ty - y) * t;
             // Нос по направлению движения, в оборотах.
             rotation = std::atan2(ty - fromY, tx - fromX) / 6.28318530718f;
+
+            // СЛЕД ДВИГАТЕЛЕЙ. Перелёт по линии занимает часы, и на карте
+            // корабль ползёт по пикселю в минуту: отличить идущий флот
+            // от стоящего нельзя, пока не заметишь, что он сдвинулся.
+            // След отвечает на два вопроса сразу — идёт ли и КУДА, —
+            // и отвечает мгновенно, потому что у следа есть направление.
+            const float length = std::sqrt((tx - fromX) * (tx - fromX) +
+                                           (ty - fromY) * (ty - fromY));
+            if (length > 0.0f) {
+                const float dx = (tx - fromX) / length;
+                const float dy = (ty - fromY) / length;
+                const float tail = std::max(kStarRadius * 2.5f, minShipHalf * 3.0f);
+                const EmpireColor& wake =
+                    fleet.empire == 0xFF ? kNeutral : empireColor(fleet.empire);
+                // Три звена, каждое тусклее предыдущего: сплошная линия
+                // читалась бы как гиперлиния, которых на карте и так полно.
+                for (int part = 0; part < 3; ++part) {
+                    const float a = tail * float(part) / 3.0f;
+                    const float b = tail * float(part + 1) / 3.0f;
+                    // Дрожание следа — только если часы идут: неподвижный
+                    // кадр обязан быть повторяемым.
+                    const float flicker =
+                        clock_ > 0.0f
+                            ? 0.85f + 0.15f * std::sin((clock_ * 6.0f) + float(part))
+                            : 1.0f;
+                    pushLine(out.lines, x - dx * a, y - dy * a, x - dx * b, y - dy * b,
+                             wake, (0.55f - 0.15f * float(part)) * flicker);
+                }
+            }
         }
 
         const EmpireColor& color =
@@ -356,7 +397,14 @@ void MapView::build(const sim::Galaxy& galaxy, const game::WorldView& world, uin
     if (selection.system < systemCount) {
         const float x = toFloat(galaxy.positionX(selection.system));
         const float y = toFloat(galaxy.positionY(selection.system));
-        pushCircle(out.lines, x, y, std::max(kStarRadius * 2.4f, minStarHalf * 2.2f),
+        // Кольцо выделения ДЫШИТ. Оно и так ярче остальных, но на карте
+        // из двух сотен колец владения ещё одно кольцо теряется. Медленное
+        // дыхание — период две секунды — отличает «выбрано мной сейчас»
+        // от «принадлежит кому-то» без второго цвета и без второй формы.
+        const float breath =
+            clock_ > 0.0f ? 1.0f + 0.07f * std::sin(clock_ * kTau / 2.0f) : 1.0f;
+        pushCircle(out.lines, x, y,
+                   std::max(kStarRadius * 2.4f, minStarHalf * 2.2f) * breath,
                    empireColor(empire), 0.95f, 28);
 
         // Линия к цели приказа: игрок видит, куда пойдёт флот, ещё до

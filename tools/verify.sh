@@ -228,6 +228,7 @@ else
         ok "$(grep 'test cases:' /tmp/pw_render.log | tr -s ' ')"
         if ./build/client/bin/pw_render_view_tests >/tmp/pw_mapview.log 2>&1; then
             ok "карта: $(grep 'test cases:' /tmp/pw_mapview.log | tr -s ' ' | sed 's/^\[doctest\] //')"
+            ok "карта: $(grep 'assertions:' /tmp/pw_mapview.log | tr -s ' ' | sed 's/^\[doctest\] //')"
         else
             fail "проверки сборки карты не прошли"; tail -20 /tmp/pw_mapview.log
         fi
@@ -247,7 +248,13 @@ else
             if ./build/client/bin/pw_game_client --port 27099 --name проверка \
                     --shot galaxy_map.png --shot-after 4 --width 1280 --height 720 \
                     >/tmp/pw_mapshot.log 2>&1; then
-                ok "$(grep 'карта отрисована' /tmp/pw_mapshot.log)"
+                # Строка берётся из вывода клиента, а не сочиняется здесь.
+                # Раньше искалось «карта отрисована», а клиент печатает
+                # «кадр отрисован» — и проверка много месяцев рапортовала
+                # успех ПУСТОЙ строкой. Зелёная галочка без единого слова
+                # рядом — это ровно та молча проходящая проверка, которой
+                # в этом скрипте быть не должно.
+                ok "$(grep 'кадр отрисован' /tmp/pw_mapshot.log)"
             else
                 fail "клиент не смог отрисовать карту"; tail -10 /tmp/pw_mapshot.log
             fi
@@ -274,8 +281,17 @@ else
             #
             # Поэтому здесь щёлкают по всему экрану в обоих видах,
             # и любое нарушение спецификации Vulkan валит прогон.
+            #
+            # ОБХОД ИДЁТ С ВКЛЮЧЁННОЙ АНИМАЦИЕЙ (--motion 1), хотя снимки
+            # выше сняты без неё. Это не непоследовательность, а разделение
+            # труда: снимку нужен устоявшийся кадр, а обходу — самый
+            # рискованный. Анимация добавляет к кадру подложки кнопок,
+            # кольца эффектов и следы двигателей, то есть меняет число
+            # вершин от кадра к кадру — ровно то, на чём игра однажды
+            # и упала. Обход без движения проверял бы более спокойный
+            # конвейер, чем тот, в который играют.
             if ./build/client/bin/pw_game_client --port 27099 --name обход \
-                    --sweep 38 --validation --width 1280 --height 720 \
+                    --sweep 38 --motion 1 --validation --width 1280 --height 720 \
                     >/tmp/pw_sweep.log 2>&1; then
                 ok "$(grep 'обход закончен' /tmp/pw_sweep.log)"
                 ok "  $(grep 'намерения:' /tmp/pw_sweep.log | sed 's/^ *//')"
@@ -332,9 +348,16 @@ fi
 if [ -x "build/client/bin/pw_game_client" ]; then
     echo
     printf '%sЗапустить игру:%s\n' "$BOLD" "$OFF"
-    printf '  ./build/client/bin/pw_server --systems 200 --speed 20 &\n'
+    printf '  ./build/client/bin/pw_server --systems 200 --weeks 1 --speed 200 &\n'
     printf '  ./build/client/bin/pw_game_client --name Михаил\n'
     printf '%s  сервер гасится так: kill %%1   (или fg и Ctrl-C)%s\n' "$DIM" "$OFF"
+    printf '%s  Настоящий сезон длится одиннадцать недель РЕАЛЬНОГО времени,%s\n' \
+        "$DIM" "$OFF"
+    printf '%s  и посмотреть на него целиком за вечер нельзя. Строка выше%s\n' \
+        "$DIM" "$OFF"
+    printf '%s  берёт недельный сезон на ускорении 200: он проходит примерно%s\n' \
+        "$DIM" "$OFF"
+    printf '%s  за час, и все четыре стадии видно своими глазами.%s\n' "$DIM" "$OFF"
 fi
 
 # ---------------------------------------------------------------------------

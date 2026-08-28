@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "pw/core/log.h"
@@ -30,6 +31,7 @@
 #include "pw/platform/platform.h"
 #include "pw/platform/window.h"
 #include "pw/render/atlas.h"
+#include "pw/render/effects.h"
 #include "pw/render/font.h"
 #include "pw/render/map_view.h"
 #include "pw/render/screen.h"
@@ -72,6 +74,38 @@ bool loadFromCandidates(const char* relative, Loader&& loader) {
     return false;
 }
 
+/// Каким эффектом мир отвечает на эту новость.
+///
+/// Отдельной таблицей, а не ветвлением по месту: событий одиннадцать,
+/// и «что показать» для каждого — это решение дизайнера, которое должно
+/// лежать там, где его можно прочитать целиком.
+///
+/// Часть новостей эффекта НЕ ПОЛУЧАЕТ, и это тоже решение. «Приказ
+/// отвергнут» и «флот уничтожен» не привязаны к точке карты: первый
+/// относится к нажатию, второй — к отряду, которого уже нет. Кольцо
+/// в случайном месте было бы хуже молчания.
+bool effectForNotice(game::NoticeKind kind, render::EffectKind& out, bool& ownColor) {
+    using game::NoticeKind;
+    switch (kind) {
+        case NoticeKind::ColonyFounded:
+            out = render::EffectKind::Colonized;  ownColor = true;  return true;
+        case NoticeKind::PlanetCaptured:
+        case NoticeKind::SystemCaptured:
+            out = render::EffectKind::Captured;   ownColor = true;  return true;
+        case NoticeKind::PlanetLost:
+        case NoticeKind::SystemLost:
+            out = render::EffectKind::Lost;       ownColor = false; return true;
+        case NoticeKind::PlanetSieged:
+            out = render::EffectKind::Sieged;     ownColor = false; return true;
+        case NoticeKind::BattleWon:
+        case NoticeKind::BattleLost:
+        case NoticeKind::BattleDraw:
+            out = render::EffectKind::Battle;     ownColor = false; return true;
+        default:
+            return false;
+    }
+}
+
 /// Камера карты галактики.
 ///
 /// Зум ограничен с обеих сторон намеренно. Слишком близко — игрок теряет
@@ -84,11 +118,57 @@ struct CameraControl {
     float minHeight = 200.0f;
     float maxHeight = 6000.0f;
 
+    // КУДА КАМЕРА ЕДЕТ.
+    //
+    // Наведение по щелчку в журнале раньше ПЕРЕСТАВЛЯЛО камеру: система
+    // была здесь, стала там, и связи между двумя картинками нет никакой.
+    // На карте из двух сотен одинаковых точек это худший вид перехода —
+    // игрок обязан заново понять, куда он попал, и первым делом ищет
+    // свою территорию. Перелёт за полсекунды сохраняет связь: видно,
+    // В КАКУЮ СТОРОНУ и НАСКОЛЬКО далеко мы переехали.
+    //
+    // Перетаскивание и колесо цель не используют: там рука игрока сама
+    // задаёт движение, и сглаживание превратилось бы в задержку.
+    float targetX = 0.0f;
+    float targetY = 0.0f;
+    float targetHeight = 2000.0f;
+    /// Сглаживать ли перелёты. Выключено в безоконном режиме: снимок
+    /// обязан быть устоявшимся.
+    bool smooth = false;
+
     void zoom(float steps) {
         // Умножением, а не сложением: шаг колеса должен менять масштаб
         // одинаково и вблизи, и издалека.
         worldHeight *= std::pow(0.85f, steps);
         worldHeight = std::clamp(worldHeight, minHeight, maxHeight);
+        targetHeight = worldHeight;
+    }
+
+    /// Поставить камеру немедленно. Рука игрока и первый кадр.
+    void place(float x, float y, float height) {
+        centerX = targetX = x;
+        centerY = targetY = y;
+        worldHeight = targetHeight = std::clamp(height, minHeight, maxHeight);
+    }
+
+    /// Перелететь. Без сглаживания — то же, что place.
+    void flyTo(float x, float y, float height) {
+        targetX = x;
+        targetY = y;
+        targetHeight = std::clamp(height, minHeight, maxHeight);
+        if (!smooth) place(x, y, height);
+    }
+
+    /// Догнать цель за этот кадр.
+    void follow(float deltaSeconds) {
+        if (!smooth || deltaSeconds <= 0.0f) return;
+        // Та же экспонента, что и в интерфейсе: не зависит от частоты
+        // кадров и не перелетает цель. Полсекунды на весь путь — заметно
+        // глазу и не заставляет ждать.
+        const float k = 1.0f - std::exp(-deltaSeconds / (0.5f / 3.0f));
+        centerX += (targetX - centerX) * k;
+        centerY += (targetY - centerY) * k;
+        worldHeight += (targetHeight - worldHeight) * k;
     }
 
     void toWorld(float pixelX, float pixelY, int width, int height, float& worldX,
@@ -129,6 +209,9 @@ void printUsage() {
         "                   в обоих видах и выйти. Ищет падения, а не картинку\n"
         "  --shot-zoom <k>  приблизить перед снимком\n"
         "  --shot-system    снимок ВИДА СИСТЕМЫ, а не карты галактики\n"
+        "  --motion <0|1>   анимация интерфейса и мира. В окне включена,\n"
+        "                   в безоконном режиме выключена: снимок обязан\n"
+        "                   быть устоявшимся, а не случайной фазой перехода\n"
         "\nВСЁ УПРАВЛЕНИЕ — МЫШЬЮ. Ни одно действие не требует клавиши:\n"
         "  левая            выбрать систему, планету, слот; нажать кнопку\n"
         "  двойной щелчок   открыть систему\n"
@@ -179,6 +262,7 @@ int main(int argc, char** argv) {
     // Обход связывает: он щёлкает во ВСЕ точки сетки в обоих видах
     // и заканчивается кодом ноль, только если клиент дожил до конца.
     int sweepStep = 0;
+    int motionFlag = -1;   // -1 — решить по режиму
     bool shotSystem = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -199,6 +283,7 @@ int main(int argc, char** argv) {
         else if (arg == "--shot-press") shotPress = true;
         else if (arg == "--sweep" && i + 1 < argc) sweepStep = std::atoi(argv[++i]);
         else if (arg == "--shot-system") shotSystem = true;
+        else if (arg == "--motion" && i + 1 < argc) motionFlag = std::atoi(argv[++i]);
         else {
             printUsage();
             return arg == "--help" ? 0 : 2;
@@ -384,8 +469,61 @@ int main(int argc, char** argv) {
     int sweepOrders = 0;
     bool sweepFailed = false;
 
+    // АНИМАЦИЯ ЖИВЁТ ТОЛЬКО В ОКНЕ.
+    //
+    // Безоконный режим снимает КАДР, а кадр обязан быть устоявшимся:
+    // снимок, поймавший середину перехода, показывает наполовину
+    // выехавшую панель и наполовину досчитанное число, и отличить это
+    // от дефекта нельзя. Обход щелчками — та же история: он ищет падения,
+    // и лишний источник различий между прогонами ему только мешает.
+    //
+    // Флагом --motion можно включить движение и без окна: иначе снять
+    // саму анимацию было бы нечем.
+    const bool motion = motionFlag >= 0 ? motionFlag != 0 : !headless;
+    ui.setMotion(motion);
+    camera.smooth = motion;
+
+    // Эффекты мира: кольца и вспышки там, где что-то случилось.
+    // Живут только при включённом движении — неподвижный кадр показал бы
+    // случайную фазу кольца, и снимок перестал бы быть повторяемым.
+    render::Effects effects;
+
+    // ДОСТРОЙКА ЗДАНИЯ — СОБЫТИЕ БЕЗ УВЕДОМЛЕНИЯ.
+    //
+    // Сервер о ней не сообщает, и правильно делает: игрок сам заказал
+    // стройку и сам знает срок, а полтора часа спустя новость «шахта
+    // готова» была бы шумом. Но на карте это по-прежнему изменение мира,
+    // и заметить его нечем — здание просто оказывается построенным.
+    //
+    // Клиент замечает достройку сам, сравнивая число зданий со своим
+    // прошлым срезом. Раз в секунду, а не каждый кадр: обход всех своих
+    // планет шестьдесят раз в секунду ради события, случающегося раз
+    // в час, — плохая сделка, а секунда опоздания незаметна.
+    std::unordered_map<uint32_t, uint32_t> planetSystem;   // планета -> система
+    // Маска занятых слотов, а не их число: по числу нельзя сказать, КАКОЕ
+    // здание появилось, а «шахта построена» и «построено что-то» — разные
+    // сообщения. Двенадцать слотов укладываются в шестнадцать бит.
+    std::unordered_map<uint32_t, uint16_t> builtBefore;
+    int64_t nextBuildScan = 0;
+
+    int64_t previousFrame = nowMilliseconds();
+
     while (window.pumpEvents(input)) {
         const int64_t now = nowMilliseconds();
+        // Шаг кадра в секундах. Берётся из ТЕХ ЖЕ часов, что и сеть:
+        // два независимых источника времени в одном цикле однажды
+        // разъезжаются, и анимация начинает жить своей жизнью.
+        //
+        // Ограничен сверху ЗДЕСЬ, один раз и для всех, кто им пользуется.
+        // Когда окно свернули на минуту, между кадрами проходит минута,
+        // и без ограничения все переходы доигрываются за один кадр,
+        // а все эффекты разом умирают — то есть игрок, вернувшись,
+        // не видит ничего именно в тот момент, когда больше всего хочет
+        // понять, что изменилось. Восьмая доля секунды — примерно два
+        // пропущенных кадра: столько догонять честно.
+        const float frameDelta =
+            std::min(0.125f, float(now - previousFrame) / 1000.0f);
+        previousFrame = now;
         if (headless && shotTaken) break;
 
         // --- сеть ---
@@ -415,8 +553,60 @@ int main(int argc, char** argv) {
                          event.kind == game::NoticeKind::FleetDestroyed ? kNoSystem
                                                                         : event.system,
                          render::noticeIcon(event.kind));
+
+            // ЭФФЕКТ НА КАРТЕ ТАМ, ГДЕ ЭТО СЛУЧИЛОСЬ.
+            //
+            // Карточка в углу говорит словами, но слова читают, а вспышку
+            // видят. Кольцо на карте отвечает на вопрос «где» раньше, чем
+            // игрок дочитает «что», — и это единственный способ заметить
+            // событие, глядя не туда.
+            render::EffectKind kind = render::EffectKind::Count;
+            bool ownColor = false;
+            if (motion && event.system < client.galaxy().systemCount() &&
+                effectForNotice(event.kind, kind, ownColor)) {
+                effects.spawn(kind,
+                              float(client.galaxy().positionX(event.system).toDouble()),
+                              float(client.galaxy().positionY(event.system).toDouble()),
+                              camera.worldHeight * 0.012f,
+                              ownColor ? render::empireColor(client.empire())
+                                       : render::EmpireColor{0.95f, 0.42f, 0.36f},
+                              event.system);
+            }
         }
         messages.update(now);
+
+        if (motion && client.ready() && now >= nextBuildScan) {
+            nextBuildScan = now + 1000;
+            for (const auto& [id, planet] : client.view().planets) {
+                if (planet.owner != uint8_t(client.empire())) continue;
+                uint16_t mask = 0;
+                for (int slot = 0; slot < sim::kMaxSlots; ++slot) {
+                    if (planet.buildings[slot] != 0) mask |= uint16_t(1u << slot);
+                }
+                const auto seen = builtBefore.find(id);
+                const uint16_t before = seen != builtBefore.end() ? seen->second : mask;
+                const uint16_t appeared = uint16_t(mask & ~before);
+                builtBefore[id] = mask;
+                if (appeared == 0) continue;
+
+                const auto where = planetSystem.find(id);
+                if (where == planetSystem.end()) continue;
+                effects.spawn(render::EffectKind::Built,
+                              float(client.galaxy().positionX(where->second).toDouble()),
+                              float(client.galaxy().positionY(where->second).toDouble()),
+                              camera.worldHeight * 0.012f,
+                              render::empireColor(client.empire()), id);
+                for (int slot = 0; slot < sim::kMaxSlots; ++slot) {
+                    if ((appeared & (1u << slot)) == 0) continue;
+                    messages.add(std::string(render::buildingName(planet.buildings[slot])) +
+                                     " построена",
+                                 kGood, now, where->second, "icon_planet");
+                }
+            }
+        }
+
+        if (motion) effects.update(frameDelta);
+        camera.follow(frameDelta);
 
         int width = device.targetWidth(), height = device.targetHeight();
         if (!headless) window.framebufferSize(width, height);
@@ -431,13 +621,21 @@ int main(int argc, char** argv) {
             // галактика в первом кадре — это сотня одинаковых точек, среди
             // которых игрок ищет себя; кнопка «Вся галактика» внизу отдаёт
             // этот вид в одно нажатие, когда он действительно понадобится.
-            camera.worldHeight = std::clamp(extent * 0.9f, camera.minHeight,
-                                            camera.maxHeight);
-            camera.centerX = float(client.galaxy().positionX(client.capital()).toDouble());
-            camera.centerY = float(client.galaxy().positionY(client.capital()).toDouble());
+            camera.place(float(client.galaxy().positionX(client.capital()).toDouble()),
+                         float(client.galaxy().positionY(client.capital()).toDouble()),
+                         std::clamp(extent * 0.9f, camera.minHeight, camera.maxHeight));
             state.system = client.capital();
             const auto own = client.fleetsAt(client.capital());
             if (!own.empty()) state.fleet = own.front();
+
+            // Таблица «планета -> система» строится ОДИН РАЗ: планеты
+            // не переезжают, а перебирать всю галактику каждый кадр
+            // ради неподвижных данных незачем.
+            for (uint32_t index = 0; index < client.galaxy().systemCount(); ++index) {
+                for (const auto& planet : client.planetsAt(index)) {
+                    planetSystem[planet.id] = index;
+                }
+            }
 
             // Первое, что человек видит, — ответ на вопрос «где я и что
             // делать». Без него игрок оказывается посреди сотни звёзд
@@ -465,9 +663,9 @@ int main(int argc, char** argv) {
                     }
                 }
             } else if (headless && shotZoom > 1.0f) {
-                camera.worldHeight /= shotZoom;
-                camera.centerX = float(client.galaxy().positionX(client.capital()).toDouble());
-                camera.centerY = float(client.galaxy().positionY(client.capital()).toDouble());
+                camera.place(float(client.galaxy().positionX(client.capital()).toDouble()),
+                             float(client.galaxy().positionY(client.capital()).toDouble()),
+                             camera.worldHeight / shotZoom);
             }
             window.setTitle(("PlanetWar — " + name).c_str());
         }
@@ -617,7 +815,7 @@ int main(int argc, char** argv) {
         uiInput.pressed = input.wasPressed(MouseButton::Left);
         uiInput.released = input.wasReleased(MouseButton::Left);
 
-        ui.begin(uiInput, width, height);
+        ui.begin(uiInput, width, height, frameDelta);
         const render::ScreenAction action = screen.build(ui, client, state, now);
         ui.end();
         if (sweepStep > 0 && action.kind < render::ActionKind::Count) {
@@ -642,6 +840,14 @@ int main(int argc, char** argv) {
                 if (client.orderColonize(action.value, action.planet)) {
                     messages.add("высаживаем колонию", kInfo, now, state.system,
                                  "hull_colonizer");
+                    if (motion && state.system < client.galaxy().systemCount()) {
+                        effects.spawn(
+                            render::EffectKind::Order,
+                            float(client.galaxy().positionX(state.system).toDouble()),
+                            float(client.galaxy().positionY(state.system).toDouble()),
+                            camera.worldHeight * 0.012f,
+                            render::empireColor(client.empire()), state.system);
+                    }
                 }
                 break;
             case render::ActionKind::SplitFleet:
@@ -732,11 +938,9 @@ int main(int argc, char** argv) {
                     state.planetIndex = 0;
                     state.slot = kNoSlot;
                     state.inSystem = false;
-                    camera.centerX =
-                        float(client.galaxy().positionX(action.value).toDouble());
-                    camera.centerY =
-                        float(client.galaxy().positionY(action.value).toDouble());
-                    camera.worldHeight = std::max(camera.minHeight, camera.worldHeight * 0.5f);
+                    camera.flyTo(float(client.galaxy().positionX(action.value).toDouble()),
+                                 float(client.galaxy().positionY(action.value).toDouble()),
+                                 std::max(camera.minHeight, camera.worldHeight * 0.5f));
                 }
                 break;
             case render::ActionKind::ResetView:
@@ -745,9 +949,8 @@ int main(int argc, char** argv) {
                     systemCamera.distance =
                         render::fitDistance(client.galaxy().planetCount(state.system));
                 } else if (client.ready()) {
-                    camera.worldHeight = float(client.galaxy().extent().toDouble()) * 2.0f;
-                    camera.centerX = 0.0f;
-                    camera.centerY = 0.0f;
+                    camera.flyTo(0.0f, 0.0f,
+                                 float(client.galaxy().extent().toDouble()) * 2.0f);
                 }
                 break;
             case render::ActionKind::Quit:
@@ -822,6 +1025,11 @@ int main(int argc, char** argv) {
                 const float perPixel = camera.worldHeight / float(height);
                 camera.centerX -= input.mouseDeltaX() * perPixel;
                 camera.centerY += input.mouseDeltaY() * perPixel;
+                // Рука игрока отменяет начатый перелёт: догонять цель,
+                // от которой человек только что уехал, — это борьба
+                // с игроком за управление камерой.
+                camera.targetX = camera.centerX;
+                camera.targetY = camera.centerY;
             }
         }
 
@@ -868,6 +1076,18 @@ int main(int argc, char** argv) {
                     if (client.orderMove(state.fleet, under)) {
                         messages.add("флот идёт в систему " + std::to_string(under), kInfo,
                                      now, under, "icon_fleet");
+                        // ОТКЛИК НА ПРИКАЗ, а не новость о мире. Флот
+                        // тронется через секунду, а до тех пор картинка
+                        // не меняется ничем — и щелчок выглядит потерянным.
+                        // Кольцо, сжимающееся к цели, отвечает сразу:
+                        // приказ принят, идём сюда.
+                        if (motion) {
+                            effects.spawn(render::EffectKind::Order,
+                                          float(client.galaxy().positionX(under).toDouble()),
+                                          float(client.galaxy().positionY(under).toDouble()),
+                                          camera.worldHeight * 0.012f,
+                                          render::empireColor(client.empire()), under);
+                        }
                     }
                     state.awaitingMoveTarget = false;
                 } else {
@@ -909,6 +1129,11 @@ int main(int argc, char** argv) {
         if (client.ready() && state.inSystem &&
             state.system < client.galaxy().systemCount()) {
             const float aspect = height > 0 ? float(width) / float(height) : 1.0f;
+            // Настройки перелёта ставятся ЗДЕСЬ, а не при создании камеры:
+            // камеру сбрасывают при каждом входе в систему, и настройка,
+            // положенная один раз, пережила бы ровно один вход.
+            systemCamera.followSeconds = motion ? 0.5f : 0.0f;
+            systemCamera.deltaSeconds = frameDelta;
             systemView.build(client.galaxy(), client.view(), state.system, client.empire(),
                              systemCamera, aspect, systemFrame);
 
@@ -932,8 +1157,16 @@ int main(int argc, char** argv) {
             selection.hoverSystem = state.awaitingMoveTarget ? under : kNoSystem;
 
             device.setCamera(camera.toRhi());
+            // Часы карты — те же, что у интерфейса: два независимых
+            // счётчика времени в одном кадре однажды разъезжаются,
+            // и пульс кольца перестаёт совпадать с пульсом панели.
+            mapView.setClock(motion ? ui.clock() : 0.0f);
             mapView.build(client.galaxy(), client.view(), client.empire(), selection,
                           camera.toRhi(), mapFrame);
+            // Эффекты ПОСЛЕ карты и в тот же кадр: у них та же камера
+            // и та же пачка отрезков, а значит нет ни второго
+            // преобразования, ни второго способа ошибиться.
+            effects.build(mapFrame);
             device.drawLines(mapFrame.lines.data(), mapFrame.lines.size());
             device.drawSprites(mapFrame.sprites.data(), mapFrame.sprites.size(), shipTexture);
         }

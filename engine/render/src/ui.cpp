@@ -23,7 +23,8 @@ const UiSprite& fallbackSprite() {
 // Кадр
 // ---------------------------------------------------------------------------
 
-void Ui::begin(const UiInput& input, int screenWidth, int screenHeight) {
+void Ui::begin(const UiInput& input, int screenWidth, int screenHeight,
+               float deltaSeconds) {
     frame_.clear();
     input_ = input;
     width_ = screenWidth;
@@ -41,6 +42,97 @@ void Ui::begin(const UiInput& input, int screenWidth, int screenHeight) {
     // либо всё разъезжается.
     theme_.unit = std::round(lineHeight_ * 0.5f);
 
+    // ШАГ ВРЕМЕНИ ОГРАНИЧЕН СВЕРХУ. Когда окно свернули на минуту, между
+    // кадрами проходит минута, и без ограничения все переходы за один кадр
+    // доехали бы до конца — то есть выглядели бы как мгновенные, ровно
+    // в тот момент, когда игрок возвращается и больше всего хочет понять,
+    // что изменилось. Восьмая доля секунды — примерно два пропущенных
+    // кадра: столько догонять честно.
+    delta_ = motion_ ? std::clamp(deltaSeconds, 0.0f, 0.125f) : 0.0f;
+    clock_ += delta_;
+    ++frame_index_;
+    forgetStaleMotions();
+}
+
+// ---------------------------------------------------------------------------
+// Движение
+// ---------------------------------------------------------------------------
+
+Ui::MotionState& Ui::motionFor(uint32_t id, float fresh) {
+    auto it = motions_.find(id);
+    if (it == motions_.end()) {
+        it = motions_.emplace(id, MotionState{fresh, frame_index_}).first;
+    }
+    it->second.seen = frame_index_;
+    return it->second;
+}
+
+void Ui::forgetStaleMotions() {
+    // Раз в две секунды при шестидесяти кадрах, а не каждый кадр: обход
+    // всей таблицы ради нескольких мёртвых номеров — плохая сделка, а вот
+    // таблица, которая только растёт, за час игры превращается в десятки
+    // тысяч записей о кнопках, которых давно нет на экране.
+    if (frame_index_ % 128 != 0 || motions_.empty()) return;
+    for (auto it = motions_.begin(); it != motions_.end();) {
+        it = (frame_index_ - it->second.seen > 128) ? motions_.erase(it) : std::next(it);
+    }
+}
+
+float Ui::approach(uint32_t id, float target, float seconds) {
+    MotionState& state = motionFor(id, target);
+    if (!motion_ || seconds <= 0.0f || delta_ <= 0.0f) {
+        state.value = target;
+        return target;
+    }
+    // Экспонента: не зависит от частоты кадров и не перелетает цель.
+    // Постоянная времени — треть заявленного срока, тогда за `seconds`
+    // покрывается около 95% пути, и это тот момент, когда глаз считает
+    // движение законченным.
+    const float tau = seconds / 3.0f;
+    const float k = 1.0f - std::exp(-delta_ / tau);
+    state.value += (target - state.value) * k;
+    // Досаживаем вплотную: экспонента никогда не доходит до цели точно,
+    // а полоса, застывшая на 0.999, продолжает пересчитываться вечно.
+    if (std::fabs(target - state.value) < 0.0005f) state.value = target;
+    return state.value;
+}
+
+float Ui::appear(uint32_t id, float seconds) {
+    // Первое появление — с нуля: в этом весь смысл. Дальше та же
+    // экспонента, что и у approach.
+    MotionState& state = motionFor(id, motion_ ? 0.0f : 1.0f);
+    if (!motion_ || seconds <= 0.0f) {
+        state.value = 1.0f;
+        return 1.0f;
+    }
+    if (delta_ > 0.0f) {
+        const float tau = seconds / 3.0f;
+        state.value += (1.0f - state.value) * (1.0f - std::exp(-delta_ / tau));
+        if (state.value > 0.999f) state.value = 1.0f;
+    }
+    return state.value;
+}
+
+float Ui::flash(uint32_t id, bool trigger, float seconds) {
+    MotionState& state = motionFor(id, 0.0f);
+    if (trigger) state.value = 1.0f;
+    if (!motion_ || seconds <= 0.0f) {
+        // Без движения вспышки нет вовсе: одиночный кадр не может показать
+        // затухание, а мгновенная белая заливка — это дефект, а не отклик.
+        state.value = 0.0f;
+        return 0.0f;
+    }
+    if (!trigger && delta_ > 0.0f) {
+        state.value -= delta_ / seconds;
+        if (state.value < 0.0f) state.value = 0.0f;
+    }
+    return state.value;
+}
+
+float Ui::pulse(float periodSeconds, float phase) const {
+    if (!motion_ || periodSeconds <= 0.0f) return 0.0f;
+    constexpr float kTwoPi = 6.28318530718f;
+    return 0.5f + 0.5f * std::sin((clock_ / periodSeconds + phase) * kTwoPi);
 }
 
 void Ui::end() {
@@ -271,6 +363,13 @@ void Ui::progress(const Rect& r, float value, const TextColor& color) {
          sprite != nullptr ? *sprite : fallbackSprite(), color);
 }
 
+void Ui::progress(uint32_t id, const Rect& r, float value, const TextColor& color) {
+    // Треть секунды: заметно глазу и не заставляет ждать. Полоса,
+    // которая ползёт секунду, начинает раздражать; полоса, которая
+    // прыгает, ничего не сообщает.
+    progress(r, approach(id, std::clamp(value, 0.0f, 1.0f), 0.3f), color);
+}
+
 void Ui::listRow(const Rect& r, bool hovered, bool selected) {
     // Спокойная строка не рисуется вовсе. Список из десяти подложек —
     // это стопка кнопок, а не перечень: глаз начинает выбирать там,
@@ -361,19 +460,50 @@ const char* Ui::stylePlate(ButtonStyle style, bool hovered, bool held,
     }
 }
 
+void Ui::plate(uint32_t id, const Rect& r, ButtonStyle style, bool hovered,
+               bool held, bool clicked, bool enabled, float& shift) {
+    // ТРИ КАРТИНКИ, ОДИН ПЕРЕХОД.
+    //
+    // Подложка кнопки в атласе нарисована тремя отдельными спрайтами:
+    // спокойная, под курсором, нажатая. Переключать их «либо-либо» —
+    // значит менять внешний вид кнопки за один кадр, и наведение
+    // получается вспышкой. Поэтому спокойная рисуется всегда, а поверх
+    // неё две другие с той прозрачностью, до которой доехало движение.
+    const float hover = approach(id ^ 0x9E3779B9u, hovered ? 1.0f : 0.0f, 0.10f);
+    const float press = approach(id ^ 0x85EBCA77u, held ? 1.0f : 0.0f, 0.06f);
+    const float spark = flash(id ^ 0xC2B2AE3Du, clicked, 0.22f);
+
+    if (const char* calm = stylePlate(style, /*hovered=*/false, /*held=*/false, enabled)) {
+        panel(r, calm);
+    }
+    if (hover > 0.01f && enabled) {
+        if (const char* lit = stylePlate(style, /*hovered=*/true, /*held=*/false, enabled)) {
+            panel(r, lit, hover);
+        }
+    }
+    if (press > 0.01f && enabled) panel(r, "hud_button_down", press);
+
+    // Вспышка на срабатывании. Именно на СРАБАТЫВАНИИ, а не на нажатии:
+    // кнопка отпускается по правилу «курсор всё ещё на ней», и вспышка
+    // на нажатии обещала бы то, чего может не случиться.
+    if (spark > 0.001f) {
+        fill(r, TextColor{1.0f, 1.0f, 1.0f, 0.22f * spark});
+    }
+
+    // Нажатая кнопка сдвигает содержимое на пиксель вниз. Мелочь, которой
+    // палец верит: без неё нажатие ощущается как подсветка, а не как
+    // нажатие. Сдвиг тоже плавный — иначе надпись дёргается.
+    shift = press;
+}
+
 ButtonResult Ui::button(uint32_t id, const Rect& r, const std::string& label,
                         ButtonStyle style, bool enabled) {
     const ButtonResult result = behaviour(id, r, enabled);
     const bool held = active_ == id && input_.down;
 
-    if (const char* plate = stylePlate(style, result.hovered, held, enabled)) {
-        panel(r, plate);
-    }
+    float shift = 0.0f;
+    plate(id, r, style, result.hovered, held, result.clicked, enabled, shift);
 
-    // Нажатая кнопка сдвигает надпись на пиксель вниз. Мелочь, которой
-    // палец верит: без неё нажатие ощущается как подсветка, а не как
-    // нажатие.
-    const float shift = held ? 1.0f : 0.0f;
     textCentered(Rect{r.x, r.y + shift, r.w, r.h}, label,
                  enabled ? theme_.text : theme_.textDim);
     return result;
@@ -384,11 +514,9 @@ ButtonResult Ui::iconButton(uint32_t id, const Rect& r, const char* sprite,
     const ButtonResult result = behaviour(id, r, enabled);
     const bool held = active_ == id && input_.down;
 
-    if (const char* plate = stylePlate(style, result.hovered, held, enabled)) {
-        panel(r, plate);
-    }
+    float shift = 0.0f;
+    plate(id, r, style, result.hovered, held, result.clicked, enabled, shift);
 
-    const float shift = held ? 1.0f : 0.0f;
     const float pad = theme_.unit * 0.5f;
     const float iconSize = r.h - pad * 2.0f;
     icon(Rect{r.x + pad, r.y + pad + shift, iconSize, iconSize}, sprite,
@@ -407,13 +535,17 @@ ButtonResult Ui::slot(uint32_t id, const Rect& r, const char* sprite, bool selec
     const ButtonResult result = behaviour(id, r, enabled);
     const bool held = active_ == id && input_.down;
 
-    const char* plate = held               ? "hud_button_down"
-                        : selected         ? "hud_button_accent"
-                        : result.hovered   ? "hud_slot_hover"
-                                           : "hud_slot";
-    panel(r, plate);
+    const float hover = approach(id ^ 0x9E3779B9u, result.hovered ? 1.0f : 0.0f, 0.10f);
+    const float press = approach(id ^ 0x85EBCA77u, held ? 1.0f : 0.0f, 0.06f);
+    const float spark = flash(id ^ 0xC2B2AE3Du, result.clicked, 0.22f);
+
+    panel(r, selected ? "hud_button_accent" : "hud_slot");
+    if (hover > 0.01f && !selected) panel(r, "hud_slot_hover", hover);
+    if (press > 0.01f) panel(r, "hud_button_down", press);
+    if (spark > 0.001f) fill(r, TextColor{1.0f, 1.0f, 1.0f, 0.22f * spark});
+
     if (sprite != nullptr) {
-        icon(r.inset(theme_.unit * 0.4f), sprite,
+        icon(Rect{r.x, r.y + press, r.w, r.h}.inset(theme_.unit * 0.4f), sprite,
              enabled ? TextColor{} : TextColor{0.55f, 0.58f, 0.62f, 0.7f});
     }
     return result;

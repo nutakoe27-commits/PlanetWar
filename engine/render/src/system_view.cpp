@@ -454,7 +454,7 @@ bool SystemAssets::upload(rhi::Device& device) {
 // ---------------------------------------------------------------------------
 
 void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
-                       uint32_t system, uint32_t empire, const SystemCamera& camera,
+                       uint32_t system, uint32_t empire, SystemCamera& camera,
                        float aspect, SystemFrame& out) const {
     out.clear();
     if (assets_ == nullptr || !assets_->valid()) return;
@@ -474,6 +474,24 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
         orbitPosition(camera.focusOrbit, uint32_t(galaxy.seed()) ^ system, world.tick,
                       focusX, focusY);
     }
+
+    // Взгляд ДОГОНЯЕТ цель, а не переставляется на неё. Экспонента —
+    // та же, что в интерфейсе: не зависит от частоты кадров и не
+    // перелетает цель. Первый кадр встаёт сразу, иначе каждый вход
+    // в систему начинался бы перелётом из её центра.
+    if (!camera.lookValid || camera.followSeconds <= 0.0f ||
+        camera.deltaSeconds <= 0.0f) {
+        camera.lookX = focusX;
+        camera.lookY = focusY;
+        camera.lookValid = true;
+    } else {
+        const float k =
+            1.0f - std::exp(-camera.deltaSeconds / (camera.followSeconds / 3.0f));
+        camera.lookX += (focusX - camera.lookX) * k;
+        camera.lookY += (focusY - camera.lookY) * k;
+    }
+    focusX = camera.lookX;
+    focusY = camera.lookY;
 
     const float yaw = camera.yawTurns * kTau;
     const float pitch = camera.pitchTurns * kTau;

@@ -2,6 +2,7 @@ add_executable(pw_render_view_tests
     main.cpp
     test_atlas.cpp
     test_map_view.cpp
+    test_motion.cpp
     test_font.cpp
     test_screen.cpp
     test_system_view.cpp)
