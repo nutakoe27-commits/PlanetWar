@@ -1,5 +1,7 @@
 #include "doctest.h"
 
+#include "game_time.h"
+
 #include "pw/sim/battle_system.h"
 #include "pw/sim/control.h"
 #include "pw/sim/fleet.h"
@@ -7,6 +9,7 @@
 
 using namespace pw;
 using namespace pw::sim;
+using namespace pw::test;
 
 namespace {
 
@@ -44,11 +47,14 @@ struct War {
         world.get<Owner>(galaxy.systemEntity(system))->empire = empire;
     }
 
-    void run(int64_t ticks, uint64_t startTick = 0) {
+    /// Прогнать столько ИГРОВЫХ СЕКУНД, начиная с заданной. Не тиков:
+    /// пауза между сражениями измеряется минутами, а сама игра — часами.
+    /// Подробности — в game_time.h.
+    void run(int64_t seconds, int64_t startSecond = 0) {
+        const int64_t ticks = testTicks(seconds);
+        const int64_t start = testTicks(startSecond);
         for (int64_t i = 0; i < ticks; ++i) {
-            TickContext context;
-            context.tick = startTick + uint64_t(i);
-            systemBattles(world, context);
+            systemBattles(world, testTick(start + i));
         }
     }
 
@@ -63,9 +69,6 @@ FleetArmament armed(uint8_t k, uint8_t e, uint8_t m, uint8_t sh, uint8_t ar, uin
     a.doctrine = uint8_t(Doctrine::Line);
     return a;
 }
-
-constexpr int64_t kSecond = kTicksPerSecond;
-constexpr int64_t kMinute = 60 * kSecond;
 
 }  // namespace
 
@@ -92,7 +95,7 @@ TEST_CASE("сведение: враги в одной системе несут 
     const Entity blue = war.station(5, 1, makeFleet({{Hull::Corvette, 40}}), armed(100, 0, 0, 50, 50, 0));
     const Entity red = war.station(5, 2, makeFleet({{Hull::Corvette, 40}}), armed(100, 0, 0, 50, 50, 0));
 
-    war.run(1);
+    war.run(1 * kSecond);
     CHECK(war.tonnageOf(blue) < 40u);
     CHECK(war.tonnageOf(red) < 40u);
 }
@@ -109,21 +112,24 @@ TEST_CASE("сведение: летящий флот в сражении не у
     CHECK(war.tonnageOf(passing) == 40u);
 }
 
-TEST_CASE("сведение: сражение идёт раз в минуту, а не каждый тик") {
+TEST_CASE("сведение: сражение идёт раз в двенадцать минут, а не каждый тик") {
     War war;
     const Entity blue = war.station(5, 1, makeFleet({{Hull::Destroyer, 30}}), armed(50, 50, 0, 50, 50, 50));
     war.station(5, 2, makeFleet({{Hull::Destroyer, 30}}), armed(50, 50, 0, 50, 50, 50));
 
-    war.run(1);
+    war.run(1 * kSecond);
     const uint32_t afterFirst = war.tonnageOf(blue);
     CHECK(afterFirst < 30u * 20u);
 
-    // Полминуты спустя — ничего нового: откат ещё не истёк. Иначе бой шёл бы
-    // десять раз в секунду, и подкрепление никогда не успевало бы вмешаться.
-    war.run(30 * kSecond, 1);
+    // Десять минут спустя — ничего нового: откат ещё не истёк. Иначе бой
+    // шёл бы десять раз в секунду, и подкрепление никогда не успевало бы
+    // вмешаться. А успеть оно обязано: соседняя система в четверти часа
+    // пути, и пауза подобрана ровно под этот срок.
+    const int64_t pause = kBattleIntervalSeconds;
+    war.run(pause - 2 * kMinute, 1 * kSecond);
     CHECK(war.tonnageOf(blue) == afterFirst);
 
-    war.run(35 * kSecond, 1 + 30 * kSecond);
+    war.run(4 * kMinute, 1 * kSecond + pause - 2 * kMinute);
     CHECK(war.tonnageOf(blue) < afterFirst);
 }
 
@@ -133,7 +139,7 @@ TEST_CASE("сведение: потери разносятся по флотам
     const Entity small = war.station(5, 1, makeFleet({{Hull::Corvette, 20}}), armed(50, 50, 0, 50, 50, 0));
     war.station(5, 2, makeFleet({{Hull::Corvette, 80}}), armed(50, 50, 0, 50, 50, 0));
 
-    war.run(1);
+    war.run(1 * kSecond);
     const uint32_t lostBig = 60u - war.tonnageOf(big);
     const uint32_t lostSmall = 20u - war.tonnageOf(small);
 
@@ -153,7 +159,7 @@ TEST_CASE("сведение: разбитый отходит в соседнюю
     war.station(5, 1, makeFleet({{Hull::Destroyer, 40}}), armed(0, 100, 0, 100, 0, 60));
     const Entity doomed = war.station(5, 2, makeFleet({{Hull::Destroyer, 25}}), armed(100, 0, 0, 0, 100, 0));
 
-    war.run(1);
+    war.run(1 * kSecond);
     const MoveOrder* order = war.world.get<MoveOrder>(doomed);
     REQUIRE(order != nullptr);
 
@@ -174,7 +180,7 @@ TEST_CASE("сведение: победитель остаётся в систе
     const Entity winner = war.station(5, 1, makeFleet({{Hull::Destroyer, 40}}), armed(0, 100, 0, 100, 0, 60));
     war.station(5, 2, makeFleet({{Hull::Destroyer, 20}}), armed(100, 0, 0, 0, 100, 0));
 
-    war.run(1);
+    war.run(1 * kSecond);
     // Система за победителем: приказа уходить он не получает.
     CHECK(war.world.get<MoveOrder>(winner)->target == kNoSystem);
 }
@@ -188,7 +194,7 @@ TEST_CASE("сведение: владелец системы сражается 
     war.station(5, 1, makeFleet({{Hull::Corvette, 60}}), armed(50, 50, 0, 50, 50, 0));
     war.station(5, 2, makeFleet({{Hull::Corvette, 50}}), armed(50, 50, 0, 50, 50, 0));
 
-    war.run(1);
+    war.run(1 * kSecond);
     CHECK(war.tonnageOf(host) < 10u);
 }
 

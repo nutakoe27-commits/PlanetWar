@@ -55,11 +55,10 @@ void SeasonConfig::stretchTo(int64_t seconds) {
     scale = 1;
 }
 
-SeasonStage stageAt(const SeasonConfig& config, uint64_t tick) {
-    // ЧИСТАЯ ФУНКЦИЯ ОТ ТИКА. Не «сервер решил, что пора»: и сервер,
-    // и клиент, и реплей считают стадию из одного числа одинаково,
-    // и рассинхрону взяться неоткуда.
-    const int64_t seconds = int64_t(tick) / kTicksPerSecond;
+SeasonStage stageAt(const SeasonConfig& config, int64_t seconds) {
+    // ЧИСТАЯ ФУНКЦИЯ ОТ ИГРОВОГО ВРЕМЕНИ. Не «сервер решил, что пора»:
+    // и сервер, и клиент, и реплей считают стадию из одного числа
+    // одинаково, и рассинхрону взяться неоткуда.
     int64_t edge = 0;
     for (uint8_t stage = 0; stage < uint8_t(SeasonStage::Count); ++stage) {
         edge += config.stageSeconds(SeasonStage(stage));
@@ -68,8 +67,7 @@ SeasonStage stageAt(const SeasonConfig& config, uint64_t tick) {
     return SeasonStage::Final;
 }
 
-int64_t secondsLeftInStage(const SeasonConfig& config, uint64_t tick) {
-    const int64_t seconds = int64_t(tick) / kTicksPerSecond;
+int64_t secondsLeftInStage(const SeasonConfig& config, int64_t seconds) {
     int64_t edge = 0;
     for (uint8_t stage = 0; stage < uint8_t(SeasonStage::Count); ++stage) {
         edge += config.stageSeconds(SeasonStage(stage));
@@ -92,10 +90,16 @@ void systemSeason(World& world, const TickContext& context) {
     Season* season = world.resource<Season>();
     if (season == nullptr) return;
 
+    // Всё считается от ИГРОВЫХ СЕКУНД, а не от номера тика: при сжатии
+    // времени один тик стоит не десятую долю секунды, а сколько угодно,
+    // и деление на kTicksPerSecond прямо здесь врало бы ровно во столько
+    // же раз. Секунда означает одно и то же при любом сжатии.
+    const int64_t seconds = context.gameSeconds();
+
     season->previousStage = season->stage;
-    season->stage = stageAt(season->config, context.tick);
-    season->secondsLeft = secondsLeftInStage(season->config, context.tick);
-    season->over = int64_t(context.tick) / kTicksPerSecond >= season->config.totalSeconds();
+    season->stage = stageAt(season->config, seconds);
+    season->secondsLeft = secondsLeftInStage(season->config, seconds);
+    season->over = seconds >= season->config.totalSeconds();
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +171,10 @@ void systemCrisis(World& world, const TickContext& context) {
     if (season == nullptr || galaxy == nullptr || commands == nullptr) return;
     if (season->stage != SeasonStage::Crisis) return;
 
-    const int64_t period = kCrisisWaveSeconds * kTicksPerSecond;
+    // Период в ТИКАХ считается через сжатие: при обычном шаге это шесть
+    // часов игрового времени, при сжатом — те же шесть часов, просто
+    // меньшим числом тиков. Оба прогона видят одинаковое число волн.
+    const int64_t period = context.ticksFor(kCrisisWaveSeconds);
     if (context.tick % uint64_t(period) != 0) return;
 
     // Сколько планет у кого. Волна на империю растёт с её размером:
@@ -217,10 +224,11 @@ void systemCrisis(World& world, const TickContext& context) {
 // ---------------------------------------------------------------------------
 
 void systemPrestige(World& world, const TickContext& context) {
-    // Раз в секунду, а не каждый тик: престиж — это счёт за сезон, и десять
-    // начислений в секунду не дают ничего, кроме десятикратного округления
-    // в пользу того, у кого дробная часть удачнее.
-    if (context.tick % uint64_t(kTicksPerSecond) != 0) return;
+    // Раз в игровой час, а не каждый тик и не каждую секунду: престиж —
+    // это счёт за сезон длиной в одиннадцать недель. Начисление раз
+    // в секунду дало бы шесть с половиной миллионов округлений, и весь
+    // счёт свёлся бы к тому, у кого удачнее дробная часть.
+    if (context.tick % uint64_t(context.ticksFor(kPrestigeIntervalSeconds)) != 0) return;
 
     const Season* season = world.resource<Season>();
     if (season == nullptr) return;
@@ -237,12 +245,13 @@ void systemPrestige(World& world, const TickContext& context) {
     world.each<Empire, Prestige>([&](Entity, Empire& empire, Prestige& prestige) {
         if (empire.id == kNoEmpire || empire.id >= territory.size()) return;
 
-        prestige.territory = territory[empire.id];
-        // Экономика и наука КОПЯТСЯ: это счёт за весь сезон, а не срез.
-        // Иначе выигрывал бы тот, кто удачно потратился к последней минуте.
+        // ВСЕ ПЯТЬ ТРЕКОВ КОПЯТСЯ: это счёт за весь сезон, а не срез
+        // на последней секунде. Иначе выигрывал бы тот, кто удачно
+        // схватил карту в финале, а не тот, кто держал её два месяца.
+        prestige.territory += territory[empire.id];
         prestige.economy += uint32_t((empire.minerals + empire.alloys).floorToInt() / 1000);
         prestige.science += uint32_t(empire.research.floorToInt() / 500);
-        prestige.diplomacy = uint32_t(empire.influence.floorToInt() / 10);
+        prestige.diplomacy += uint32_t(empire.influence.floorToInt() / 10);
     });
     (void)season;
 }

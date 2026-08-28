@@ -1,5 +1,7 @@
 #include "doctest.h"
 
+#include "game_time.h"
+
 #include <cmath>
 
 #include "pw/sim/control.h"
@@ -9,6 +11,7 @@
 
 using namespace pw;
 using namespace pw::sim;
+using namespace pw::test;
 
 namespace {
 
@@ -82,16 +85,12 @@ struct Economy {
         return e;
     }
 
-    void run(int64_t ticks) {
-        for (int64_t i = 0; i < ticks; ++i) {
-            TickContext context;
-            context.tick = uint64_t(i);
-            systemEconomy(world, context);
-        }
+    /// Прогнать столько ИГРОВЫХ СЕКУНД — см. game_time.h.
+    void run(int64_t seconds) {
+        const int64_t ticks = testTicks(seconds);
+        for (int64_t i = 0; i < ticks; ++i) systemEconomy(world, testTick(i));
     }
 };
-
-constexpr int64_t kSecond = kTicksPerSecond;
 
 /// Сравнение с допуском: накопление за тысячи тиков копит и ошибку округления.
 bool near(fx value, double expected, double tolerance = 0.5) {
@@ -109,9 +108,42 @@ TEST_CASE("экономика: шахта даёт минералы") {
     world.own(1);
     world.colonise(1, PlanetClass::Desert, Specialization::None, {Building::Mine});
 
-    world.run(100 * kSecond);
-    // 0.2 минерала в секунду на сто секунд.
-    CHECK(near(world.empire().minerals, 20.0));
+    world.run(1 * kHour);
+    // Ожидание считается ИЗ КОНСТАНТЫ, а не записано числом. Записанное
+    // число ломается при каждой перенастройке баланса и чинится подгонкой,
+    // то есть перестаёт что-либо проверять; связь «шахта выдаёт свою
+    // объявленную выработку» обязана держаться при любом балансе.
+    CHECK(near(world.empire().minerals, kOutputMine.toDouble() * kHour, 1.0));
+}
+
+TEST_CASE("темп: час игры — заметная величина, а не минута") {
+    // ПРОВЕРКА МАСШТАБА ВРЕМЕНИ, а не механики. Она сторожит обещание
+    // «единица действия — час» (pw/sim/schedule.h, «ЧАСЫ ИГРЫ») со стороны
+    // экономики: шахта окупает свою цену за часы, а не за минуты.
+    //
+    // Без такой проверки числа тихо уезжают обратно к масштабу, удобному
+    // для короткого прогона, — ровно это однажды и случилось.
+    const double perHour = kOutputMine.toDouble() * kHour;
+    const double payback = double(buildingCost(Building::Mine)) / perHour;
+    CAPTURE(perHour);
+    CAPTURE(payback);
+    CHECK(payback > 0.5);   // окупается дольше получаса
+    CHECK(payback < 6.0);   // но за один игровой вечер
+
+    // Стройка тоже мерится часами, а не минутами: шахта укладывается
+    // в один сеанс игры, верфь его переживает.
+    CHECK(buildSeconds(Building::Mine) > 10 * kMinute);
+    CHECK(buildSeconds(Building::Mine) < 1 * kHour);
+    CHECK(buildSeconds(Building::Shipyard) > 1 * kHour);
+}
+
+TEST_CASE("цепочка: завод просит ровно вдвое против выдачи") {
+    // Одна опечатка в дроби превращает цепочку в бесплатный сплав, и никакой
+    // прогон этого не заметит: сплавы просто копятся чуть быстрее. Сейчас
+    // расход выражен через выработку и разойтись не может — проверка стоит
+    // на случай, если кто-то вернёт отдельную дробь.
+    CHECK(kFoundryMineralCost == kOutputFoundry * fx::fromInt(2));
+    CHECK(kFoundryMineralCost > kOutputFoundry);
 }
 
 TEST_CASE("экономика: ничья планета не даёт ничего") {
@@ -120,7 +152,7 @@ TEST_CASE("экономика: ничья планета не даёт ниче�
     world.colonise(1, PlanetClass::Desert, Specialization::None,
                    {Building::Mine, Building::Mine, Building::Mine}, kNoEmpire);
 
-    world.run(100 * kSecond);
+    world.run(1 * kHour);
     CHECK(world.empire().minerals == fx::zero());
 }
 
@@ -129,14 +161,14 @@ TEST_CASE("экономика: потеря системы отнимает её
     world.own(1);
     world.colonise(1, PlanetClass::Desert, Specialization::None, {Building::Mine});
 
-    world.run(50 * kSecond);
+    world.run(30 * kMinute);
     const fx afterFifty = world.empire().minerals;
     CHECK(afterFifty > fx::zero());
 
     // Систему захватили. Планеты уходят вместе с ней — это и делает захват
     // значимым событием, а не косметикой на карте.
     world.own(1, /*who=*/7);
-    world.run(50 * kSecond);
+    world.run(30 * kMinute);
     CHECK(world.empire().minerals == afterFifty);
 }
 
@@ -145,7 +177,7 @@ TEST_CASE("экономика: специализация и класс план
         Economy world;
         world.own(1);
         world.colonise(1, klass, spec, {Building::Mine});
-        world.run(100 * kSecond);
+        world.run(1 * kHour);
         return world.empire().minerals.toDouble();
     };
 
@@ -176,11 +208,12 @@ TEST_CASE("цепочка: завод плавит сплавы из минер�
     world.colonise(1, PlanetClass::Desert, Specialization::None,
                    {Building::Foundry, Building::Foundry});
 
-    world.run(100 * kSecond);
+    world.run(1 * kHour);
 
-    // Два завода по 0.2 сплава в секунду.
-    CHECK(near(world.empire().alloys, 40.0, 1.0));
-    // Четыре шахты дали 80 минералов, два завода съели 80 — в остатке около нуля.
+    // Два завода по своей объявленной выработке за час.
+    CHECK(near(world.empire().alloys, 2.0 * kOutputFoundry.toDouble() * kHour, 2.0));
+    // Четыре шахты добыли ровно столько, сколько два завода съели, —
+    // в остатке около нуля. Это и есть цепочка: сырьё ходит по кругу.
     CHECK(world.empire().minerals < fx::fromInt(5));
 }
 
@@ -192,7 +225,7 @@ TEST_CASE("цепочка: без минералов завод встаёт") {
     world.colonise(1, PlanetClass::Desert, Specialization::None,
                    {Building::Foundry, Building::Foundry});
 
-    world.run(100 * kSecond);
+    world.run(1 * kHour);
     CHECK(world.empire().alloys == fx::zero());
     CHECK(world.ledger.at(0).foundryIdle > fx::zero());
 }
@@ -205,13 +238,15 @@ TEST_CASE("цепочка: нехватки хватает на частичну
     world.colonise(1, PlanetClass::Desert, Specialization::None,
                    {Building::Foundry, Building::Foundry});
 
-    world.run(200 * kSecond);
+    world.run(2 * kHour);
 
-    // Один завод обеспечен наполовину... точнее, шахта даёт 0.2, два завода
-    // просят 0.8 — работает четверть мощности.
+    // Одна шахта против двух заводов: сырья хватает на четверть мощности,
+    // потому что завод просит вдвое против того, что выдаёт.
+    const double full = 2.0 * kOutputFoundry.toDouble() * 2 * kHour;
     const double alloys = world.empire().alloys.toDouble();
-    CHECK(alloys > 5.0);
-    CHECK(alloys < 30.0);
+    CAPTURE(alloys);
+    CHECK(alloys > full * 0.15);
+    CHECK(alloys < full * 0.40);
     CHECK(world.ledger.at(0).foundryIdle > fx::zero());
 }
 
@@ -226,15 +261,16 @@ TEST_CASE("содержание: здания и флот едят энерги�
     world.colonise(1, PlanetClass::Desert, Specialization::None,
                    {Building::Mine, Building::Mine, Building::Mine, Building::Mine});
 
-    world.run(100 * kSecond);
+    world.run(1 * kHour);
     const fx afterBuildings = world.empire().energy;
-    // Четыре здания по 0.05 энергии в секунду — минус двадцать за сто секунд.
-    CHECK(near(afterBuildings, 980.0));
+    // Четыре здания по своему содержанию за час.
+    const double spent = 4.0 * kUpkeepBuilding.toDouble() * kHour;
+    CHECK(near(afterBuildings, 1000.0 - spent, 1.0));
 
     // Флот в двадцать корветов добавляет расход.
     world.garrison(1, makeFleet({{Hull::Corvette, 20}}));
-    world.run(100 * kSecond);
-    CHECK(world.empire().energy < afterBuildings - fx::fromInt(20));
+    world.run(1 * kHour);
+    CHECK(world.empire().energy < afterBuildings - fx::fromInt(int64_t(spent)));
 }
 
 TEST_CASE("содержание: электростанция перекрывает расход") {
@@ -243,10 +279,13 @@ TEST_CASE("содержание: электростанция перекрыва
     world.colonise(1, PlanetClass::GasGiant, Specialization::None,
                    {Building::PowerPlant, Building::Mine});
 
-    world.run(100 * kSecond);
-    // Станция на газовом гиганте даёт 0.5 * 1.25 = 0.625, два здания просят
-    // 0.1 — империя в плюсе.
-    CHECK(world.empire().energy > fx::fromInt(40));
+    world.run(1 * kHour);
+    // Станция на газовом гиганте даёт свою выработку с прибавкой за класс,
+    // два здания просят своё содержание — империя заметно в плюсе.
+    const double net = (kOutputPower.toDouble() * kClassAffinityBonus.toDouble()
+                        - 2.0 * kUpkeepBuilding.toDouble()) * kHour;
+    CAPTURE(net);
+    CHECK(world.empire().energy > fx::fromInt(int64_t(net * 0.8)));
 }
 
 TEST_CASE("содержание: ресурсы не уходят в минус") {
@@ -256,7 +295,7 @@ TEST_CASE("содержание: ресурсы не уходят в минус"
     world.colonise(1, PlanetClass::Desert, Specialization::None, {Building::Fortress});
     world.garrison(1, makeFleet({{Hull::Destroyer, 50}}));
 
-    world.run(500 * kSecond);
+    world.run(24 * kHour);
     // Дефицит — это сигнал, а не долг: отключения появятся отдельной
     // механикой, но отрицательного склада быть не должно.
     CHECK(world.empire().energy == fx::zero());
@@ -322,8 +361,8 @@ TEST_CASE("экономика: воспроизводится тик в тик")
     }
     REQUIRE(first.world.hash() == second.world.hash());
 
-    first.run(3000 * kSecond);
-    second.run(3000 * kSecond);
+    first.run(1 * kHour);
+    second.run(1 * kHour);
 
     CHECK(first.world.hash() == second.world.hash());
     // И экономика действительно работала, а не стояла.
@@ -358,7 +397,7 @@ double fleetUpkeepPerSecond(uint32_t planetCount, uint32_t depots) {
     // Читаем ПОТОК из учётной книги, а не убыль казны: казна обрезается
     // по нулю, а стартовая энергия у империи как раз ноль — расход был бы
     // не виден вовсе. Ровно на этом первая версия теста и показала «0 > 0».
-    world.run(1);
+    world.run(1 * kSecond);
     return -world.ledger.at(0).energy.toDouble();
 }
 
@@ -419,8 +458,8 @@ TEST_CASE("хабитат: добавляет слоты, и застройка 
 
     // Пять шахт работают, а не три: слоты за пределом собственного лимита
     // планеты открыл хабитат.
-    world.run(kSecond * 100);
-    const double perMine = kOutputMine.toDouble() * 100.0;
+    world.run(1 * kHour);
+    const double perMine = kOutputMine.toDouble() * kHour;
     CHECK(world.empire().minerals.toDouble() > perMine * 4.5);
 }
 
@@ -433,8 +472,8 @@ TEST_CASE("хабитат: без него лишние слоты не рабо
          Building::Mine, Building::Mine});
     world.world.get<Planet>(planet)->slots = 4;
 
-    world.run(kSecond * 100);
+    world.run(1 * kHour);
     // Ровно четыре шахты, а не шесть.
-    const double perMine = kOutputMine.toDouble() * 100.0;
+    const double perMine = kOutputMine.toDouble() * kHour;
     CHECK(world.empire().minerals.toDouble() < perMine * 4.5);
 }

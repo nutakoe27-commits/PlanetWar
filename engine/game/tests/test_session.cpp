@@ -15,25 +15,53 @@ using namespace pw::game;
 
 namespace {
 
+/// Ускорение мира в тестах сессии.
+///
+/// ЗАЧЕМ ОНО ТАКОЕ БОЛЬШОЕ. Единица действия в этой игре — ЧАС: перелёт
+/// по линии занимает четверть часа, верфь строится полтора, осада идёт
+/// четырнадцать (pw/sim/schedule.h, «ЧАСЫ ИГРЫ»). Сеть при этом живёт
+/// в настоящих миллисекундах, и прокручивать час игры по сто миллисекунд
+/// на тик значит гонять миллионы шагов провода ради одного CHECK.
+///
+/// Ускорение сервера — ШТАТНАЯ ВОЗМОЖНОСТЬ, а не тестовый костыль. Оно
+/// заставляет симуляцию тикать чаще в реальном времени и не трогает
+/// игровых длительностей: верфь как строилась полтора игровых часа, так
+/// и строится. Поэтому здесь проверяется ровно та игра, в которую играют,
+/// просто прокрученная быстрее.
+///
+/// Со сжатием времени (SimTempo) это не имеет ничего общего: сжатие меняет
+/// сами длительности и живому серверу недоступно.
+constexpr uint32_t kTestSpeed = 1000;
+
+/// Сколько игровых секунд строится здание. Из тех же констант, что в игре:
+/// записанное числом ожидание пришлось бы подгонять при каждой
+/// перенастройке баланса, то есть оно перестало бы что-то проверять.
+int64_t buildSeconds(sim::Building building) {
+    return int64_t(sim::buildingCost(building)) * sim::kBuildSecondsPerMineral;
+}
+
 /// Сессия: сервер, клиенты и провод между ними — целиком в памяти.
 ///
 /// Настоящие сокеты здесь не нужны и вредны. Они не умеют терять пакеты
 /// по команде, а именно потери и надо проверять; и они заставляют ждать
-/// настоящее время, а здесь полчаса игры прокручиваются за секунду.
+/// настоящее время, а здесь сутки игры прокручиваются за секунду.
 class Session {
 public:
     Session(uint32_t systems, uint32_t lossPercent = 0, uint32_t maxDelay = 0,
-            uint64_t seed = 0x5E5510, uint32_t speed = 1)
-        : rng_(seed, /*stream=*/41), loss_(lossPercent), delay_(maxDelay) {
+            uint64_t seed = 0x5E5510, uint32_t speed = kTestSpeed,
+            sim::SeasonConfig season = sim::SeasonConfig{})
+        : rng_(seed, /*stream=*/41), loss_(lossPercent), delay_(maxDelay),
+          speed_(speed == 0 ? 1u : speed) {
         ServerConfig config;
         config.galaxy.seed = 0xC0FFEE;
         config.galaxy.systemCount = systems;
         config.maxPlayers = 8;
-        // Ускорение мира. Стройки и осады идут минутами, и гонять их
-        // в реальном темпе значит держать в наборе тесты по полминуты
-        // каждый. Сеть при этом остаётся настоящей: пакеты ходят с той же
-        // частотой, ускоряется только симуляция.
-        config.speed = speed;
+        config.speed = speed_;
+        // Сезон — по умолчанию настоящий, одиннадцатинедельный. Тест,
+        // которому нужен открытый PvP, обязан СКАЗАТЬ об этом вслух:
+        // раньше стадия Расширения длилась двадцать минут, тесты осады
+        // проскакивали её случайно и молча зависели от этой случайности.
+        config.season = season;
         server.start(config);
     }
 
@@ -45,10 +73,19 @@ public:
         return clients.size() - 1;
     }
 
-    /// Прокрутить заданное число миллисекунд.
+    /// Прокрутить заданное число миллисекунд РЕАЛЬНОГО времени. Ими
+    /// меряется сеть: рукопожатие, снапшоты, таймауты.
     void run(int64_t milliseconds) {
         const int64_t until = now + milliseconds;
         while (now < until) step();
+    }
+
+    /// Прокрутить заданное число ИГРОВЫХ секунд. Ими меряется мир: стройки,
+    /// перелёты, осады. Перевод идёт через ускорение сервера, поэтому тест
+    /// пишет «полтора часа игры», а не «сколько-то миллисекунд провода».
+    void runGame(int64_t gameSeconds) {
+        const int64_t milliseconds = gameSeconds * 1000 / int64_t(speed_);
+        run(milliseconds > 1 ? milliseconds : 1);
     }
 
     Server server;
@@ -111,6 +148,7 @@ private:
     Rng rng_;
     uint32_t loss_;
     uint32_t delay_;
+    uint32_t speed_;
     std::vector<Packet> wire_;
 };
 
@@ -210,8 +248,8 @@ TEST_CASE("сессия: флот идёт туда, куда приказано
     // Цикл не знает ни скоростей, ни длин линий: он ждёт события,
     // а не отсчитывает время. Такой тест переживёт и следующую правку
     // баланса.
-    for (int round = 0; round < 60; ++round) {
-        session.run(10000);
+    for (int round = 0; round < 48; ++round) {
+        session.runGame(30 * 60);
         const FleetView& moving = client.view().fleets.at(fleet);
         if (moving.system == target && moving.nextSystem == target) break;
     }
@@ -284,15 +322,20 @@ bool colonizeFirstNeutral(Session& session, Client& client, uint32_t fleet,
                           uint32_t target) {
     if (!client.orderMove(fleet, target)) return false;
 
-    // Ждём прибытия. Колонизатор медленный, поэтому срок щедрый.
-    for (int round = 0; round < 120; ++round) {
-        session.run(5000);
+    // Ждём прибытия. Колонизатор медленный — линия занимает у него минут
+    // двадцать, — поэтому срок щедрый: сутки игры с запасом.
+    for (int round = 0; round < 48; ++round) {
+        session.runGame(30 * 60);
         const auto standing = client.fleetsAt(target);
         if (standing.empty()) continue;
 
         for (const auto& planet : client.planetsAt(target)) {
             if (planet.owner != 0xFF) continue;
             if (!client.orderColonize(standing.front(), planet.id)) return false;
+            // Ждём не игрового времени, а СЕТИ: приказ и подтверждающий
+            // снапшот идут миллисекундами, и на канале с потерями им нужно
+            // несколько попыток. Игровое время тут ни при чём — высадка
+            // мгновенна.
             session.run(3000);
             return true;
         }
@@ -347,11 +390,11 @@ TEST_CASE("сессия: игрок видит планеты своей сто�
     }
 }
 
-TEST_CASE("сессия: шахта строится минуты, и только потом даёт минералы") {
+TEST_CASE("сессия: шахта строится не мгновенно, и только потом даёт минералы") {
     // Полный игровой цикл: клиент видит планету, отдаёт приказ, сервер
     // проверяет права, ВЕДЁТ СТРОЙКУ, экономика считает, снапшот привозит
     // и ход стройки, и готовое здание, и выросшие ресурсы.
-    Session session(100, 0, 0, 0x5E5510, /*speed=*/8);
+    Session session(100);
     session.addClient("Михаил");
     session.run(2000);
 
@@ -361,7 +404,7 @@ TEST_CASE("сессия: шахта строится минуты, и тольк
     const uint32_t planet = planets.front().id;
 
     REQUIRE(client.orderBuildBuilding(planet, 0, sim::Building::Mine));
-    session.run(1000);
+    session.runGame(60);
 
     // Стройка видна игроку сразу — а здания ещё нет.
     {
@@ -374,8 +417,9 @@ TEST_CASE("сессия: шахта строится минуты, и тольк
         CHECK(during.front().freeSlots() == during.front().slots - 1);
     }
 
-    // Шахта стоит 60 минералов при темпе 0.5 в секунду — две минуты игры.
-    session.run(20000);   // 160 секунд игры при ускорении восемь
+    // Срок берётся из цены той же формулой, что и в игре: около двадцати
+    // пяти минут игрового времени, то есть меньше одного сеанса.
+    session.runGame(buildSeconds(sim::Building::Mine) + 2 * 60);
 
     const auto after = client.planetsAt(client.capital());
     REQUIRE_FALSE(after.empty());
@@ -384,7 +428,7 @@ TEST_CASE("сессия: шахта строится минуты, и тольк
 
     // И она работает.
     const fx mineralsBefore = client.view().empire.minerals;
-    session.run(5000);
+    session.runGame(30 * 60);
     CHECK(client.view().empire.minerals > mineralsBefore);
 }
 
@@ -394,7 +438,7 @@ TEST_CASE("сессия: цепочка шахта-литейная даёт с�
     //
     // Три заказа подряд — это ещё и проверка очереди: без неё второй щелчок
     // отменял бы первый, и игрок получил бы одну литейную вместо цепочки.
-    Session session(100, 0, 0, 0x5E5510, /*speed=*/16);
+    Session session(100);
     session.addClient("Михаил");
     session.run(2000);
 
@@ -406,18 +450,21 @@ TEST_CASE("сессия: цепочка шахта-литейная даёт с�
     REQUIRE(client.orderBuildBuilding(planet, 0, sim::Building::Mine));
     REQUIRE(client.orderBuildBuilding(planet, 1, sim::Building::Mine));
     REQUIRE(client.orderBuildBuilding(planet, 2, sim::Building::Foundry));
-    session.run(1000);
+    session.runGame(60);
     CHECK(client.planetsAt(client.capital()).front().buildQueued == 2);
 
-    // 60 + 60 + 90 минералов при темпе 0.5 в секунду — семь минут игры.
-    session.run(35000);
+    // Три здания подряд плюс запас на добычу недостающих минералов:
+    // стартовой казны на всю цепочку не хватает, и это часть проверки.
+    const int64_t chain = buildSeconds(sim::Building::Mine) * 2 +
+                          buildSeconds(sim::Building::Foundry);
+    session.runGame(chain + 2 * 3600);
     const auto after = client.planetsAt(client.capital());
     CHECK(after.front().buildings[0] == uint8_t(sim::Building::Mine));
     CHECK(after.front().buildings[1] == uint8_t(sim::Building::Mine));
     CHECK(after.front().buildings[2] == uint8_t(sim::Building::Foundry));
 
     const fx alloysBefore = client.view().empire.alloys;
-    session.run(10000);
+    session.runGame(3600);
     CHECK(client.view().empire.alloys > alloysBefore);
 }
 
@@ -547,7 +594,7 @@ TEST_CASE("уведомления: слияние флотов не считае
     // слиянии: два отряда становятся одним, количество падает, а не
     // потеряно ни одного корабля. Тест обязан это ловить, поэтому
     // проверяет, что слияние действительно произошло.
-    Session session(120, 0, 0, 0x5E5510, /*speed=*/16);
+    Session session(80);
     session.addClient("Михаил");
     session.run(2000);
 
@@ -583,11 +630,11 @@ TEST_CASE("уведомления: слияние флотов не считае
     REQUIRE(client.orderBuildBuilding(planet, 2, sim::Building::Mine));
     REQUIRE(client.orderBuildBuilding(planet, 3, sim::Building::Foundry));
 
-    // Верфь строится семь минут игры, вся цепочка — почти двадцать.
-    // Ждём, пока она действительно встанет: заказ корабля в систему без
-    // верфи не выполняется вовсе.
-    for (int round = 0; round < 40 && !client.planetsAt(client.capital()).empty(); ++round) {
-        session.run(5000);
+    // Верфь строится почти полтора часа игры, вся цепочка — часов пять
+    // вместе с добычей недостающих минералов. Ждём, пока она действительно
+    // встанет: заказ корабля в систему без верфи не выполняется вовсе.
+    for (int round = 0; round < 24 && !client.planetsAt(client.capital()).empty(); ++round) {
+        session.runGame(30 * 60);
         const auto state = client.planetsAt(client.capital());
         if (state.front().buildings[3] == uint8_t(sim::Building::Foundry)) break;
     }
@@ -596,8 +643,10 @@ TEST_CASE("уведомления: слияние флотов не считае
 
     REQUIRE(client.orderBuildShip(client.capital(), sim::Hull::Corvette, 6));
 
+    // Одна верфь осваивает свои сплавы часами: шесть корветов — это
+    // полсуток игры. Тот самый масштаб, ради которого всё и делалось.
     const uint32_t tonnageBefore = totalTonnage();
-    for (int round = 0; round < 60; ++round) session.run(10000);
+    for (int round = 0; round < 12; ++round) session.runGame(3600);
 
     // Слияние наблюдаем по РЕЗУЛЬТАТУ, а не по мгновенному состоянию:
     // построенный корабль сливается в следующем же тике, и поймать
@@ -660,12 +709,12 @@ TEST_CASE("уведомления: о бое узнают обе стороны,
     bool firstHeard = false, secondHeard = false;
     NoticeKind firstKind = NoticeKind::None, secondKind = NoticeKind::None;
 
-    // Двести кругов, а не шестьдесят: в стартовом флоте теперь есть
+    // Ждём ПОЛСУТОК ИГРЫ получасовыми шагами. В стартовом флоте есть
     // колонизатор, скорость флота задаёт самый медленный корабль, и путь
-    // до поля боя стал вдвое длиннее по времени. Цикл всё равно выходит
-    // по СОБЫТИЮ, а не по счётчику, — предел лишь страхует от зависания.
-    for (int round = 0; round < 200 && !(firstHeard && secondHeard); ++round) {
-        session.run(20000);
+    // до поля боя занимает часы. Цикл всё равно выходит по СОБЫТИЮ,
+    // а не по счётчику, — предел лишь страхует от зависания.
+    for (int round = 0; round < 24 && !(firstHeard && secondHeard); ++round) {
+        session.runGame(30 * 60);
         for (const ClientEvent& event : first.takeEvents()) {
             if (!isBattle(event.kind)) continue;
             firstHeard = true;
@@ -717,7 +766,7 @@ TEST_CASE("приказ: заказ корабля без верфи отвер�
 }
 
 TEST_CASE("приказ: с верфью заказ принимается") {
-    Session session(80, 0, 0, 0x5E5510, /*speed=*/16);
+    Session session(80);
     session.addClient("Михаил");
     session.run(2000);
 
@@ -726,15 +775,15 @@ TEST_CASE("приказ: с верфью заказ принимается") {
     REQUIRE_FALSE(planets.empty());
     REQUIRE(client.orderBuildBuilding(planets.front().id, 0, sim::Building::Shipyard));
 
-    // Верфь в 200 минералов при темпе 0.5 в секунду — почти семь минут игры.
-    // Раньше она появлялась по щелчку, и тест этого не замечал.
-    session.run(30000);
+    // Верфь в 200 минералов — почти полтора часа игры. Раньше она
+    // появлялась по щелчку, и тест этого не замечал.
+    session.runGame(buildSeconds(sim::Building::Shipyard) + 5 * 60);
     REQUIRE(client.planetsAt(client.capital()).front().buildings[0] ==
             uint8_t(sim::Building::Shipyard));
     client.takeEvents();
 
     REQUIRE(client.orderBuildShip(client.capital(), sim::Hull::Corvette, 1));
-    session.run(3000);
+    session.runGame(5 * 60);
 
     for (const ClientEvent& event : client.takeEvents()) {
         CHECK(event.kind != NoticeKind::OrderRejected);
@@ -746,7 +795,13 @@ TEST_CASE("уведомления: об осаде своей планеты и�
     // союзники видят осаду и приходят. Без этой новости обещание пустое —
     // узнать об осаде можно было бы, только глядя в нужную часть карты
     // в нужную минуту.
-    Session session(60, 0, 0, 0x5E5510, /*speed=*/16);
+    // Сезон открыт с первой секунды: на стадии Расширения чужие дома
+    // неприкосновенны, и осады бы просто не было. Проверяется уведомление
+    // об осаде, а убежище Расширения — отдельным тестом в pw_sim.
+    sim::SeasonConfig openSeason;
+    openSeason.expansionSeconds = 1;
+
+    Session session(60, 0, 0, 0x5E5510, kTestSpeed, openSeason);
     session.addClient("защитник");
     session.addClient("нападающий");
     session.run(3000);
@@ -767,8 +822,8 @@ TEST_CASE("уведомления: об осаде своей планеты и�
     REQUIRE(attacker.orderMove(fleet, defender.capital()));
 
     bool sieged = false;
-    for (int round = 0; round < 60 && !sieged; ++round) {
-        session.run(10000);
+    for (int round = 0; round < 24 && !sieged; ++round) {
+        session.runGame(30 * 60);
         for (const ClientEvent& event : defender.takeEvents()) {
             if (event.kind == NoticeKind::PlanetSieged) sieged = true;
         }
@@ -777,7 +832,7 @@ TEST_CASE("уведомления: об осаде своей планеты и�
 }
 
 TEST_CASE("уведомления: о взятой планете узнаёт тот, кто её взял") {
-    Session session(80, 0, 0, 0x5E5510, /*speed=*/8);
+    Session session(80);
     session.addClient("Михаил");
     session.run(3000);
 

@@ -33,11 +33,37 @@ std::string grouped(int64_t value) {
 }
 
 /// Срок в человеческом виде.
+/// Срок словами. Две единицы, не больше: «12 сут 07 ч» читается с одного
+/// взгляда, «12 суток 7 часов 43 минуты 9 секунд» — нет.
+///
+/// ВЕРХНИЕ СТУПЕНИ ПОЯВИЛИСЬ ВМЕСТЕ С НАСТОЯЩИМ СЕЗОНОМ. Пока сезон длился
+/// два часа, хватало часов и минут. Одиннадцатинедельный сезон в тех же
+/// единицах показывал «ещё 1848 ч» — число, из которого человек ничего
+/// не понимает, кроме того, что оно большое.
 std::string duration(int64_t seconds) {
-    if (seconds < 60) return number(seconds) + " с";
-    const int64_t minutes = seconds / 60;
-    if (minutes < 60) return number(minutes) + " мин";
-    return number(minutes / 60) + " ч " + number(minutes % 60) + " мин";
+    if (seconds < 0) seconds = 0;
+    constexpr int64_t kMinute = 60;
+    constexpr int64_t kHour = 60 * kMinute;
+    constexpr int64_t kDay = 24 * kHour;
+    constexpr int64_t kWeek = 7 * kDay;
+
+    if (seconds >= 2 * kWeek) {
+        const int64_t weeks = seconds / kWeek;
+        const int64_t days = (seconds % kWeek) / kDay;
+        return number(weeks) + " нед " + number(days) + " сут";
+    }
+    if (seconds >= kDay) {
+        const int64_t days = seconds / kDay;
+        const int64_t hours = (seconds % kDay) / kHour;
+        return number(days) + " сут " + number(hours) + " ч";
+    }
+    if (seconds >= kHour) {
+        const int64_t hours = seconds / kHour;
+        const int64_t minutes = (seconds % kHour) / kMinute;
+        return number(hours) + " ч " + number(minutes) + " мин";
+    }
+    if (seconds >= kMinute) return number(seconds / kMinute) + " мин";
+    return number(seconds) + " с";
 }
 
 constexpr uint32_t kNoSystem = 0xFFFFFFFFu;

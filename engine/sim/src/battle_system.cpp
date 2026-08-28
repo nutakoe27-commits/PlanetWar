@@ -206,7 +206,10 @@ void systemBattles(World& world, const TickContext& context) {
     });
 
     for (BattleState* state : states) {
-        if (state != nullptr && state->cooldown > 0) --state->cooldown;
+        if (state != nullptr && state->cooldown > 0) {
+            const uint32_t step = uint32_t(context.tempo);
+            state->cooldown = state->cooldown > step ? state->cooldown - step : 0u;
+        }
     }
 
     size_t index = 0;
@@ -271,7 +274,8 @@ void systemBattles(World& world, const TickContext& context) {
         distribute(world, present, parties[b].first, parties[b].last, result.lossesB);
 
         states[system]->lastRounds = uint16_t(result.rounds);
-        states[system]->cooldown = uint32_t(kBattleIntervalSeconds * kTicksPerSecond);
+        states[system]->cooldown =
+            uint32_t(kBattleIntervalSeconds * kTicksPerSecond);
 
         // Исход запоминаем здесь же: сервер прочитает его и скажет игрокам.
         // И при ничьей запоминаем УЧАСТНИКОВ, а не одну метку: сервер

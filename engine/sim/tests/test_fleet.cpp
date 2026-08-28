@@ -1,5 +1,7 @@
 #include "doctest.h"
 
+#include "game_time.h"
+
 #include <algorithm>
 #include <queue>
 #include <vector>
@@ -9,6 +11,7 @@
 
 using namespace pw;
 using namespace pw::sim;
+using namespace pw::test;
 
 namespace {
 
@@ -38,12 +41,12 @@ struct Space {
     }
 
     /// Прогнать N тиков системой движения.
-    void run(uint64_t ticks) {
-        for (uint64_t i = 0; i < ticks; ++i) {
-            TickContext context;
-            context.tick = i;
-            systemFleetMovement(world, context);
-        }
+    /// Прогнать столько ИГРОВЫХ СЕКУНД. Не тиков: перелёт между системами
+    /// занимает часы, и отсчитывать его тиками — сотни тысяч итераций
+    /// на один CHECK. Подробности — в game_time.h.
+    void run(int64_t seconds) {
+        const int64_t ticks = testTicks(seconds);
+        for (int64_t i = 0; i < ticks; ++i) systemFleetMovement(world, testTick(i));
     }
 };
 
@@ -194,8 +197,9 @@ TEST_CASE("движение: флот доходит до цели") {
     const Entity fleet = space.spawnFleet(0, makeFleet({{Hull::Corvette, 4}}));
     space.world.get<MoveOrder>(fleet)->target = target;
 
-    // С запасом: 200 систем, диаметр десятки прыжков, корветы быстрые.
-    space.run(600000);
+    // С запасом: 200 систем, диаметр десятки прыжков. Корвет пересекает
+    // галактику за три с половиной часа, сутки хватит с избытком.
+    space.run(24 * kHour);
 
     const FleetLocation* location = space.world.get<FleetLocation>(fleet);
     REQUIRE(location != nullptr);
@@ -209,22 +213,21 @@ TEST_CASE("движение: медленный флот идёт дольше �
     Space space;
     const uint32_t target = 90;
 
-    auto ticksToArrive = [&](const Fleet& composition) {
+    auto secondsToArrive = [&](const Fleet& composition) {
         const Entity fleet = space.spawnFleet(0, composition);
         space.world.get<MoveOrder>(fleet)->target = target;
-        uint64_t ticks = 0;
-        while (ticks < 900000) {
-            TickContext context;
-            context.tick = ticks;
-            systemFleetMovement(space.world, context);
-            ++ticks;
+        int64_t step = 0;
+        const int64_t limit = testTicks(48 * kHour);
+        while (step < limit) {
+            systemFleetMovement(space.world, testTick(step));
+            ++step;
             if (space.world.get<FleetLocation>(fleet)->system == target) break;
         }
-        return ticks;
+        return step;
     };
 
-    const uint64_t fast = ticksToArrive(makeFleet({{Hull::Corvette, 5}}));
-    const uint64_t slow = ticksToArrive(makeFleet({{Hull::Corvette, 5}, {Hull::Battleship, 1}}));
+    const int64_t fast = secondsToArrive(makeFleet({{Hull::Corvette, 5}}));
+    const int64_t slow = secondsToArrive(makeFleet({{Hull::Corvette, 5}, {Hull::Battleship, 1}}));
     CHECK(slow > fast);
     // Отношение времён обязано примерно совпасть с отношением скоростей.
     const double ratio = double(slow) / double(fast);
@@ -243,10 +246,9 @@ TEST_CASE("движение: флот проходит через промежу
     space.world.get<MoveOrder>(fleet)->target = target;
 
     std::vector<uint32_t> visited;
-    for (uint64_t tick = 0; tick < 600000; ++tick) {
-        TickContext context;
-        context.tick = tick;
-        systemFleetMovement(space.world, context);
+    const int64_t limit = testTicks(24 * kHour);
+    for (int64_t step = 0; step < limit; ++step) {
+        systemFleetMovement(space.world, testTick(step));
 
         const FleetLocation* location = space.world.get<FleetLocation>(fleet);
         if (visited.empty() || visited.back() != location->system) {
@@ -269,7 +271,7 @@ TEST_CASE("движение: недостижимая цель снимает п
     const Entity fleet = space.spawnFleet(0, makeFleet({{Hull::Corvette, 2}}));
     space.world.get<MoveOrder>(fleet)->target = 99999;  // такой системы нет
 
-    space.run(5);
+    space.run(5 * kSecond);
     // Приказ снят, а не висит молча: иначе игрок не поймёт, почему флот стоит.
     CHECK(space.world.get<MoveOrder>(fleet)->target == kNoSystem);
     CHECK(space.world.get<FleetLocation>(fleet)->system == 0u);
@@ -280,7 +282,7 @@ TEST_CASE("движение: пустой флот никуда не идёт") 
     const Entity fleet = space.spawnFleet(0, Fleet{});
     space.world.get<MoveOrder>(fleet)->target = 50;
 
-    space.run(1000);
+    space.run(1 * kHour);
     CHECK(space.world.get<FleetLocation>(fleet)->system == 0u);
 }
 
@@ -313,10 +315,10 @@ TEST_CASE("движение: воспроизводится тик в тик") {
     }
     REQUIRE(first.world.hash() == second.world.hash());
 
-    first.run(20000);
-    second.run(20000);
+    first.run(6 * kHour);
+    second.run(6 * kHour);
 
-    // Сорок флотов, три тысячи тиков, поиск пути на каждом прибытии —
+    // Сорок флотов, шесть игровых часов, поиск пути на каждом прибытии —
     // и ни одного расхождения.
     CHECK(first.world.hash() == second.world.hash());
 }

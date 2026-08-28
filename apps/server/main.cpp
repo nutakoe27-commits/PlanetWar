@@ -43,6 +43,7 @@ void printUsage() {
         "  --seed <n>       сид сезона\n"
         "  --players <n>    сколько игроков принимать (по умолчанию 8)\n"
         "  --report <сек>   как часто печатать состояние (0 — не печатать)\n"
+        "  --weeks <n>      длина сезона в неделях (по умолчанию 11)\n"
         "  --speed <n>      во сколько раз ускорить игровое время\n"
         "                   (для оценки и отладки; сезон рассчитан на 1)\n");
 }
@@ -56,6 +57,7 @@ int main(int argc, char** argv) {
     config.galaxy.seed = 0x50414E4554574152ull;
     config.maxPlayers = 8;
     int64_t reportSeconds = 10;
+    int64_t weeks = 0;   // 0 — оставить умолчание SeasonConfig
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -69,6 +71,8 @@ int main(int argc, char** argv) {
             config.maxPlayers = uint32_t(std::atoi(argv[++i]));
         } else if (arg == "--report" && i + 1 < argc) {
             reportSeconds = std::atoi(argv[++i]);
+        } else if (arg == "--weeks" && i + 1 < argc) {
+            weeks = std::max(1, std::atoi(argv[++i]));
         } else if (arg == "--speed" && i + 1 < argc) {
             config.speed = uint32_t(std::max(1, std::atoi(argv[++i])));
         } else {
@@ -76,6 +80,11 @@ int main(int argc, char** argv) {
             return arg == "--help" ? 0 : 2;
         }
     }
+
+    // Длина сезона задаётся ПЕРЕСЧЁТОМ длительностей, а не целым масштабом:
+    // масштаб врёт на всём, что не делится нацело, и сезон на девять недель
+    // при базе в одиннадцать получил бы масштаб 1 и остался бы прежним.
+    if (weeks > 0) config.season.stretchTo(weeks * 7 * sim::SeasonConfig::kDay);
 
     if (!net::initialiseSockets()) {
         std::fprintf(stderr, "не удалось поднять сетевую подсистему\n");
@@ -100,6 +109,22 @@ int main(int argc, char** argv) {
     std::printf("  галактика   %u систем, сид 0x%llX\n", server.galaxy().systemCount(),
                 static_cast<unsigned long long>(config.galaxy.seed));
     std::printf("  мест        %u\n", config.maxPlayers);
+    {
+        // Длину сезона печатаем всегда: это первое, о чём спрашивает
+        // игрок, и первое, что забывает поставить администратор.
+        const int64_t total = config.season.totalSeconds();
+        std::printf("  сезон       %lld нед (расширение %lld сут, конфликт %lld сут, "
+                    "кризис %lld сут, финал %lld сут)\n",
+                    static_cast<long long>(total / (7 * sim::SeasonConfig::kDay)),
+                    static_cast<long long>(config.season.expansionSeconds /
+                                           sim::SeasonConfig::kDay),
+                    static_cast<long long>(config.season.conflictSeconds /
+                                           sim::SeasonConfig::kDay),
+                    static_cast<long long>(config.season.crisisSeconds /
+                                           sim::SeasonConfig::kDay),
+                    static_cast<long long>(config.season.finalSeconds /
+                                           sim::SeasonConfig::kDay));
+    }
     if (config.speed > 1) {
         std::printf("  скорость    x%u — игровое время ускорено\n", config.speed);
     }

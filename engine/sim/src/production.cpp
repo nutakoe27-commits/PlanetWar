@@ -139,14 +139,14 @@ bool enqueueConstruction(PlanetConstruction& site, uint8_t slot, Building buildi
     return true;
 }
 
-int64_t buildingTicks(Building building) {
+int64_t buildingProgress(Building building) {
     const int64_t cost = int64_t(buildingCost(building));
     return cost * kBuildSecondsPerMineral * kTicksPerSecond;
 }
 
 uint32_t constructionPercent(const PlanetConstruction& site) {
     if (site.slot == PlanetConstruction::kNoSlot || site.paid == 0) return 0;
-    const int64_t total = buildingTicks(Building(site.building));
+    const int64_t total = buildingProgress(Building(site.building));
     if (total <= 0) return 0;
     const int64_t percent = int64_t(site.elapsed) * 100 / total;
     return uint32_t(std::clamp<int64_t>(percent, 0, 100));
@@ -169,7 +169,7 @@ uint32_t empireCount(World& world) {
 
 }  // namespace
 
-void planetConstructionTick(World& world, const TickContext&) {
+void planetConstructionTick(World& world, const TickContext& context) {
     const uint32_t empires = empireCount(world);
     if (empires == 0) return;
 
@@ -221,8 +221,12 @@ void planetConstructionTick(World& world, const TickContext&) {
                 return;
             }
 
-            ++site.elapsed;
-            if (int64_t(site.elapsed) < buildingTicks(Building(site.building))) return;
+            // Прогресс идёт ИГРОВЫМ ВРЕМЕНЕМ, а не тиками: при сжатии
+            // один тик проживает `tempo` десятых долей секунды, и стройка
+            // обязана закончиться в тот же игровой момент, что и на
+            // обычном шаге.
+            site.elapsed += uint32_t(context.tempo);
+            if (int64_t(site.elapsed) < buildingProgress(Building(site.building))) return;
 
             development.buildings[site.slot] = site.building;
             promoteQueued(site);

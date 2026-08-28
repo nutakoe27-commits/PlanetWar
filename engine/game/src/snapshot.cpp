@@ -186,10 +186,6 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
     out.fleets.clear();
     out.planets.clear();
 
-    // Сколько тиков осады нужно, чтобы застолбить ничью планету. По этому
-    // же числу считается процент для полосы прогресса в интерфейсе.
-    constexpr int64_t kClaimTicks = sim::kClaimSeconds * sim::kTicksPerSecond;
-
     // --- владельцы систем (производные) ---
     world.each<sim::StarSystem, sim::Owner>(
         [&](sim::Entity, sim::StarSystem& system, sim::Owner& owner) {
@@ -227,13 +223,15 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
             view.siegeEmpire =
                 uint8_t(siege.besieger == sim::kNoEmpire ? 0xFFu : siege.besieger & 0xFFu);
 
-            // Знаменатель разный: ничью планету занимают за kClaimSeconds,
-            // чужую грызут до нуля обороны. Один процент на оба случая
-            // означал бы полосу, которая для половины ситуаций врёт.
+            // Полоса осады есть только у ЧУЖОЙ планеты: её грызут до нуля
+            // обороны, и процент — это доля сбитой готовности. У ничьей
+            // планеты осады не бывает вовсе — её берут высадкой колониста,
+            // и мгновенно. Раньше здесь был второй знаменатель, считавший
+            // «занятие стоянкой»; механики больше нет, полоса всегда
+            // показывала ноль, и знаменатель пережил её только потому,
+            // что ноль ни на что не похож.
             int64_t progress = 0;
-            if (owner.empire == sim::kNoEmpire) {
-                progress = kClaimTicks > 0 ? int64_t(siege.ticks) * 100 / kClaimTicks : 0;
-            } else if (siege.besieger != sim::kNoEmpire) {
+            if (owner.empire != sim::kNoEmpire && siege.besieger != sim::kNoEmpire) {
                 progress = 100 - int64_t(view.readiness);
             }
             view.siegeProgress = uint8_t(std::clamp<int64_t>(progress, 0, 100));

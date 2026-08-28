@@ -203,7 +203,9 @@ std::vector<uint32_t> pickHomes(const Galaxy& galaxy, size_t players) {
 int main(int argc, char** argv) {
     uint64_t seed = 0x5EA50FF;
     uint32_t systems = 200;
-    int64_t hours = 6;
+    int64_t hours = 0;
+    int64_t weeks = 0;
+    int64_t tempo = 0;   // 0 — подобрать самому
     bool traceBattles = false;
     bool check = false;
     for (int i = 1; i < argc; ++i) {
@@ -211,17 +213,49 @@ int main(int argc, char** argv) {
         if (arg == "--seed" && i + 1 < argc) seed = std::strtoull(argv[++i], nullptr, 0);
         else if (arg == "--systems" && i + 1 < argc) systems = uint32_t(std::atoi(argv[++i]));
         else if (arg == "--hours" && i + 1 < argc) hours = std::atoi(argv[++i]);
+        else if (arg == "--weeks" && i + 1 < argc) weeks = std::atoi(argv[++i]);
+        else if (arg == "--tempo" && i + 1 < argc) tempo = std::atoi(argv[++i]);
         else if (arg == "--battles") traceBattles = true;
         else if (arg == "--check") check = true;
         else {
             std::printf("pw_season — прогон сезона на ботах\n\n"
                         "  --seed <n>     сид сезона\n"
                         "  --systems <n>  размер галактики\n"
-                        "  --hours <n>    сколько игровых часов прогнать\n"
+                        "  --weeks <n>    сколько игровых НЕДЕЛЬ прогнать\n"
+                        "  --hours <n>    то же в часах (не вместе с --weeks)\n"
+                        "  --tempo <n>    сжатие времени: тик за n десятых долей\n"
+                        "                 секунды. Без него подбирается сам\n"
                         "  --battles      печатать потери каждого сражения\n"
                         "  --check        проверять инварианты, код возврата 1 при нарушении\n");
             return arg == "--help" ? 0 : 2;
         }
+    }
+
+    // Сколько ИГРОВОГО времени прогоняем. По умолчанию — весь сезон целиком,
+    // как он стоит в SeasonConfig: прогон обязан проверять ту игру, в которую
+    // играют, а не её уменьшенную модель. Именно подмена умолчания на удобные
+    // для CI два часа однажды и спрятала весь перекос баланса.
+    int64_t seasonSeconds = 0;
+    if (weeks > 0)      seasonSeconds = weeks * 7 * SeasonConfig::kDay;
+    else if (hours > 0) seasonSeconds = hours * 3600;
+    else                seasonSeconds = SeasonConfig().totalSeconds();
+
+    // СЖАТИЕ ВРЕМЕНИ. Одиннадцать недель на обычном шаге — это шестьдесят
+    // шесть миллионов тиков и двадцать минут машинного времени. Проверка,
+    // которую нельзя запустить между двумя правками, не ловит ошибки в тот
+    // час, когда их сделали, — значит её всё равно что нет.
+    //
+    // Поэтому шаг огрубляется ровно настолько, чтобы прогон уложился в
+    // kTargetTicks. Все длительности выражены в игровых секундах и сжимаются
+    // вместе, так что пропорции сохраняются: сжатый прогон видит те же
+    // четыре стадии, те же пятьдесят шесть волн кризиса и те же сроки осады.
+    constexpr int64_t kTargetTicks = 400000;
+    const int64_t plainTicks = seasonSeconds * kTicksPerSecond;
+    if (tempo <= 0) {
+        // Округление ВВЕРХ: вниз даёт сжатие чуть слабее нужного, и прогон
+        // вылезает за отведённый предел ровно тогда, когда он и так велик.
+        tempo = (plainTicks + kTargetTicks - 1) / kTargetTicks;
+        if (tempo < 1) tempo = 1;
     }
 
     World world;
@@ -253,10 +287,11 @@ int main(int argc, char** argv) {
     world.setResource(&commands);
     world.setResource(&presence);
 
-    // Сезон растягивается под длину прогона. Прогон на три часа обязан
+    // Сезон растягивается под длину прогона. Короткий прогон обязан
     // увидеть ВСЕ ЧЕТЫРЕ стадии, иначе Кризис и Финал не проверяются
-    // вовсе — а именно они меняют правила сильнее всего.
-    season.config.stretchTo(int64_t(hours * 3600));
+    // вовсе — а именно они меняют правила сильнее всего. Прогон на полный
+    // сезон получает те же самые числа, что и живой сервер.
+    season.config.stretchTo(seasonSeconds);
     world.setResource(&season);
 
     // --- боты ---
@@ -308,13 +343,25 @@ int main(int argc, char** argv) {
         world.add<FleetArmament>(fleet, bots[i].doctrine);
     }
 
-    std::printf("Сезон на ботах, сид 0x%llX\n", static_cast<unsigned long long>(seed));
-    std::printf("  галактика %u систем, %d игровых часов, %zu империй\n\n",
-                count, int(hours), bots.size());
+    const int64_t totalTicks = std::max<int64_t>(1, plainTicks / tempo);
 
-    const int64_t totalTicks = hours * 3600 * kTicksPerSecond;
-    const int64_t policyEvery = 10 * kTicksPerSecond;   // бот думает раз в 10 секунд
-    const int64_t reportEvery = totalTicks / 6;
+    std::printf("Сезон на ботах, сид 0x%llX\n", static_cast<unsigned long long>(seed));
+    std::printf("  галактика %u систем, %zu империй\n", count, bots.size());
+    std::printf("  игрового времени %lld сут %02lld ч, сжатие ×%lld, тиков %lld\n",
+                static_cast<long long>(seasonSeconds / SeasonConfig::kDay),
+                static_cast<long long>(seasonSeconds % SeasonConfig::kDay / 3600),
+                static_cast<long long>(tempo), static_cast<long long>(totalTicks));
+    std::printf("  стадии: расширение %lld сут, конфликт %lld сут, кризис %lld сут,"
+                " финал %lld сут\n\n",
+                static_cast<long long>(season.config.expansionSeconds / SeasonConfig::kDay),
+                static_cast<long long>(season.config.conflictSeconds / SeasonConfig::kDay),
+                static_cast<long long>(season.config.crisisSeconds / SeasonConfig::kDay),
+                static_cast<long long>(season.config.finalSeconds / SeasonConfig::kDay));
+
+    // Бот думает раз в десять игровых секунд — или раз в тик, если сжатие
+    // грубее этого. Реже думать нельзя: политика и есть то, что проверяется.
+    const int64_t policyEvery = ticksForSeconds(10, tempo);
+    const int64_t reportEvery = std::max<int64_t>(1, totalTicks / 6);
 
     std::vector<uint32_t> owners(count, kNoEmpire);
     std::vector<uint32_t> unclaimed(count, 0);
@@ -331,8 +378,7 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> peakSystems(bots.size(), 0);
 
     for (int64_t tick = 0; tick < totalTicks; ++tick) {
-        TickContext context;
-        context.tick = uint64_t(tick);
+        const TickContext context = TickContext::at(uint64_t(tick), tempo);
 
         // --- политика ботов ---
         if (tick % policyEvery == 0) {
@@ -730,10 +776,14 @@ int main(int argc, char** argv) {
             });
 
 
-            const int64_t minutes = (tick + 1) / (60 * kTicksPerSecond);
-            std::printf("== %lld ч %02lld мин ==   идёт сражений: %u\n",
-                        static_cast<long long>(minutes / 60),
-                        static_cast<long long>(minutes % 60), fighting);
+            // Время печатается в СУТКАХ и часах, а не в часах и минутах:
+            // сезон длиной в одиннадцать недель, показанный как «1848 ч»,
+            // не читается человеком вовсе.
+            const int64_t seconds = context.gameSeconds();
+            std::printf("== %lld сут %02lld ч ==   идёт сражений: %u\n",
+                        static_cast<long long>(seconds / SeasonConfig::kDay),
+                        static_cast<long long>(seconds % SeasonConfig::kDay / 3600),
+                        fighting);
             for (size_t i = 0; i < bots.size(); ++i) {
                 const Empire* empire = world.get<Empire>(bots[i].entity);
                 std::printf("   %-11s систем %3u  планет %3u  колоний %3u  зданий %3u  "

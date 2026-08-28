@@ -16,9 +16,7 @@ void Schedule::run(World& world, const TickContext& context) const {
 }
 
 void Simulation::step() {
-    TickContext context;
-    context.tick = tick_;
-    schedule_.run(world_, context);
+    schedule_.run(world_, TickContext::at(tick_, tempo_));
     ++tick_;
 }
 

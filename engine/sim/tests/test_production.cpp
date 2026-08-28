@@ -1,5 +1,7 @@
 #include "doctest.h"
 
+#include "game_time.h"
+
 #include "pw/sim/combat.h"
 #include "pw/sim/commands.h"
 #include "pw/sim/control.h"
@@ -9,6 +11,7 @@
 
 using namespace pw;
 using namespace pw::sim;
+using namespace pw::test;
 
 namespace {
 
@@ -74,18 +77,17 @@ struct Yard {
         return planet;
     }
 
-    void runConstruction(int64_t ticks) {
-        for (int64_t i = 0; i < ticks; ++i) {
-            TickContext context;
-            context.tick = uint64_t(i);
-            planetConstructionTick(world, context);
-        }
+    /// Прогнать столько ИГРОВЫХ СЕКУНД стройки — см. game_time.h.
+    void runConstruction(int64_t seconds) {
+        const int64_t ticks = testTicks(seconds);
+        for (int64_t i = 0; i < ticks; ++i) planetConstructionTick(world, testTick(i));
     }
 
-    void run(int64_t ticks) {
+    /// То же для верфей.
+    void run(int64_t seconds) {
+        const int64_t ticks = testTicks(seconds);
         for (int64_t i = 0; i < ticks; ++i) {
-            TickContext context;
-            context.tick = uint64_t(i);
+            const TickContext context = testTick(i);
             systemProduction(world, context);
             systemDisbandEmpty(world, context);
             systemApplyCommands(world, context);
@@ -108,8 +110,6 @@ struct Yard {
         return total;
     }
 };
-
-constexpr int64_t kSecond = kTicksPerSecond;
 
 }  // namespace
 
@@ -174,11 +174,15 @@ TEST_CASE("постройка: корвет собирается и появля
     yard.empire().alloys = fx::fromInt(1000);
     enqueueBuild(yard.queue(1), Hull::Corvette, 1);
 
-    // Две верфи осваивают 1 сплав в секунду, корвет стоит 100.
-    yard.run(99 * kSecond);
+    // Срок берётся из тех же констант, что и в игре: две верфи осваивают
+    // 2 * kBuildRateShipyard сплавов в секунду, корвет стоит hullCost.
+    // Записанное числом ожидание пришлось бы подгонять при каждой
+    // перенастройке баланса — то есть оно перестало бы что-то проверять.
+    const int64_t due = hullSeconds(Hull::Corvette, 2);
+    yard.run(due - 1 * kMinute);
     CHECK(yard.fleetsOf(0) == 0);
 
-    yard.run(3 * kSecond);
+    yard.run(2 * kMinute);
     CHECK(yard.fleetsOf(0) == 1);
     CHECK(yard.shipsIn(1) == 1u);
     // Заказ выполнен — очередь очищена.
@@ -191,7 +195,7 @@ TEST_CASE("постройка: без верфи система строить �
     yard.empire().alloys = fx::fromInt(5000);
     enqueueBuild(yard.queue(1), Hull::Corvette, 3);
 
-    yard.run(600 * kSecond);
+    yard.run(2 * kHour);
     CHECK(yard.fleetsOf(0) == 0);
     CHECK(yard.empire().alloys == fx::fromInt(5000));  // сплавы не тронуты
 }
@@ -202,27 +206,27 @@ TEST_CASE("постройка: без сплавов стройка стоит")
     yard.empire().alloys = fx::zero();
     enqueueBuild(yard.queue(1), Hull::Corvette, 1);
 
-    yard.run(300 * kSecond);
+    yard.run(2 * kHour);
     CHECK(yard.fleetsOf(0) == 0);
     CHECK(yard.queue(1).remaining == 1u);  // заказ ждёт
 }
 
 TEST_CASE("постройка: верфи задают темп, а не объём") {
-    auto secondsFor = [](int shipyards) {
+    auto minutesFor = [](int shipyards) {
         Yard yard;
         yard.buildShipyards(1, shipyards);
         yard.empire().alloys = fx::fromInt(10000);
         enqueueBuild(yard.queue(1), Hull::Corvette, 1);
 
-        for (int64_t second = 1; second <= 1000; ++second) {
-            yard.run(kSecond);
-            if (yard.fleetsOf(0) > 0) return second;
+        for (int64_t minute = 1; minute <= 120; ++minute) {
+            yard.run(kMinute);
+            if (yard.fleetsOf(0) > 0) return minute;
         }
         return int64_t(-1);
     };
 
-    const int64_t few = secondsFor(1);
-    const int64_t many = secondsFor(4);
+    const int64_t few = minutesFor(1);
+    const int64_t many = minutesFor(4);
     CAPTURE(few);
     CAPTURE(many);
     CHECK(few > 0);
@@ -238,7 +242,7 @@ TEST_CASE("постройка: очередь из нескольких кора
     yard.empire().alloys = fx::fromInt(10000);
     enqueueBuild(yard.queue(1), Hull::Corvette, 5);
 
-    yard.run(300 * kSecond);
+    yard.run(5 * hullSeconds(Hull::Corvette, 10) + kMinute);
     CHECK(yard.fleetsOf(0) == 5);
     CHECK(yard.queue(1).remaining == 0u);
     // Пять корветов стоят 500 сплавов.
@@ -247,20 +251,20 @@ TEST_CASE("постройка: очередь из нескольких кора
 }
 
 TEST_CASE("постройка: линкор дороже и дольше корвета") {
-    auto secondsFor = [](Hull hull) {
+    auto minutesFor = [](Hull hull) {
         Yard yard;
         yard.buildShipyards(1, 12);
         yard.empire().alloys = fx::fromInt(100000);
         enqueueBuild(yard.queue(1), hull, 1);
-        for (int64_t second = 1; second <= 2000; ++second) {
-            yard.run(kSecond);
-            if (yard.fleetsOf(0) > 0) return second;
+        for (int64_t minute = 1; minute <= 600; ++minute) {
+            yard.run(kMinute);
+            if (yard.fleetsOf(0) > 0) return minute;
         }
         return int64_t(-1);
     };
 
-    const int64_t corvette = secondsFor(Hull::Corvette);
-    const int64_t battleship = secondsFor(Hull::Battleship);
+    const int64_t corvette = minutesFor(Hull::Corvette);
+    const int64_t battleship = minutesFor(Hull::Battleship);
     CHECK(corvette > 0);
     CHECK(battleship > 0);
     // Отношение времён равно отношению стоимостей: 2400 к 100.
@@ -275,7 +279,7 @@ TEST_CASE("постройка: смена типа обнуляет вложен
     yard.empire().alloys = fx::fromInt(10000);
     enqueueBuild(yard.queue(1), Hull::Battleship, 1);
 
-    yard.run(60 * kSecond);
+    yard.run(10 * kMinute);
     CHECK(yard.queue(1).invested > fx::zero());
 
     // Передумали строить линкор. Недостроенный корпус не превращается
@@ -290,7 +294,7 @@ TEST_CASE("постройка: ничья система не строит") {
     yard.empire().alloys = fx::fromInt(5000);
     enqueueBuild(yard.queue(3), Hull::Corvette, 2);
 
-    yard.run(300 * kSecond);
+    yard.run(2 * kHour);
     CHECK(yard.fleetsOf(0) == 0);
 }
 
@@ -308,7 +312,7 @@ TEST_CASE("роспуск: пустой флот исчезает") {
 
     // Пустой флот занимал бы место, обходился каждый тик и, что хуже,
     // считался бы присутствием в системе.
-    yard.run(1);
+    yard.run(1 * kSecond);
     CHECK(yard.fleetsOf(0) == 1);
     CHECK(yard.shipsIn(1) == 3u);
 }
@@ -342,9 +346,11 @@ TEST_CASE("цикл: экономика кормит верфь, верфь ст
     // Ни единого сплава на старте: всё, что построится, добыто и выплавлено.
     CHECK(yard.empire().alloys == fx::zero());
 
-    for (int64_t i = 0; i < 900 * kSecond; ++i) {
-        TickContext context;
-        context.tick = uint64_t(i);
+    // Четыре завода плавят на четыре корвета не один час: цепочка
+    // «шахта → завод → верфь» и есть главная длительность в экономике.
+    const int64_t ticks = testTicks(4 * kHour);
+    for (int64_t i = 0; i < ticks; ++i) {
+        const TickContext context = testTick(i);
         systemEconomy(yard.world, context);
         systemProduction(yard.world, context);
         systemDisbandEmpty(yard.world, context);
@@ -364,8 +370,9 @@ TEST_CASE("постройка: воспроизводится тик в тик")
     }
     REQUIRE(first.world.hash() == second.world.hash());
 
-    first.run(2000 * kSecond);
-    second.run(2000 * kSecond);
+    const int64_t due = 8 * hullSeconds(Hull::Destroyer, 6) + kMinute;
+    first.run(due);
+    second.run(due);
 
     CHECK(first.world.hash() == second.world.hash());
     CHECK(first.fleetsOf(0) == 8);
@@ -482,7 +489,7 @@ TEST_CASE("производство: корабль наследует воор�
     yard.buildShipyards(1, 8);
     yard.empire().alloys = fx::fromInt(5000);
     enqueueBuild(yard.queue(1), Hull::Corvette, 1);
-    yard.run(60 * kSecond);
+    yard.run(hullSeconds(Hull::Corvette, 8) + kMinute);
 
     REQUIRE(yard.fleetsOf(0) == 1);
     bool checked = false;
@@ -513,12 +520,13 @@ TEST_CASE("стройка: здание не появляется мгновен
           uint8_t(Building::None));
     CHECK(yard.world.get<PlanetConstruction>(planet)->slot == 0);
 
-    // Шахта стоит 60 минералов при скорости 0.5 в секунду — две минуты.
-    yard.runConstruction(100 * kSecond);
+    // Срок берётся из цены той же формулой, что и в игре: шахта в 60
+    // минералов при kBuildSecondsPerMineral секунд на минерал.
+    yard.runConstruction(buildSeconds(Building::Mine) - 2 * kMinute);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::None));
 
-    yard.runConstruction(25 * kSecond);
+    yard.runConstruction(4 * kMinute);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::Mine));
     // Стройка закончилась — слот свободен под следующую.
@@ -529,33 +537,37 @@ TEST_CASE("стройка: здание не появляется мгновен
 TEST_CASE("стройка: время равно цене, делённой на темп") {
     // Цена и срок — одно число, а не два. Иначе они разошлись бы, и
     // появилось бы дешёвое здание, которое строится дольше дорогого.
-    auto secondsToBuild = [](Building building) {
+    auto minutesToBuild = [](Building building) {
         Yard yard;
         const Entity planet = yard.colony(1);
         yard.empire().minerals = fx::fromInt(10000);
         enqueueConstruction(*yard.world.get<PlanetConstruction>(planet), 0, building);
 
-        for (int64_t second = 1; second <= 2000; ++second) {
-            yard.runConstruction(kSecond);
+        for (int64_t minute = 1; minute <= 600; ++minute) {
+            yard.runConstruction(kMinute);
             if (yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
                 uint8_t(building)) {
-                return second;
+                return minute;
             }
         }
         return int64_t(-1);
     };
 
-    const int64_t mine = secondsToBuild(Building::Mine);
-    const int64_t yardTime = secondsToBuild(Building::Shipyard);
+    const int64_t mine = minutesToBuild(Building::Mine);
+    const int64_t yardTime = minutesToBuild(Building::Shipyard);
     CAPTURE(mine);
     CAPTURE(yardTime);
 
-    // Две минуты на шахту, около семи на верфь: масштаб, при котором
-    // осаждённый не успевает достроить крепость под падающей обороной.
-    CHECK(mine >= 118);
-    CHECK(mine <= 122);
+    // Совпадает с формулой цены — с точностью до минуты округления.
+    CHECK(mine * kMinute >= buildSeconds(Building::Mine));
+    CHECK((mine - 1) * kMinute <= buildSeconds(Building::Mine));
+    CHECK(yardTime * kMinute >= buildSeconds(Building::Shipyard));
+
+    // И масштаб человеческий: шахта укладывается в один сеанс игры,
+    // верфь его переживает и встречает игрока в следующий заход.
+    CHECK(mine >= 20);
+    CHECK(mine <= 30);
     CHECK(yardTime > mine * 3);
-    CHECK(yardTime < 500);
 }
 
 TEST_CASE("стройка: без минералов ЖДЁТ, а не отменяется") {
@@ -567,7 +579,7 @@ TEST_CASE("стройка: без минералов ЖДЁТ, а не отме�
     yard.empire().minerals = fx::zero();
     enqueueConstruction(*yard.world.get<PlanetConstruction>(planet), 0, Building::Mine);
 
-    yard.runConstruction(300 * kSecond);
+    yard.runConstruction(1 * kHour);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::None));
     CHECK(yard.world.get<PlanetConstruction>(planet)->slot == 0);
@@ -575,7 +587,7 @@ TEST_CASE("стройка: без минералов ЖДЁТ, а не отме�
 
     // Появились минералы — стройка началась.
     yard.empire().minerals = fx::fromInt(500);
-    yard.runConstruction(130 * kSecond);
+    yard.runConstruction(buildSeconds(Building::Mine) + kMinute);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::Mine));
 }
@@ -591,12 +603,12 @@ TEST_CASE("стройка: цена списывается целиком и с�
     yard.empire().minerals = fx::fromInt(200);
     enqueueConstruction(*yard.world.get<PlanetConstruction>(planet), 0, Building::Mine);
 
-    yard.runConstruction(1);
+    yard.runConstruction(1 * kSecond);
     CHECK(yard.empire().minerals == fx::fromInt(140));
     CHECK(yard.world.get<PlanetConstruction>(planet)->paid == 1);
 
     // Дальше цена больше не списывается: она уже уплачена.
-    yard.runConstruction(60 * kSecond);
+    yard.runConstruction(10 * kMinute);
     CHECK(yard.empire().minerals == fx::fromInt(140));
 }
 
@@ -614,7 +626,7 @@ TEST_CASE("стройка: скудный доход не делится меж�
                             Building::Mine);
     }
 
-    yard.runConstruction(200 * kSecond);
+    yard.runConstruction(buildSeconds(Building::Mine) + 5 * kMinute);
 
     int built = 0;
     for (const Entity planet : planets) {
@@ -632,7 +644,7 @@ TEST_CASE("стройка: тратит минералы империи") {
     yard.empire().minerals = fx::fromInt(200);
     enqueueConstruction(*yard.world.get<PlanetConstruction>(planet), 0, Building::Mine);
 
-    yard.runConstruction(130 * kSecond);
+    yard.runConstruction(buildSeconds(Building::Mine) + kMinute);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::Mine));
     // Ровно цена шахты, ни минералом больше.
@@ -653,18 +665,18 @@ TEST_CASE("стройка: второй заказ встаёт в очеред�
     CHECK(site.slot == 0);
     CHECK(site.queued == 2);
 
-    yard.runConstruction(130 * kSecond);
+    yard.runConstruction(buildSeconds(Building::Mine) + kMinute);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::Mine));
     // Очередь сдвинулась сама: игроку не надо возвращаться и тыкать снова.
     CHECK(site.slot == 1);
     CHECK(site.queued == 1);
 
-    yard.runConstruction(130 * kSecond);
+    yard.runConstruction(buildSeconds(Building::Mine) + kMinute);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[1] ==
           uint8_t(Building::Mine));
 
-    yard.runConstruction(190 * kSecond);
+    yard.runConstruction(buildSeconds(Building::Foundry) + kMinute);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[2] ==
           uint8_t(Building::Foundry));
     CHECK(site.slot == PlanetConstruction::kNoSlot);
@@ -679,7 +691,7 @@ TEST_CASE("стройка: отмена бросает начатое и под�
 
     enqueueConstruction(site, 0, Building::Shipyard);
     enqueueConstruction(site, 1, Building::Mine);
-    yard.runConstruction(60 * kSecond);
+    yard.runConstruction(10 * kMinute);
     CHECK(site.elapsed > 0);
     CHECK(site.paid == 1);
     const fx afterShipyard = yard.empire().minerals;
@@ -717,12 +729,12 @@ TEST_CASE("стройка: процент готовности растёт от
     enqueueConstruction(site, 0, Building::Mine);
     CHECK(constructionPercent(site) == 0);
 
-    yard.runConstruction(60 * kSecond);
+    yard.runConstruction(buildSeconds(Building::Mine) / 2);
     const uint32_t half = constructionPercent(site);
     CHECK(half >= 45);
     CHECK(half <= 55);
 
-    yard.runConstruction(30 * kSecond);
+    yard.runConstruction(buildSeconds(Building::Mine) / 4);
     CHECK(constructionPercent(site) > half);
     CHECK(constructionPercent(site) <= 100);
 }
@@ -733,7 +745,7 @@ TEST_CASE("стройка: ничья планета не строит") {
     yard.empire().minerals = fx::fromInt(1000);
     enqueueConstruction(*yard.world.get<PlanetConstruction>(planet), 0, Building::Mine);
 
-    yard.runConstruction(300 * kSecond);
+    yard.runConstruction(1 * kHour);
     CHECK(yard.world.get<PlanetDevelopment>(planet)->buildings[0] ==
           uint8_t(Building::None));
     // И казна не тронута.
@@ -763,7 +775,7 @@ TEST_CASE("стройка: две планеты строят параллель
     enqueueConstruction(*yard.world.get<PlanetConstruction>(first), 0, Building::Mine);
     enqueueConstruction(*yard.world.get<PlanetConstruction>(second), 0, Building::Mine);
 
-    yard.runConstruction(130 * kSecond);
+    yard.runConstruction(buildSeconds(Building::Mine) + kMinute);
     CHECK(yard.world.get<PlanetDevelopment>(first)->buildings[0] ==
           uint8_t(Building::Mine));
     CHECK(yard.world.get<PlanetDevelopment>(second)->buildings[0] ==
@@ -783,7 +795,7 @@ TEST_CASE("стройка: воспроизводится тик в тик") {
     }
     REQUIRE(first.world.hash() == second.world.hash());
 
-    first.runConstruction(500 * kSecond);
-    second.runConstruction(500 * kSecond);
+    first.runConstruction(1 * kHour);
+    second.runConstruction(1 * kHour);
     CHECK(first.world.hash() == second.world.hash());
 }
