@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <vector>
 
 #include "pw/render/map_view.h"
 #include "pw/render/system_view.h"
@@ -420,4 +421,87 @@ TEST_CASE("вид системы: щелчок попадает в ближай�
 
     // Далеко в углу — мимо всего.
     CHECK(SystemView::pick(scene.frame, 0.02f, 0.98f) == 0xFFFFFFFFu);
+}
+
+// ---------------------------------------------------------------------------
+// Движение внутри системы
+// ---------------------------------------------------------------------------
+
+TEST_CASE("система: взгляд перелетает к телу, а не переставляется") {
+    // Выбор другой планеты ПЕРЕСТАВЛЯЛ камеру: только что в кадре был
+    // газовый гигант, теперь ледяной мир, и связи между двумя картинками
+    // нет никакой. Проверяется именно связь: после смены фокуса камера
+    // ещё НЕ там, где новая цель, но уже и не там, где была.
+    Scene scene;
+    REQUIRE(scene.assets.load(findManifest()));
+    const uint32_t system = scene.systemWith(4);
+    REQUIRE(system != UINT32_MAX);
+
+    // Без перелёта — мгновенно: так работают снимок и тест раскладки.
+    scene.camera.focusOrbit = 0;
+    scene.build(system);
+    const float atFirst = scene.frame.camera.targetX;
+
+    scene.camera.focusOrbit = 3;
+    scene.build(system);
+    const float jumped = scene.frame.camera.targetX;
+    CHECK(jumped != doctest::Approx(atFirst));
+
+    // С перелётом — постепенно.
+    Scene flying;
+    REQUIRE(flying.assets.load(findManifest()));
+    flying.camera.followSeconds = 0.5f;
+    flying.camera.deltaSeconds = 1.0f / 60.0f;
+    flying.camera.focusOrbit = 0;
+    flying.build(system);
+    const float from = flying.frame.camera.targetX;
+
+    flying.camera.focusOrbit = 3;
+    flying.build(system);
+    const float moving = flying.frame.camera.targetX;
+    CAPTURE(from);
+    CAPTURE(moving);
+    CAPTURE(jumped);
+    // Сдвинулась, но не долетела: это и есть перелёт.
+    CHECK(moving != doctest::Approx(from));
+    CHECK(std::fabs(moving - from) < std::fabs(jumped - atFirst));
+}
+
+TEST_CASE("система: выбранная орбита дышит только при включённом движении") {
+    // Негативный контроль на пульс. Без него «дыхание» выбранной орбиты
+    // существовало бы только в комментарии: кадр без часов и кадр с часами
+    // совпадали бы, и никто бы этого не заметил.
+    Scene scene;
+    REQUIRE(scene.assets.load(findManifest()));
+    const uint32_t system = scene.systemWith(4);
+    REQUIRE(system != UINT32_MAX);
+
+    // Орбиты идут В РАЗНЫХ пакетах: между ними в кадре лежат сами планеты,
+    // а склеиваются только соседние пакеты. Поэтому собираем все подряд
+    // и берём по порядку — порядок обхода орбит и есть номер орбиты.
+    auto orbitAlpha = [&](size_t orbit) {
+        std::vector<float> alphas;
+        for (const MeshBatch& batch : scene.frame.batches) {
+            if (batch.kind != MeshKind::Orbit) continue;
+            for (const rhi::MeshInstance& instance : batch.instances) {
+                alphas.push_back(instance.a);
+            }
+        }
+        return orbit < alphas.size() ? alphas[orbit] : -1.0f;
+    };
+
+    scene.camera.focusOrbit = 1;
+    scene.build(system);
+    const float still = orbitAlpha(1);
+    CHECK(still > 0.0f);
+
+    scene.build(system);
+    CHECK(orbitAlpha(1) == doctest::Approx(still));   // без часов кадр повторяется
+
+    // Полсекунды спустя прозрачность уже другая.
+    scene.camera.clock = 0.5f;
+    scene.build(system);
+    CAPTURE(still);
+    CAPTURE(orbitAlpha(1));
+    CHECK(orbitAlpha(1) != doctest::Approx(still));
 }

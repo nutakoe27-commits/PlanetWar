@@ -475,6 +475,11 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
                       focusX, focusY);
     }
 
+    // Часы сцены копит вид: у вызывающего есть шаг кадра, но нет причин
+    // помнить сумму. Идут они только при включённом перелёте — то есть
+    // ровно тогда, когда движение вообще разрешено.
+    if (camera.followSeconds > 0.0f) camera.clock += camera.deltaSeconds;
+
     // Взгляд ДОГОНЯЕТ цель, а не переставляется на неё. Экспонента —
     // та же, что в интерфейсе: не зависит от частоты кадров и не
     // перелетает цель. Первый кадр встаёт сразу, иначе каждый вход
@@ -589,7 +594,17 @@ void SystemView::build(const sim::Galaxy& galaxy, const game::WorldView& world,
             track.r = colour.r;
             track.g = colour.g;
             track.b = colour.b;
-            track.a = selected ? 0.85f : (owner == 0xFF ? 0.22f : 0.45f);
+            // Выбранная орбита ДЫШИТ. В системе из восьми колец выбранное
+            // отличается от остальных только яркостью, а яркость глаз
+            // сравнивает плохо: чтобы понять, какое из колец ярче, надо
+            // посмотреть на все. Медленное колебание — период две
+            // секунды — выделяет его движением, и сравнивать не нужно.
+            float highlight = 0.85f;
+            if (selected && camera.clock > 0.0f) {
+                constexpr float kBreath = 6.28318530718f / 2.0f;
+                highlight = 0.72f + 0.18f * std::sin(camera.clock * kBreath);
+            }
+            track.a = selected ? highlight : (owner == 0xFF ? 0.22f : 0.45f);
             track.emissive = 1.0f;
             batchFor(out, assets_->orbitMesh(), assets_->blankTexture(), MeshKind::Orbit)
                 .instances.push_back(track);

@@ -1179,7 +1179,13 @@ ScreenAction Screen::planetPanel(Ui& ui, const game::Client& client,
         const float palY =
             std::min(panel.y, std::max(unit, limit - pal.height()));
         const Rect box{panel.right() + unit, palY, palWidth, pal.height()};
-        ui.panel(box, "hud_panel");
+        // Палитра ПОЯВЛЯЕТСЯ по щелчку в пустом слоте — в отличие от
+        // остальных панелей, которые висят всё время. Возникшее мгновенно
+        // окно читается как «экран сменился», и глаз заново ищет в нём
+        // всё; выехавшее за пятую долю секунды читается как «здесь
+        // открылось». Только прозрачность, без сдвига: сдвинутое окно
+        // означало бы, что кнопки в первые кадры не там, где нарисованы.
+        ui.panel(box, "hud_panel", ui.appear(uiId("palette-open"), 0.18f));
         pal.place(box);
 
         const Rect head = pal.next();
