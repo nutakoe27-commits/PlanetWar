@@ -423,6 +423,82 @@ void Ui::separator(const Rect& r) {
 // Поведение
 // ---------------------------------------------------------------------------
 
+DragResult Ui::dragBar(uint32_t id, const Rect& r, uint32_t value, uint32_t range,
+                       const TextColor& color, bool enabled) {
+    DragResult result;
+    result.value = std::min(value, range);
+    if (!enabled || range == 0) {
+        // Жёлоб рисуется всё равно: строка без полосы там, где у соседних
+        // строк полоса есть, читается как «здесь что-то не отрисовалось».
+        fill(r, theme_.track);
+        return result;
+    }
+
+    const bool inside = r.contains(input_.mouseX, input_.mouseY);
+    if (inside) {
+        hot_ = id;
+        wantsMouse_ = true;
+        result.hovered = true;
+        if (input_.pressed) active_ = id;
+    }
+
+    if (active_ == id) {
+        wantsMouse_ = true;
+        result.held = true;
+        // РОВНЫЕ ЗОНЫ, А НЕ ОКРУГЛЕНИЕ К БЛИЖАЙШЕМУ. Значений тут на одно
+        // больше, чем кораблей: ноль тоже значение. При округлении
+        // к ближайшему крайние зоны выходят вдвое уже остальных — «ноль»
+        // и «все» приходится ловить в половину шага, а это ровно те два
+        // числа, за которыми к полосе тянутся чаще всего.
+        //
+        // Деление на range+1 даёт всем значениям одинаковую ширину, и при
+        // этом щелчок ТОЧНО ПО НАСЕЧКЕ по-прежнему отдаёт её число:
+        // floor(k/n · (n+1)) = k при k < n.
+        const float span = std::max(r.w, 1.0f);
+        const float part = std::clamp((input_.mouseX - r.x) / span, 0.0f, 1.0f);
+        const uint32_t picked =
+            uint32_t(double(part) * (double(range) + 1.0));
+        result.value = std::min(picked, range);
+        result.changed = result.value != value;
+        if (input_.released) active_ = 0;
+    }
+
+    // --- отрисовка ---
+    fill(r, theme_.track);
+    fill(Rect{r.x, r.y, r.w, 1.0f}, theme_.edgeDim);
+    fill(Rect{r.x, r.bottom() - 1.0f, r.w, 1.0f}, theme_.edgeDim);
+
+    const float part = float(result.value) / float(range);
+    if (result.value > 0) {
+        const Rect inner = r.inset(r.h > 8.0f ? 2.0f : 1.0f);
+        const UiSprite* sprite = lookup("bar_fill");
+        TextColor tint = color;
+        // Пока полосу держат, заливка ярче: рука обязана видеть, что
+        // движение принято, — на маленькой полосе иначе неясно, тянешь
+        // ты её или просто ведёшь курсор поверх.
+        if (result.held) tint.a = std::min(1.0f, tint.a * 1.35f + 0.15f);
+        quad(Rect{inner.x, inner.y, std::max(1.0f, inner.w * part), inner.h},
+             sprite != nullptr ? *sprite : fallbackSprite(), tint);
+    }
+
+    // Насечки по кораблям — только пока шаг шире четырёх пикселей.
+    const float step = r.w / float(range);
+    if (step >= 4.0f) {
+        for (uint32_t k = 1; k < range; ++k) {
+            fill(Rect{r.x + step * float(k), r.y + 2.0f, 1.0f, r.h - 4.0f},
+                 theme_.edgeDim);
+        }
+    }
+
+    // Ползунок: узкая яркая черта на границе набранного. Без неё край
+    // заливки на насечках не отличить от самой насечки, и полоса
+    // перестаёт показывать точное число.
+    if (result.value > 0 && result.value < range) {
+        fill(Rect{r.x + r.w * part - 1.0f, r.y, 2.0f, r.h}, theme_.edge);
+    }
+    return result;
+}
+
 ButtonResult Ui::behaviour(uint32_t id, const Rect& r, bool enabled) {
     ButtonResult result;
     if (!enabled) return result;

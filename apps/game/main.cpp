@@ -209,12 +209,18 @@ void printUsage() {
         "                   в обоих видах и выйти. Ищет падения, а не картинку\n"
         "  --shot-zoom <k>  приблизить перед снимком\n"
         "  --shot-system    снимок ВИДА СИСТЕМЫ, а не карты галактики\n"
+        "  --shot-squad     открыть окно отряда и набрать половину: окно\n"
+        "                   открывается щелчком, и снять его иначе нечем\n"
+        "  --shot-route     задать отряду маршрут, патруль и приписку:\n"
+        "                   ломаная и кольца рисуются только по приказу\n"
         "  --motion <0|1>   анимация интерфейса и мира. В окне включена,\n"
         "                   в безоконном режиме выключена: снимок обязан\n"
         "                   быть устоявшимся, а не случайной фазой перехода\n"
         "\nВСЁ УПРАВЛЕНИЕ — МЫШЬЮ. Ни одно действие не требует клавиши:\n"
         "  левая            выбрать систему, планету, слот; нажать кнопку\n"
+        "  протянуть левой  рамка выделения: приказ уйдёт всем отрядам в ней\n"
         "  двойной щелчок   открыть систему\n"
+        "  правая по звезде приказ: выделенные отряды идут туда\n"
         "  правая           тянуть карту, в системе — вращать камеру\n"
         "  колесо           приблизить\n"
         "  наведение        подсказка: что это и сколько стоит\n"
@@ -263,6 +269,8 @@ int main(int argc, char** argv) {
     // и заканчивается кодом ноль, только если клиент дожил до конца.
     int sweepStep = 0;
     int motionFlag = -1;   // -1 — решить по режиму
+    bool shotSquad = false;
+    bool shotRoute = false;
     bool shotSystem = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -283,6 +291,8 @@ int main(int argc, char** argv) {
         else if (arg == "--shot-press") shotPress = true;
         else if (arg == "--sweep" && i + 1 < argc) sweepStep = std::atoi(argv[++i]);
         else if (arg == "--shot-system") shotSystem = true;
+        else if (arg == "--shot-squad") shotSquad = true;
+        else if (arg == "--shot-route") shotRoute = true;
         else if (arg == "--motion" && i + 1 < argc) motionFlag = std::atoi(argv[++i]);
         else {
             printUsage();
@@ -443,6 +453,23 @@ int main(int argc, char** argv) {
     int64_t lastClickAt = -1000;
     uint32_t lastClickSystem = kNoSystem;
 
+    // РАМКА ВЫДЕЛЕНИЯ. Левая кнопка по пустому месту карты не делала
+    // ничего — рамка встаёт ровно в эту дыру и не требует ни клавиши.
+    // Правая занята под перетаскивание карты, и трогать её нельзя.
+    bool banding = false;
+    float bandStartX = 0.0f, bandStartY = 0.0f;
+    // ПРАВЫЙ ЩЕЛЧОК ПО ЗВЕЗДЕ — «ИДИ ТУДА». Тот самый жест, которым
+    // в RTS отдают приказ, и здесь он был свободен: правая кнопка тянула
+    // карту, а щелчок правой БЕЗ протаскивания не делал ничего. Чтобы
+    // одно не съело другое, смотрим, сдвинулась ли мышь между нажатием
+    // и отпусканием: сдвинулась — это перетаскивание, нет — приказ.
+    bool panning = false;
+    bool panned = false;
+    // Меньше этого протаскивание — это щелчок, а не рамка. Без порога
+    // любое нажатие оставляло бы выделение из одного случайного отряда,
+    // попавшего в рамку нулевого размера.
+    constexpr float kBandThreshold = 6.0f;
+
     // Полная памятка — по --help. Всё управление и так на экране: сыпать
     // при каждом запуске таблицу клавиш в терминал значит признавать, что
     // без неё интерфейс не работает.
@@ -467,6 +494,10 @@ int main(int argc, char** argv) {
     // это и есть та самая молча проходящая проверка.
     int sweepActions[int(render::ActionKind::Count)] = {};
     int sweepOrders = 0;
+    // Правый щелчок по звезде — второй способ отдать приказ, и у него
+    // своя ветка кода. Считаем его отдельно: иначе обход отчитается
+    // «приказы отданы», проверив только один из двух путей.
+    int sweepRightOrders = 0;
     bool sweepFailed = false;
 
     // АНИМАЦИЯ ЖИВЁТ ТОЛЬКО В ОКНЕ.
@@ -627,6 +658,66 @@ int main(int argc, char** argv) {
             state.system = client.capital();
             const auto own = client.fleetsAt(client.capital());
             if (!own.empty()) state.fleet = own.front();
+            // Окно отряда открывается щелчком, и снять его иначе нечем:
+            // снимок делается без единого нажатия. Заодно набирается
+            // половина: снимок пустого набора не показывает главного —
+            // как выглядят полосы разделения, когда их потянули.
+            state.squadOpen = shotSquad && !own.empty();
+            if (state.squadOpen) {
+                const auto found = client.view().fleets.find(state.fleet);
+                if (found != client.view().fleets.end()) {
+                    state.splitTake = sim::fleetHalf(found->second.composition);
+                }
+            }
+
+            // МАРШРУТ НА СНИМКЕ. Ломаная маршрута, кружки точек, кольцо
+            // приписки и метка стойки рисуются только у отряда, которому
+            // отдали приказ, — а снимок делается без единого нажатия.
+            // Без этого флага весь новый слой карты нельзя УВИДЕТЬ,
+            // а увиденное на снимке — единственный способ поймать
+            // дефект отрисовки.
+            if (shotRoute && state.fleet != kNoFleet) {
+                // Маршрут набирается ХОДЬБОЙ ПО ГРАФУ, а не тремя соседями
+                // дома: у столицы их может быть один — так и вышло на seed 7,
+                // и снимок показывал одно звено вместо трёх, хотя рисовалось
+                // всё правильно.
+                std::vector<uint32_t> path;
+                uint32_t at = client.capital();
+                uint32_t came = kNoSystem;
+                for (int step = 0; step < 3; ++step) {
+                    const uint32_t count = client.galaxy().neighborCount(at);
+                    uint32_t next = kNoSystem;
+                    for (uint32_t k = 0; k < count; ++k) {
+                        const uint32_t candidate = client.galaxy().neighbors(at)[k];
+                        if (candidate == came) continue;
+                        if (std::find(path.begin(), path.end(), candidate) != path.end()) {
+                            continue;
+                        }
+                        next = candidate;
+                        break;
+                    }
+                    if (next == kNoSystem) break;
+                    path.push_back(next);
+                    came = at;
+                    at = next;
+                }
+                for (size_t k = 0; k < path.size(); ++k) {
+                    if (k == 0) {
+                        client.orderRoute(state.fleet, path[k]);
+                    } else {
+                        client.orderRouteAppend(state.fleet, path[k]);
+                    }
+                }
+                const uint32_t home = client.capital();
+                client.orderStance(state.fleet, sim::Stance::Patrol);
+                client.orderEvade(state.fleet, true);
+                client.orderAnchorSystem(state.fleet, home);
+                // Вся галактика в кадре: маршрут из трёх точек уходит
+                // за край экрана при обычном приближении, и снимок
+                // показывал бы одно звено из трёх.
+                camera.place(0.0f, 0.0f,
+                             float(client.galaxy().extent().toDouble()) * 2.0f);
+            }
 
             // Таблица «планета -> система» строится ОДИН РАЗ: планеты
             // не переезжают, а перебирать всю галактику каждый кадр
@@ -697,19 +788,44 @@ int main(int argc, char** argv) {
             // на которой игра падала. Шаг, меньший самого мелкого
             // элемента, стоил бы четырёх минут на прогон.
             //
-            // Поэтому после двух сеточных проходов идут два ЗОНДА:
-            // вертикальные линии с мелким шагом по левому столбцу
-            // и по правому. Панели выстроены столбцами, все их кнопки
-            // лежат на этих двух линиях, и попасть по ним — уже не
-            // вопрос удачи. Точек у зондов меньше двухсот.
-            const int probeStep = std::max(4, sweepStep / 6);
+            // Поэтому после двух сеточных проходов идут ЗОНДЫ:
+            // вертикальные линии с мелким шагом по столбцам панелей.
+            // Панели выстроены столбцами, все их кнопки лежат на этих
+            // линиях, и попасть по ним — уже не вопрос удачи.
+            // ШАГ ЗОНДА — ДВЕНАДЦАТЬ ПИКСЕЛЕЙ ПРИ ШАГЕ СЕТКИ ТРИДЦАТЬ ВОСЕМЬ.
+            //
+            // Не меньше: самый мелкий нажимаемый элемент на экране —
+            // галочка выделения в строке отряда, около шестнадцати
+            // пикселей в обе стороны, а в любой отрезок длиной
+            // шестнадцать решётка с шагом двенадцать попадает всегда.
+            // И не больше: шаг восемнадцать её уже пропускает.
+            //
+            // Не меньше ещё и потому, что зонд стоит времени. Шаг шесть
+            // давал вчетверо больше точек, и обход переставал укладываться
+            // в четверть часа — то есть переставал запускаться.
+            const int probeStep = std::max(4, sweepStep / 3);
             const int probeRows = std::max(1, height / probeStep);
-            // ТРИ линии, а не две: левый столбец, ПОСЕРЕДИНЕ КАРТА,
-            // правый столбец. Средняя линия нужна не для симметрии:
-            // взведённый приказ ждёт щелчка ПО КАРТЕ, и без него путь
-            // «нажал отправить → указал цель» обрывается на середине —
-            // ровно там, где игра и падала. Линия по карте его дожимает.
-            const int probeTotal = probeRows * 3;
+            // ЧАСТАЯ СЕТКА ПО ПАНЕЛЯМ, А НЕ ТРИ ЛИНИИ.
+            //
+            // Трёх линий хватало, пока в полосе приказов стояла ОДНА
+            // кнопка во всю ширину панели: линия по левому столбцу
+            // попадала в неё, куда бы её ни поставили. Кнопок стало
+            // четыре, левая линия легла ровно на «Стоп» — недоступный,
+            // пока у отряда нет маршрута, — и обход перестал доходить
+            // до приказов ВООБЩЕ, отчитываясь при этом «клиент жив».
+            //
+            // Молчаливо неполный обход хуже отсутствующего, и лечится
+            // он не подгонкой одной координаты, а решёткой по всей ширине
+            // панелей — левым пяти восьмым экрана, где стоят и столбец
+            // выбранного, и окно отряда.
+            const int probeLaneStep = probeStep;
+            const int probeLanes = std::max(1, int(float(width) * 0.58f) / probeLaneStep);
+            // Плюс две линии: по КАРТЕ и по списку справа. Линия по карте
+            // нужна не для симметрии — взведённый приказ ждёт щелчка
+            // по системе, и без неё путь «нажал приказ → указал цель»
+            // обрывается на середине, ровно там, где игра однажды падала.
+            const int probeLaneCount = probeLanes + 2;
+            const int probeTotal = probeRows * probeLaneCount;
             const int totalPoints = gridTotal * 2 + probeTotal;
 
             if (sweepPoint >= totalPoints) {
@@ -722,13 +838,47 @@ int main(int argc, char** argv) {
                     std::printf(" %s×%d", render::actionName(render::ActionKind(k)),
                                 sweepActions[k]);
                 }
-                std::printf("\n  приказов флоту отдано: %d\n", sweepOrders);
-                if (sweepActions[int(render::ActionKind::BeginMove)] == 0) {
-                    // Молчаливо неполный обход — это не обход. Кнопка,
-                    // с которой начался весь разбор, обязана быть нажата.
+                std::printf("\n  приказов флоту отдано: %d маршрутом, %d правой\n",
+                            sweepOrders, sweepRightOrders);
+                // ОБХОД ОБЯЗАН ДОЙТИ ДО ВСЕГО СЛОВАРЯ ПРИКАЗОВ.
+                //
+                // Раньше здесь стояла одна проверка — «нажали ли
+                // отправить флот», — и она молчала о том, что весь
+                // остальной словарь обход не трогает. Управление флотом
+                // это два десятка кнопок: маршрут, стойки, уклонение,
+                // приписка, разделение, выделение группой. Перечислять
+                // их поимённо стоит трёх строк и ловит ровно тот случай,
+                // ради которого обход и заведён: кнопка есть на экране,
+                // но до неё нельзя дотянуться.
+                const render::ActionKind required[] = {
+                    render::ActionKind::BeginMove,   render::ActionKind::ToggleSquad,
+                    render::ActionKind::SetStance,   render::ActionKind::SetEvade,
+                    render::ActionKind::SplitAdjust, render::ActionKind::SplitPreset,
+                    render::ActionKind::SplitFleet,  render::ActionKind::AnchorSystem,
+                    render::ActionKind::AnchorPlanet, render::ActionKind::ToggleSelect,
+                };
+                for (render::ActionKind kind : required) {
+                    if (sweepActions[int(kind)] > 0) continue;
                     std::fprintf(stderr,
-                                 "обход не засчитан: до кнопки «Отправить флот» "
-                                 "так и не дошли\n");
+                                 "обход не засчитан: до намерения «%s» "
+                                 "так и не дошли\n",
+                                 render::actionName(kind));
+                    sweepFailed = true;
+                }
+                if (sweepRightOrders == 0) {
+                    std::fprintf(stderr,
+                                 "обход не засчитан: правый щелчок по звезде "
+                                 "ни разу не отдал приказ\n");
+                    sweepFailed = true;
+                }
+                if (sweepOrders == 0) {
+                    // Намерения мало: «Приказ» только ВЗВОДИТ режим, а падала
+                    // игра на следующем шаге — когда взведённый приказ ловил
+                    // щелчок по карте и слал его серверу. Этот шаг обязан быть
+                    // пройден целиком, а не наполовину.
+                    std::fprintf(stderr,
+                                 "обход не засчитан: взведённый приказ ни разу "
+                                 "не дошёл до щелчка по карте\n");
                     sweepFailed = true;
                 }
                 break;
@@ -749,20 +899,81 @@ int main(int argc, char** argv) {
 
             float pointX = 0.0f;
             float pointY = 0.0f;
+            bool rightProbe = false;
             if (probing) {
                 // Столица и флот в ней закреплены на каждом кадре: панель
                 // флота обязана быть на месте, иначе кнопки, которую мы
                 // ищем, на экране просто нет.
-                state.system = client.capital();
+                const uint32_t capital = client.capital();
+                state.system = capital;
                 const auto own = client.fleetsAt(state.system);
                 if (!own.empty()) state.fleet = own.front();
+                // И окно отряда — тоже. Кнопка «Отряд…» его ПЕРЕКЛЮЧАЕТ,
+                // а зонд проходит по ней несколько раз: окно оставалось
+                // то открытым, то закрытым в зависимости от чётности,
+                // и половина словаря приказов зондом не проверялась —
+                // молча, потому что закрытого окна на экране просто нет.
+                state.squadOpen = !own.empty();
 
                 const int at = sweepPoint - gridTotal * 2;
-                const int lane = at / probeRows;
+                const int lane = std::min(at / probeRows, probeLaneCount - 1);
                 const int step = at % probeRows;
-                const float lanes[] = {0.12f, 0.50f, 0.88f};
-                pointX = float(width) * lanes[lane < 3 ? lane : 2];
+                pointX = lane < probeLanes
+                             ? float(lane * probeLaneStep + probeLaneStep / 2)
+                         : lane == probeLanes ? float(width) * 0.68f
+                                              : float(width) * 0.88f;
                 pointY = float(step * probeStep + probeStep / 2);
+
+                // ЛИНИЯ ПО КАРТЕ ЦЕЛИТСЯ В НАСТОЯЩУЮ ЗВЕЗДУ.
+                //
+                // Доля ширины экрана попадала в звезду только пока камера
+                // стояла там, где её оставил предыдущий проход, — а её
+                // двигают и «навести», и «обзор». В итоге оба пути приказа
+                // не проверялись НИ РАЗУ, и обход об этом молчал.
+                //
+                // Поэтому здесь камера ставится над домом, а щелчок идёт
+                // ровно в соседнюю систему: она заведомо на экране, и оба
+                // пути приказа — взведённый режим и правая кнопка —
+                // проверяются на каждом прогоне, а не при удачном
+                // расположении камеры.
+                if (lane == probeLanes && client.galaxy().neighborCount(capital) > 0) {
+                    // Точка выбрана В ПРОСВЕТЕ между окном отряда слева
+                    // и списком справа: щелчок по звезде, накрытой панелью,
+                    // до карты не доходит вовсе.
+                    pointX = float(width) * 0.68f;
+                    pointY = float(height) * 0.60f;
+
+                    // Камера ставится так, чтобы соседняя система оказалась
+                    // ровно под этой точкой. Считается через toWorld:
+                    // при камере в цели точка даёт мир W, значит нужная
+                    // камера — это цель, отражённая относительно W.
+                    const uint32_t target = client.galaxy().neighbors(capital)[0];
+                    const float tx = float(client.galaxy().positionX(target).toDouble());
+                    const float ty = float(client.galaxy().positionY(target).toDouble());
+                    const float span = float(client.galaxy().extent().toDouble()) * 0.9f;
+                    camera.place(tx, ty, span);
+                    float wx = 0.0f, wy = 0.0f;
+                    camera.toWorld(pointX, pointY, width, height, wx, wy);
+                    camera.place(tx * 2.0f - wx, ty * 2.0f - wy, span);
+
+                    // Половина строк идёт левой кнопкой по взведённому
+                    // приказу, половина — правой без него: у приказа два
+                    // пути, и оба обязаны быть пройдены.
+                    state.awaitingMoveTarget = (step % 2) == 0;
+                    state.routePoints = 0;
+                }
+
+                // НА ЛИНИИ ПО КАРТЕ ЖМЁМ ЧЕРЕЗ СТРОКУ ПРАВУЮ КНОПКУ.
+                //
+                // У приказа два пути: взведённый режим плюс левый щелчок
+                // и правый щелчок по звезде. Ветки разные, и обход, знающий
+                // только левую кнопку, проверял бы половину — молча, как
+                // и полагается пропущенной проверке.
+                //
+                // Мышь между фазами не двигается, поэтому правое нажатие
+                // здесь читается именно как приказ, а не как перетаскивание
+                // карты, — что заодно проверяет и само это различение.
+                rightProbe = lane == probeLanes && (step % 2) == 1;
             } else {
                 const int at = sweepPoint % gridTotal;
                 pointX = float((at % columns) * sweepStep + sweepStep / 2);
@@ -770,7 +981,8 @@ int main(int argc, char** argv) {
             }
 
             input.setMouse(pointX, pointY);
-            input.setButton(MouseButton::Left, sweepPhase <= 1);
+            input.setButton(rightProbe ? MouseButton::Right : MouseButton::Left,
+                            sweepPhase <= 1);
             if (sweepPhase == 2) ++sweepClicks;
             if (++sweepPhase > 2) {
                 sweepPhase = 0;
@@ -821,6 +1033,31 @@ int main(int argc, char** argv) {
         if (sweepStep > 0 && action.kind < render::ActionKind::Count) {
             ++sweepActions[int(action.kind)];
         }
+
+        // ПРИКАЗ УХОДИТ ВСЕМ ВЫДЕЛЕННЫМ. Выделение из одного отряда —
+        // обычный случай, и отдельной ветки под него нет: пустой список
+        // означает «только выбранный», и дальше всё одинаково.
+        //
+        // Разделение и слияние сюда НЕ входят: «взять по три корвета
+        // из каждого из пяти отрядов» — это не приказ, а таблица, и она
+        // делается в окне отряда по одному.
+        auto forSelected = [&](uint32_t primary, auto&& send) -> uint32_t {
+            uint32_t sent = 0;
+            if (state.selection.empty()) {
+                if (primary != kNoFleet && send(primary)) ++sent;
+                return sent;
+            }
+            for (uint32_t id : state.selection) {
+                if (send(id)) ++sent;
+            }
+            return sent;
+        };
+        // «Маршрут снят» против «маршрут снят · отрядов 4»: приказ,
+        // отданный группе, обязан отчитаться числом. Иначе игрок не знает,
+        // дошёл ли он до всех, — а именно это его и волнует.
+        auto squadNote = [](const std::string& text, uint32_t count) {
+            return count > 1 ? text + " · отрядов " + std::to_string(count) : text;
+        };
 
         // --- намерения из интерфейса ---
         switch (action.kind) {
@@ -923,14 +1160,166 @@ int main(int argc, char** argv) {
                 break;
             case render::ActionKind::SelectFleet:
                 state.fleet = action.value;
+                // Щелчок по строке значит «работаю с этим одним»: группа
+                // сбрасывается. Добавляют к группе отдельной кнопкой.
+                state.selection.clear();
                 state.awaitingMoveTarget = false;
                 break;
+            case render::ActionKind::ToggleSelect: {
+                auto& group = state.selection;
+                // Первое добавление подхватывает уже выбранный отряд:
+                // «выбран первый, добавляю второй» обязано дать двух,
+                // а не одного второго.
+                if (group.empty() && state.fleet != kNoFleet &&
+                    state.fleet != action.value) {
+                    group.push_back(state.fleet);
+                }
+                const auto at = std::find(group.begin(), group.end(), action.value);
+                if (at != group.end()) {
+                    group.erase(at);
+                } else {
+                    group.push_back(action.value);
+                }
+                if (group.size() == 1) {
+                    state.fleet = group.front();
+                    group.clear();
+                } else if (!group.empty() &&
+                           std::find(group.begin(), group.end(), state.fleet) ==
+                               group.end()) {
+                    state.fleet = group.front();
+                }
+                break;
+            }
             case render::ActionKind::BeginMove:
                 state.awaitingMoveTarget = state.fleet != kNoFleet;
+                // Счётчик точек обнуляется вместе со взводом: первый
+                // щелчок нового захода ЗАМЕНЯЕТ маршрут, а не дописывает
+                // его к прошлому. Иначе игрок, взводивший приказ дважды,
+                // получал бы маршрут из старых точек с новыми на хвосте.
+                state.routePoints = 0;
                 if (state.awaitingMoveTarget) state.inSystem = false;
                 break;
             case render::ActionKind::CancelMove:
                 state.awaitingMoveTarget = false;
+                state.routePoints = 0;
+                break;
+
+            // --- управление отрядом ---
+            case render::ActionKind::ClearRoute: {
+                const uint32_t sent = forSelected(
+                    action.value, [&](uint32_t id) { return client.orderRouteClear(id); });
+                if (sent > 0) {
+                    messages.add(squadNote("маршрут снят", sent), kInfo, now, state.system,
+                                 "icon_fleet");
+                }
+                break;
+            }
+            case render::ActionKind::GoHome: {
+                // У каждого отряда СВОЯ приписка, поэтому «домой» группой —
+                // это не одна цель на всех, а по цели на отряд.
+                uint32_t where = kNoSystem;
+                const uint32_t sent = forSelected(action.value, [&](uint32_t id) {
+                    const auto found = client.view().fleets.find(id);
+                    if (found == client.view().fleets.end()) return false;
+                    const uint32_t home = found->second.anchor;
+                    if (home >= client.galaxy().systemCount()) return false;
+                    if (!client.orderRoute(id, home)) return false;
+                    where = home;
+                    return true;
+                });
+                if (sent > 0) {
+                    messages.add(squadNote("отряд идёт домой", sent), kInfo, now, where,
+                                 "icon_fleet");
+                }
+                break;
+            }
+            case render::ActionKind::SetStance: {
+                if (action.slot >= uint8_t(sim::Stance::Count)) break;
+                const sim::Stance want = sim::Stance(action.slot);
+                const uint32_t sent = forSelected(
+                    action.value, [&](uint32_t id) { return client.orderStance(id, want); });
+                if (sent > 0) {
+                    messages.add(squadNote(std::string("стойка: ") + sim::stanceName(want),
+                                           sent),
+                                 kInfo, now, state.system, "icon_fleet");
+                }
+                break;
+            }
+            case render::ActionKind::SetEvade: {
+                const bool on = action.slot != 0;
+                const uint32_t sent = forSelected(
+                    action.value, [&](uint32_t id) { return client.orderEvade(id, on); });
+                if (sent > 0) {
+                    messages.add(squadNote(on ? "отряд будет уклоняться"
+                                              : "отряд примет любой бой",
+                                           sent),
+                                 kInfo, now, state.system, "icon_defense");
+                }
+                break;
+            }
+            case render::ActionKind::AnchorSystem: {
+                const uint32_t home = state.system;
+                const uint32_t sent = forSelected(action.value, [&](uint32_t id) {
+                    return client.orderAnchorSystem(id, home);
+                });
+                if (sent > 0) {
+                    messages.add(squadNote("приписан к системе", sent), kInfo, now, home,
+                                 "icon_star");
+                }
+                break;
+            }
+            case render::ActionKind::AnchorPlanet: {
+                const uint32_t planet = action.planet;
+                const uint32_t sent = forSelected(action.value, [&](uint32_t id) {
+                    return client.orderAnchorPlanet(id, planet);
+                });
+                if (sent > 0) {
+                    messages.add(squadNote("приписан к планете", sent), kInfo, now,
+                                 state.system, "icon_planet");
+                }
+                break;
+            }
+            case render::ActionKind::MergeFleet:
+                if (client.orderMergeFleet(state.fleet, action.value)) {
+                    messages.add("отряды слиты", kInfo, now, state.system, "icon_fleet");
+                }
+                break;
+            case render::ActionKind::ToggleSquad:
+                state.squadOpen = !state.squadOpen;
+                // Набор разделения сбрасывается при закрытии: вернувшись
+                // к отряду завтра, игрок не должен обнаружить в окне
+                // позавчерашнее намерение, о котором давно забыл.
+                if (!state.squadOpen) state.splitTake = sim::Fleet{};
+                break;
+            case render::ActionKind::SplitAdjust:
+                if (action.slot >= 1 && action.slot < uint8_t(sim::Hull::Count)) {
+                    state.splitTake[sim::Hull(action.slot)] = action.value;
+                }
+                break;
+            case render::ActionKind::SplitPreset: {
+                const auto found = client.view().fleets.find(state.fleet);
+                const sim::Fleet whole =
+                    found != client.view().fleets.end() ? found->second.composition
+                                                        : sim::Fleet{};
+                if (action.value == 1) {
+                    state.splitTake = sim::fleetHalf(whole);
+                } else if (action.value == 2) {
+                    state.splitTake = sim::fleetOnly(whole, sim::Hull::Colonizer);
+                } else {
+                    state.splitTake = sim::Fleet{};
+                }
+                break;
+            }
+            case render::ActionKind::SplitConfirm:
+                if (client.orderSplitFleet(action.value, state.splitTake)) {
+                    messages.add("отряд выделен", kInfo, now, state.system, "icon_fleet");
+                    // Тот же приём, что и у быстрого выделения: запоминаем
+                    // состав списка ДО приказа, чтобы выбрать новый отряд,
+                    // когда он приедет снапшотом.
+                    awaitingSplit = true;
+                    knownFleets = client.fleetsAt(state.system);
+                    state.splitTake = sim::Fleet{};
+                }
                 break;
             case render::ActionKind::FocusSystem:
                 if (action.value < client.galaxy().systemCount()) {
@@ -975,9 +1364,24 @@ int main(int argc, char** argv) {
         // Каждая дублирует кнопку на экране. Ни одного действия, которое
         // делается ТОЛЬКО клавишей, здесь нет и быть не должно.
         if (input.wasPressed(Key::Escape)) {
-            if (state.awaitingMoveTarget) state.awaitingMoveTarget = false;
-            else if (state.inSystem) state.inSystem = false;
-            else break;
+            // Escape снимает по ОДНОМУ слою за нажатие, от самого
+            // временного к самому постоянному: набор маршрута, окно
+            // отряда, выделение группой, вид системы — и только потом
+            // выход. Иначе одно нажатие сносило бы сразу всё, включая
+            // группу, которую собирали дольше всего.
+            if (state.awaitingMoveTarget) {
+                state.awaitingMoveTarget = false;
+                state.routePoints = 0;
+            } else if (state.squadOpen) {
+                state.squadOpen = false;
+                state.splitTake = sim::Fleet{};
+            } else if (!state.selection.empty()) {
+                state.selection.clear();
+            } else if (state.inSystem) {
+                state.inSystem = false;
+            } else {
+                break;
+            }
         }
         if (input.wasPressed(Key::Enter) && client.ready() &&
             state.system < client.galaxy().systemCount()) {
@@ -1014,6 +1418,21 @@ int main(int argc, char** argv) {
         // Правая кнопка: тянуть карту или вращать камеру в системе.
         // Тянуть, а не двигать рывками: рука ожидает, что карта поедет
         // за курсором, и любое другое поведение ощущается сломанным.
+        // ДВИЖЕНИЕ СЧИТАЕМ ТОЛЬКО ПОСЛЕ НАЖАТИЯ, и порядок этих двух
+        // проверок именно поэтому такой. Если сначала взводить `panning`,
+        // а потом мерить сдвиг, то кадр нажатия принесёт сдвиг, которым
+        // рука доводила курсор ДО звезды, — и правый щелчок никогда
+        // не отличался бы от перетаскивания. То есть приказ не работал бы
+        // вовсе, а выглядело бы это как «иногда не срабатывает».
+        if (panning && (std::fabs(input.mouseDeltaX()) > 1.0f ||
+                        std::fabs(input.mouseDeltaY()) > 1.0f)) {
+            panned = true;
+        }
+        if (input.wasPressed(MouseButton::Right)) {
+            panning = true;
+            panned = false;
+        }
+
         if (input.isDown(MouseButton::Right) && width > 0 && height > 0) {
             if (state.inSystem) {
                 systemCamera.yawTurns -= input.mouseDeltaX() / float(width);
@@ -1030,6 +1449,22 @@ int main(int argc, char** argv) {
                 // с игроком за управление камерой.
                 camera.targetX = camera.centerX;
                 camera.targetY = camera.centerY;
+            }
+        }
+
+        // ВЫДЕЛЕНИЕ ЧИСТИТСЯ ОТ МЁРТВЫХ. Отряд гибнет в бою и сливается
+        // с соседом, и его номер остаётся в списке навсегда: панель пишет
+        // «выбрано 5», когда живых трое, а приказ молча уходит в никуда.
+        if (client.ready() && !state.selection.empty()) {
+            const auto& alive = client.view().fleets;
+            state.selection.erase(
+                std::remove_if(state.selection.begin(), state.selection.end(),
+                               [&](uint32_t id) { return alive.count(id) == 0; }),
+                state.selection.end());
+            // Один уцелевший — это уже не группа, а обычный выбор.
+            if (state.selection.size() == 1) {
+                state.fleet = state.selection.front();
+                state.selection.clear();
             }
         }
 
@@ -1057,6 +1492,130 @@ int main(int argc, char** argv) {
                                           camera.worldHeight);
         }
 
+        // --- РАМКА ВЫДЕЛЕНИЯ ---
+        //
+        // Левая кнопка по пустому месту карты не делала ничего, и рамка
+        // встаёт ровно в эту дыру: правая занята под перетаскивание карты,
+        // а клавиш в этой игре нет вовсе. Начинается по нажатию мимо
+        // звёзд, живёт, пока кнопку держат, и решает на отпускании.
+        if (client.ready() && worldInput && !state.inSystem &&
+            !state.awaitingMoveTarget && under == kNoSystem &&
+            input.wasPressed(MouseButton::Left)) {
+            banding = true;
+            bandStartX = input.mouseX();
+            bandStartY = input.mouseY();
+        }
+        if (banding) {
+            state.bandX0 = bandStartX;
+            state.bandY0 = bandStartY;
+            state.bandX1 = input.mouseX();
+            state.bandY1 = input.mouseY();
+            const bool dragged =
+                std::fabs(state.bandX1 - bandStartX) > kBandThreshold ||
+                std::fabs(state.bandY1 - bandStartY) > kBandThreshold;
+            state.bandActive = dragged;
+
+            if (!input.isDown(MouseButton::Left)) {
+                if (dragged) {
+                    // Углы рамки переводим в мир и проверяем там: флот
+                    // в пути стоит МЕЖДУ узлами, и брать его по системе
+                    // отправления значило бы выделять то, чего в рамке нет.
+                    float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f;
+                    camera.toWorld(state.bandX0, state.bandY0, width, height, ax, ay);
+                    camera.toWorld(state.bandX1, state.bandY1, width, height, bx, by);
+                    const float minX = std::min(ax, bx), maxX = std::max(ax, bx);
+                    const float minY = std::min(ay, by), maxY = std::max(ay, by);
+
+                    state.selection.clear();
+                    const uint32_t systems = client.galaxy().systemCount();
+                    for (const auto& [id, fleet] : client.view().fleets) {
+                        if (fleet.empire != uint8_t(client.empire())) continue;
+                        if (fleet.system >= systems) continue;
+                        float fx = float(client.galaxy().positionX(fleet.system).toDouble());
+                        float fy = float(client.galaxy().positionY(fleet.system).toDouble());
+                        if (fleet.nextSystem != fleet.system && fleet.nextSystem < systems) {
+                            const float t =
+                                std::clamp(float(fleet.progress.toDouble()), 0.0f, 1.0f);
+                            fx += (float(client.galaxy().positionX(fleet.nextSystem)
+                                             .toDouble()) - fx) * t;
+                            fy += (float(client.galaxy().positionY(fleet.nextSystem)
+                                             .toDouble()) - fy) * t;
+                        }
+                        if (fx < minX || fx > maxX || fy < minY || fy > maxY) continue;
+                        state.selection.push_back(id);
+                    }
+                    // Порядок обхода словаря не определён, а номера отрядов
+                    // игрок читает по возрастанию: без сортировки «первый
+                    // выделенный» менялся бы от кадра к кадру.
+                    std::sort(state.selection.begin(), state.selection.end());
+
+                    if (state.selection.empty()) {
+                        messages.add("в рамке нет ваших отрядов", kInfo, now, kNoSystem,
+                                     "icon_alert");
+                    } else {
+                        state.fleet = state.selection.front();
+                        const auto& picked = client.view().fleets.at(state.fleet);
+                        state.system = picked.system;
+                        // Выделение из одного отряда — это обычный выбор,
+                        // и группы тут нет: список из одного номера только
+                        // мешал бы, показывая «выбрано 1».
+                        if (state.selection.size() == 1) {
+                            state.selection.clear();
+                        } else {
+                            messages.add("выделено отрядов: " +
+                                             std::to_string(state.selection.size()),
+                                         kInfo, now, picked.system, "icon_fleet");
+                        }
+                    }
+                } else {
+                    // Щелчок без протаскивания снимает группу: в RTS щелчок
+                    // по пустому месту всегда значит «больше ничего не
+                    // выделено», и ломать это ожидание незачем.
+                    state.selection.clear();
+                }
+                banding = false;
+                state.bandActive = false;
+            }
+        }
+
+        // --- ПРАВЫЙ ЩЕЛЧОК ПО ЗВЕЗДЕ: «ИДИ ТУДА» ---
+        //
+        // Приказ одним движением, как в любой RTS: выделил рамкой —
+        // ткнул правой в систему. Полоса кнопок никуда не делась,
+        // но набирать через неё маршрут из одной точки — это три
+        // действия там, где хватает одного.
+        //
+        // Маршрут ЗАМЕНЯЕТСЯ целиком: правый щелчок это «отставить
+        // всё и идти сюда». Добавление точек осталось за взведённым
+        // «Приказом», где игрок явно сказал, что собирает план.
+        if (input.wasReleased(MouseButton::Right)) {
+            const bool order = client.ready() && worldInput && !state.inSystem &&
+                               !panned && under != kNoSystem;
+            if (order) {
+                const uint32_t sent = forSelected(state.fleet, [&](uint32_t id) {
+                    return client.orderRoute(id, under);
+                });
+                if (sent > 0) {
+                    if (sweepStep > 0) ++sweepRightOrders;
+                    state.awaitingMoveTarget = false;
+                    state.routePoints = 0;
+                    messages.add(squadNote("флот идёт в систему " +
+                                               std::to_string(under),
+                                           sent),
+                                 kInfo, now, under, "icon_fleet");
+                    if (motion) {
+                        effects.spawn(render::EffectKind::Order,
+                                      float(client.galaxy().positionX(under).toDouble()),
+                                      float(client.galaxy().positionY(under).toDouble()),
+                                      camera.worldHeight * 0.012f,
+                                      render::empireColor(client.empire()), under);
+                    }
+                }
+            }
+            panning = false;
+            panned = false;
+        }
+
         if (client.ready() && worldInput && input.wasPressed(MouseButton::Left)) {
             if (state.inSystem) {
                 // В системе щелчок выбирает планету.
@@ -1073,9 +1632,28 @@ int main(int argc, char** argv) {
                     // Приказ взведён — щелчок задаёт цель. Ответ придёт
                     // снапшотом: клиент ничего не двигает сам.
                     if (sweepStep > 0) ++sweepOrders;
-                    if (client.orderMove(state.fleet, under)) {
-                        messages.add("флот идёт в систему " + std::to_string(under), kInfo,
-                                     now, under, "icon_fleet");
+                    // ПЕРВЫЙ ЩЕЛЧОК ЗАМЕНЯЕТ МАРШРУТ, КАЖДЫЙ СЛЕДУЮЩИЙ
+                    // ДОБАВЛЯЕТ ТОЧКУ. Режим остаётся взведённым, пока
+                    // игрок не скажет «Готово», не нажмёт Escape или
+                    // не щёлкнет мимо звёзд. Это и есть shift-клик из RTS,
+                    // сделанный без единой клавиши.
+                    const bool firstPoint = state.routePoints == 0;
+                    const uint32_t reached = forSelected(state.fleet, [&](uint32_t id) {
+                        return firstPoint ? client.orderRoute(id, under)
+                                          : client.orderRouteAppend(id, under);
+                    });
+                    const bool sent = reached > 0;
+                    if (sent) {
+                        ++state.routePoints;
+                        messages.add(
+                            squadNote(firstPoint ? "флот идёт в систему " +
+                                                       std::to_string(under)
+                                                 : "точка " +
+                                                       std::to_string(state.routePoints) +
+                                                       ": система " +
+                                                       std::to_string(under),
+                                      reached),
+                            kInfo, now, under, "icon_fleet");
                         // ОТКЛИК НА ПРИКАЗ, а не новость о мире. Флот
                         // тронется через секунду, а до тех пор картинка
                         // не меняется ничем — и щелчок выглядит потерянным.
@@ -1089,7 +1667,15 @@ int main(int argc, char** argv) {
                                           render::empireColor(client.empire()), under);
                         }
                     }
-                    state.awaitingMoveTarget = false;
+                    // Маршрут кончился местом: дальше добавлять некуда,
+                    // и режим снимается сам, чтобы следующий щелчок
+                    // не выглядел проигнорированным.
+                    if (state.routePoints >= sim::FleetOrders::kMaxRoute) {
+                        state.awaitingMoveTarget = false;
+                        state.routePoints = 0;
+                        messages.add("маршрут заполнен: восемь точек", kInfo, now,
+                                     under, "icon_alert");
+                    }
                 } else {
                     // Двойной щелчок по системе открывает её. Первый
                     // выбирает, второй входит — так же, как папка
@@ -1101,6 +1687,8 @@ int main(int argc, char** argv) {
                     state.slot = kNoSlot;
                     const auto own = client.fleetsAt(under);
                     state.fleet = own.empty() ? kNoFleet : own.front();
+                    // Выбрали другую систему — группа больше не про неё.
+                    state.selection.clear();
 
                     if (doubleClick) {
                         state.inSystem = true;
@@ -1112,6 +1700,13 @@ int main(int argc, char** argv) {
                     lastClickSystem = under;
                     lastClickAt = now;
                 }
+            } else if (state.awaitingMoveTarget) {
+                // Щелчок МИМО ЗВЁЗД заканчивает набор маршрута. Третий
+                // способ сказать «готово» после кнопки и Escape, и самый
+                // естественный: рука уже на карте, и тянуться к панели
+                // ради одного нажатия незачем.
+                state.awaitingMoveTarget = false;
+                state.routePoints = 0;
             }
         }
 
@@ -1152,6 +1747,8 @@ int main(int argc, char** argv) {
             selection.system = state.system;
             selection.fleet = state.fleet;
             selection.planetIndex = state.planetIndex;
+            selection.group = state.selection.empty() ? nullptr : state.selection.data();
+            selection.groupCount = uint32_t(state.selection.size());
             // Линия к цели тянется только когда приказ взведён: постоянная
             // линия за курсором — это шум, который игрок перестаёт видеть.
             selection.hoverSystem = state.awaitingMoveTarget ? under : kNoSystem;

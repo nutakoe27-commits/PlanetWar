@@ -5,6 +5,7 @@ add_executable(pw_render_view_tests
     test_motion.cpp
     test_font.cpp
     test_screen.cpp
+    test_squad.cpp
     test_system_view.cpp)
 
 target_link_libraries(pw_render_view_tests PRIVATE pw_render doctest)

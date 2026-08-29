@@ -391,6 +391,44 @@ void MapView::build(const sim::Galaxy& galaxy, const game::WorldView& world, uin
             sprite.x += kStarRadius * kFleetOffset;
         }
         out.sprites.push_back(sprite);
+
+        // МЕТКА СТОЙКИ — форма, а не цвет.
+        //
+        // Стойка решает, что отряд делает часами: возвращается домой,
+        // ходит по кругу или стоит намертво. Цветом её различить нельзя —
+        // цвет уже занят империей, — а форму глаз читает без легенды:
+        // дуга под значком это щит охраны, кольцо это круг патруля,
+        // чёрточка это «стою». У резерва метки нет вовсе: отряд,
+        // которого игрок не трогал, ничего и не обещает.
+        if (fleet.empire == uint8_t(empire) &&
+            fleet.stance != uint8_t(sim::Stance::Reserve)) {
+            const float mark = sprite.halfWidth * 0.55f;
+            const float my = sprite.y - sprite.halfHeight - mark * 0.9f;
+            switch (sim::Stance(fleet.stance)) {
+                case sim::Stance::Guard:
+                    pushCircle(out.lines, sprite.x, my, mark, color, 0.9f, 16, 0.5f);
+                    break;
+                case sim::Stance::Patrol:
+                    pushCircle(out.lines, sprite.x, my, mark, color, 0.9f, 16);
+                    break;
+                case sim::Stance::Hold:
+                    pushLine(out.lines, sprite.x - mark, my, sprite.x + mark, my, color,
+                             0.9f);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        // ОТРЯД В ВЫДЕЛЕНИИ ОБВЕДЁН. Приказ уйдёт всем выделенным, и на
+        // карте обязано быть видно, кому именно, — иначе игрок узнаёт
+        // состав группы только по числу в шапке панели и вынужден верить
+        // ему на слово. Скобка, а не заливка: значок отряда и так занят
+        // цветом империи и формой корпуса.
+        if (fleet.empire == uint8_t(empire) && selection.inGroup(id)) {
+            const float r = sprite.halfWidth * 1.6f;
+            pushCircle(out.lines, sprite.x, sprite.y, r, empireColor(empire), 0.95f, 20);
+        }
     }
 
     // --- выделение ---
@@ -406,6 +444,67 @@ void MapView::build(const sim::Galaxy& galaxy, const game::WorldView& world, uin
         pushCircle(out.lines, x, y,
                    std::max(kStarRadius * 2.4f, minStarHalf * 2.2f) * breath,
                    empireColor(empire), 0.95f, 28);
+
+        // МАРШРУТ ВЫДЕЛЕННОГО ОТРЯДА — ломаная через оставшиеся точки.
+        //
+        // Игрок задал план и ушёл. Вернувшись, он обязан увидеть его
+        // целиком: без ломаной на карте единственный способ вспомнить,
+        // куда идёт отряд, — это довериться памяти, а память подводит
+        // ровно в тех случаях, ради которых маршрут и задавали.
+        //
+        // Рисуется ТОЛЬКО У ВЫДЕЛЕННОГО. Маршруты всех отрядов разом
+        // превратили бы карту в схему метро, на которой не видно самой
+        // карты.
+        const auto chosen = world.fleets.find(selection.fleet);
+        if (chosen != world.fleets.end() &&
+            chosen->second.empire == uint8_t(empire)) {
+            const game::FleetView& fleet = chosen->second;
+
+            float px = toFloat(galaxy.positionX(fleet.system));
+            float py = toFloat(galaxy.positionY(fleet.system));
+            if (fleet.nextSystem != fleet.system && fleet.nextSystem < systemCount) {
+                const float t = std::clamp(toFloat(fleet.progress), 0.0f, 1.0f);
+                px += (toFloat(galaxy.positionX(fleet.nextSystem)) - px) * t;
+                py += (toFloat(galaxy.positionY(fleet.nextSystem)) - py) * t;
+            }
+
+            const float dot = std::max(kStarRadius * 1.1f, minStarHalf * 1.1f);
+            for (uint8_t step = fleet.routeStep; step < fleet.routeCount; ++step) {
+                const uint32_t point = fleet.route[step];
+                if (point >= systemCount) continue;
+                const float tx = toFloat(galaxy.positionX(point));
+                const float ty = toFloat(galaxy.positionY(point));
+                // Ближние отрезки ярче дальних: так видно направление
+                // движения, а не просто набор связанных точек.
+                const float fade = 0.85f - 0.07f * float(step - fleet.routeStep);
+                pushLine(out.lines, px, py, tx, ty, empireColor(empire),
+                         std::max(0.3f, fade));
+                pushCircle(out.lines, tx, ty, dot, empireColor(empire),
+                           std::max(0.35f, fade), 14);
+                px = tx;
+                py = ty;
+            }
+            // Патруль замыкает круг: маршрут, который не кончается,
+            // и на карте обязан выглядеть кольцом, а не отрезком.
+            if (fleet.stance == uint8_t(sim::Stance::Patrol) && fleet.routeCount > 1 &&
+                fleet.route[0] < systemCount) {
+                pushLine(out.lines, px, py, toFloat(galaxy.positionX(fleet.route[0])),
+                         toFloat(galaxy.positionY(fleet.route[0])), empireColor(empire),
+                         0.35f);
+            }
+
+            // ПРИПИСКА — двойное кольцо на доме отряда. Только у
+            // выделенного и только двумя тонкими кольцами: это справка
+            // «отсюда он», а не событие, и спорить яркостью с осадой
+            // или выделением ей незачем.
+            if (fleet.anchor < systemCount) {
+                const float ax = toFloat(galaxy.positionX(fleet.anchor));
+                const float ay = toFloat(galaxy.positionY(fleet.anchor));
+                const float base = std::max(kStarRadius * 2.9f, minStarHalf * 2.7f);
+                pushCircle(out.lines, ax, ay, base, empireColor(empire), 0.5f, 24);
+                pushCircle(out.lines, ax, ay, base * 1.18f, empireColor(empire), 0.3f, 24);
+            }
+        }
 
         // Линия к цели приказа: игрок видит, куда пойдёт флот, ещё до
         // нажатия. Это единственное, что клиент «предсказывает», и то

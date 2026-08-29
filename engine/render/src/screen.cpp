@@ -1286,7 +1286,7 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
         column.row(line * 1.3f, unit * 0.8f);
     } else {
         for (size_t i = 0; i < fleets.size(); ++i) column.row(fleetRow);
-        column.row(line * 2.0f, unit * 0.4f);         // «Отправить флот»
+        column.row(line * 2.0f, unit * 0.4f);         // приказ, стоп, домой, отряд
         column.row(line * 2.1f, unit * 0.8f);         // «Выделить: значки»
     }
     column.row(line * 1.25f, unit * 0.5f);            // «Заказать корабль»
@@ -1310,7 +1310,14 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
     column.place(panel);
 
     const Rect titleRow = column.next();
-    ui.panelTitle(panel, titleRow.bottom() - panel.y, "Флот в системе");
+    // Сколько отрядов в выделении — в шапке. Приказ уходит всем сразу,
+    // и «скольким» игрок обязан видеть до того, как нажмёт, а не после.
+    const std::string groupNote =
+        state.selection.size() > 1
+            ? "выбрано " + number(int64_t(state.selection.size()))
+            : std::string();
+    ui.panelTitle(panel, titleRow.bottom() - panel.y, "Флот в системе", groupNote,
+                  &ui.theme().textAccent);
 
     if (fleets.empty()) {
         const Rect empty = column.next();
@@ -1320,23 +1327,68 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
             const uint32_t id = fleets[index];
             const auto& fleet = client.view().fleets.at(id);
             const bool selected = id == state.fleet;
+            const bool inGroup = std::find(state.selection.begin(), state.selection.end(),
+                                           id) != state.selection.end();
             const Rect strip = column.next();
             const Rect card{strip.x, strip.y, strip.w, strip.h - 2.0f};
 
             const ButtonResult hit = ui.hotspot(uiId("fleet-row", uint32_t(index)), card);
-            ui.listRow(card, hit.hovered, selected);
+            ui.listRow(card, hit.hovered, selected || inGroup);
             if (hit.clicked) {
                 action.kind = ActionKind::SelectFleet;
                 action.value = id;
             }
 
+            // ГАЛОЧКА СЛЕВА — «этот отряд тоже в группе». Отдельной
+            // кнопкой поверх строки: щелчок по самой строке значит
+            // «работаю с этим одним», и совмещать в одном месте два
+            // разных ответа нельзя.
+            const float tickSize = card.h * 0.44f;
+            const Rect tick{card.x + unit * 0.15f, card.y + (card.h - tickSize) * 0.5f,
+                            tickSize, tickSize};
+            const ButtonResult tickHit = ui.button(
+                uiId("fleet-pick", uint32_t(index)), tick, inGroup ? "*" : "+",
+                inGroup ? ButtonStyle::Accent : ButtonStyle::Quiet);
+            if (tickHit.hovered) {
+                ui.tooltip(inGroup ? "убрать отряд из выделения"
+                                   : "добавить отряд к выделению · приказ уйдёт "
+                                     "всем выделенным сразу");
+            }
+            if (tickHit.clicked) {
+                action.kind = ActionKind::ToggleSelect;
+                action.value = id;
+            }
+
             const float iconSize = card.h * 0.6f;
-            ui.icon(Rect{card.x + unit * 0.5f, card.y + (card.h - iconSize) * 0.5f,
+            const float textLeft = tick.right() + unit * 0.4f + iconSize + unit * 0.4f;
+            ui.icon(Rect{tick.right() + unit * 0.4f, card.y + (card.h - iconSize) * 0.5f,
                          iconSize, iconSize},
                     "icon_fleet");
-            ui.text(card.x + unit + iconSize, card.y + (card.h - line) * 0.5f,
-                    number(sim::fleetTonnage(fleet.composition)) + " т",
+
+            // НОМЕР ОТРЯДА, А НЕ ОДИН ТОННАЖ. Два отряда по шестнадцать
+            // тонн в списке неразличимы, и сказать «отправь третий»
+            // игрок не может: третьего нет. Номер даёт отряду имя
+            // за два байта.
+            const std::string title =
+                fleet.tag > 0 ? "Отряд " + number(fleet.tag) : std::string("Отряд");
+            ui.text(textLeft, card.y + unit * 0.1f, title,
                     selected ? ui.theme().text : ui.theme().textDim);
+
+            // Вторая строка — тоннаж и стойка: что это за отряд и что он
+            // делает сам по себе. Стойка решает поведение на часы вперёд,
+            // и не видеть её в списке значит не видеть половину состояния.
+            std::string under = number(sim::fleetTonnage(fleet.composition)) + " т";
+            if (fleet.stance != uint8_t(sim::Stance::Reserve)) {
+                under += " · ";
+                under += sim::stanceName(sim::Stance(fleet.stance));
+            }
+            if (fleet.evade != 0) under += " · уклон";
+            if (fleet.routeCount > 0) {
+                under += " · маршрут " + number(int64_t(fleet.routeStep) + 1) + "/" +
+                         number(fleet.routeCount);
+            }
+            ui.text(textLeft, card.y + unit * 0.1f + line * 0.95f, under,
+                    ui.theme().textDim);
 
             // Состав — значками корпусов, а не строкой «8/2/0/0/…». Восемь
             // чисел через косые игрок обязан расшифровывать каждый раз,
@@ -1379,24 +1431,87 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
             if (hit.hovered && !full.empty()) ui.tooltip(full);
         }
 
-        // Приказ движения: нажали — следующий щелчок по карте задаёт цель.
-        // Двухшаговый приказ, а не перетаскивание: перетаскивание требует
-        // держать кнопку через полкарты, и на длинном пути его срывает
-        // любое дрожание руки.
-        const Rect move = column.next();
+        // ЧЕТЫРЕ КНОПКИ ВМЕСТО ОДНОЙ: приказ, стоп, домой, отряд.
+        //
+        // Раньше здесь была одна «Отправить флот», и весь словарь приказов
+        // сводился к «иди сюда». Маршрут набирается тем же взведённым
+        // режимом: первый щелчок по карте задаёт точку, каждый следующий
+        // ДОБАВЛЯЕТ — это shift-клик из RTS, сделанный без единой клавиши.
+        const Rect bar = column.next();
         const bool armed = state.awaitingMoveTarget;
-        const bool picked = state.fleet != 0xFFFFFFFFu;
-        const ButtonResult hit =
-            ui.iconButton(uiId("order-move"), move, armed ? "icon_close" : "icon_enter",
-                          armed ? "Отмена — укажите цель" : "Отправить флот",
-                          armed ? ButtonStyle::Danger : ButtonStyle::Accent, picked);
-        if (hit.hovered) {
-            ui.tooltip(!picked ? "сначала выберите флот в списке выше"
-                       : armed  ? "отменить приказ · пока он взведён, щелчок по карте задаёт цель"
-                                : "нажмите, потом щёлкните систему на карте — флот пойдёт "
-                                  "туда и начнёт занимать её планеты");
+        const bool picked = state.fleet != 0xFFFFFFFFu &&
+                            client.view().fleets.count(state.fleet) != 0;
+        const game::FleetView* chosenView =
+            picked ? &client.view().fleets.at(state.fleet) : nullptr;
+
+        // ВСЕ ЧЕТЫРЕ КНОПКИ — С ПОДЛОЖКОЙ. «Стоп» и «Домой» были тихими,
+        // и получалось наоборот: недоступная кнопка рисовала рамку
+        // «недоступно», а доступная не рисовала ничего и читалась
+        // как подпись между двумя кнопками.
+        const float gap = unit * 0.4f;
+        const float wide = (bar.w - gap * 3.0f) * 0.32f;
+        const float narrow = (bar.w - gap * 3.0f - wide * 2.0f) * 0.5f;
+        float bx = bar.x;
+
+        const ButtonResult orderHit = ui.iconButton(
+            uiId("order-move"), Rect{bx, bar.y, wide, bar.h},
+            armed ? "icon_close" : "icon_enter",
+            armed ? "Готово" : "Приказ",
+            armed ? ButtonStyle::Danger : ButtonStyle::Accent, picked);
+        if (orderHit.hovered) {
+            ui.tooltip(!picked ? "сначала выберите отряд в списке выше"
+                       : armed  ? "закончить набор маршрута · пока он взведён, каждый "
+                                  "щелчок по карте добавляет точку"
+                                : "нажмите, потом щёлкайте системы на карте: первый "
+                                  "щелчок задаёт маршрут, каждый следующий добавляет "
+                                  "точку · до восьми точек");
         }
-        if (hit.clicked) action.kind = armed ? ActionKind::CancelMove : ActionKind::BeginMove;
+        if (orderHit.clicked) action.kind = armed ? ActionKind::CancelMove
+                                                  : ActionKind::BeginMove;
+        bx += wide + gap;
+
+        const bool routed = chosenView != nullptr && chosenView->routeCount > 0;
+        const ButtonResult stopHit =
+            ui.button(uiId("order-stop"), Rect{bx, bar.y, narrow, bar.h}, "Стоп",
+                      ButtonStyle::Normal, routed);
+        if (stopHit.hovered) {
+            ui.tooltip(routed ? "снять маршрут целиком · отряд встанет там, где идёт"
+                              : "маршрута нет — снимать нечего");
+        }
+        if (stopHit.clicked) {
+            action.kind = ActionKind::ClearRoute;
+            action.value = state.fleet;
+        }
+        bx += narrow + gap;
+
+        const bool hasHome = chosenView != nullptr &&
+                             chosenView->anchor < client.galaxy().systemCount();
+        const ButtonResult homeHit =
+            ui.button(uiId("order-home"), Rect{bx, bar.y, narrow, bar.h}, "Домой",
+                      ButtonStyle::Normal, hasHome);
+        if (homeHit.hovered) {
+            ui.tooltip(hasHome ? "вернуть отряд к приписке — системе " +
+                                     number(chosenView->anchor)
+                               : "у отряда нет приписки");
+        }
+        if (homeHit.clicked) {
+            action.kind = ActionKind::GoHome;
+            action.value = state.fleet;
+        }
+        bx += narrow + gap;
+
+        const ButtonResult squadHit = ui.iconButton(
+            uiId("order-squad"), Rect{bx, bar.y, wide, bar.h}, "icon_fleet",
+            state.squadOpen ? "Закрыть" : "Отряд…",
+            state.squadOpen ? ButtonStyle::Danger : ButtonStyle::Normal, picked);
+        if (squadHit.hovered) {
+            ui.tooltip("состав и разделение, стойка, приписка, слияние — всё "
+                       "про выбранный отряд в одном окне");
+        }
+        if (squadHit.clicked) {
+            action.kind = ActionKind::ToggleSquad;
+            action.value = state.fleet;
+        }
 
         // --- выделить корабль из отряда ---
         //
@@ -1491,6 +1606,387 @@ ScreenAction Screen::fleetPanel(Ui& ui, const game::Client& client,
             }
         }
     }
+    return action;
+}
+
+// ---------------------------------------------------------------------------
+// Окно отряда
+// ---------------------------------------------------------------------------
+
+ScreenAction Screen::squadWindow(Ui& ui, const game::Client& client,
+                                 const ScreenState& state, float left, float top,
+                                 float width) const {
+    ScreenAction action;
+    if (!state.squadOpen) return action;
+    // Отряд не выбран. Проверка по словарю, а не по значению-заглушке:
+    // отряд мог погибнуть в бою между кадрами, и его номер остался бы
+    // в состоянии экрана — окно тогда рисовало бы состав мертвеца.
+    const auto found = client.view().fleets.find(state.fleet);
+    if (found == client.view().fleets.end()) return action;
+
+    const game::FleetView& fleet = found->second;
+    const float unit = ui.unit();
+    const float line = ui.lineHeight();
+
+    // Классы, которые в отряде есть. Пустые строки в списке состава —
+    // это восемь строк «ноль», среди которых надо искать свои три.
+    std::vector<uint8_t> present;
+    for (uint8_t hull = 1; hull < uint8_t(sim::Hull::Count); ++hull) {
+        if (fleet.composition[sim::Hull(hull)] > 0) present.push_back(hull);
+    }
+
+    // Кого можно слить с этим отрядом: свои, стоящие здесь же.
+    std::vector<uint32_t> neighbours;
+    for (uint32_t id : client.fleetsAt(fleet.system)) {
+        if (id != state.fleet) neighbours.push_back(id);
+    }
+    if (neighbours.size() > 3) neighbours.resize(3);
+
+    const float rowHeight = line * 1.9f;
+    Column column(unit);
+    column.row(line * 1.35f, unit * 0.4f);                 // заголовок
+    column.row(line * 1.15f, unit * 0.2f);                 // стойка и уклонение
+    column.row(line * 1.15f, unit * 0.7f);                 // приписка
+    column.row(line * 1.15f, unit * 0.3f);                 // «СОСТАВ И РАЗДЕЛЕНИЕ»
+    for (size_t i = 0; i < present.size(); ++i) column.row(rowHeight, unit * 0.2f);
+    column.row(rowHeight, unit * 0.4f);                    // заготовки
+    column.row(line * 1.15f, unit * 0.1f);                 // остаётся
+    column.row(line * 1.15f, unit * 0.4f);                 // уходит
+    column.row(rowHeight, unit * 0.8f);                    // «Выделить»
+    column.row(line * 1.15f, unit * 0.3f);                 // «СТОЙКА»
+    column.row(rowHeight, unit * 0.3f);                    // четыре стойки
+    column.row(rowHeight, unit * 0.8f);                    // уклонение
+    column.row(line * 1.15f, unit * 0.3f);                 // «ПРИПИСКА»
+    column.row(rowHeight, neighbours.empty() ? 0.0f : unit * 0.8f);
+    if (!neighbours.empty()) {
+        column.row(line * 1.15f, unit * 0.3f);             // «СЛИЯНИЕ»
+        column.row(rowHeight);
+    }
+
+    // Окно не вылезает за низ экрана: если не помещается снизу —
+    // поднимается. Окно, часть которого за кадром, — это не «почти
+    // помещается», это недоступные кнопки.
+    const float limit = float(ui.screenHeight()) - line * 3.6f - unit * 2.0f;
+    const float y = std::min(top, std::max(unit, limit - column.height()));
+    const Rect box{left, y, width, column.height()};
+    ui.panel(box, "hud_panel", ui.appear(uiId("squad-open"), 0.18f));
+    column.place(box);
+
+    const Rect head = column.next();
+    const std::string title =
+        fleet.tag > 0 ? "ОТРЯД " + number(fleet.tag) : std::string("ОТРЯД");
+    ui.panelTitle(box, head.bottom() - box.y, title,
+                  number(sim::fleetTonnage(fleet.composition)) + " т");
+
+    // --- что отряд делает сам ---
+    const sim::Stance stance = sim::Stance(fleet.stance < uint8_t(sim::Stance::Count)
+                                               ? fleet.stance
+                                               : uint8_t(sim::Stance::Reserve));
+    {
+        const Rect row = column.next();
+        std::string what = std::string("стойка: ") + sim::stanceName(stance);
+        if (fleet.evade != 0) what += " · уклоняется";
+        ui.text(row.x, row.y, what, ui.theme().textDim);
+        if (ui.hotspot(uiId("squad-stance-hint"), row).hovered) {
+            ui.tooltip(sim::stanceHint(stance));
+        }
+    }
+    {
+        const Rect row = column.next();
+        std::string home = "дом: ";
+        if (fleet.anchor >= client.galaxy().systemCount()) {
+            home += "нет";
+        } else {
+            home += "система " + number(fleet.anchor);
+            if (fleet.anchorOrbit != sim::kNoOrbit) {
+                home += ", планета " + number(int64_t(fleet.anchorOrbit) + 1);
+            }
+        }
+        if (fleet.routeCount > 0) {
+            home += "  ·  маршрут " + number(int64_t(fleet.routeStep) + 1) + " из " +
+                    number(fleet.routeCount);
+        }
+        ui.text(row.x, row.y, home, ui.theme().textDim);
+    }
+
+    // Заголовок раздела: полоса плюс надпись. Полоса говорит «здесь
+    // начинается другое», надпись — что именно; одна без другой читается
+    // либо как пустая черта, либо как ещё одна строка списка.
+    auto section = [&](const std::string& label) {
+        const Rect row = column.next();
+        ui.sectionHeader(row);
+        ui.text(row.x + unit * 0.3f, row.y + (row.h - line) * 0.5f, label,
+                ui.theme().textDim);
+    };
+
+    // --- состав и разделение ---
+    section("СОСТАВ И РАЗДЕЛЕНИЕ");
+
+    sim::Fleet stays = fleet.composition;
+    sim::Fleet goes{};
+    for (size_t index = 0; index < sim::kHullClasses; ++index) {
+        const uint32_t want = std::min(state.splitTake.ships[index],
+                                       fleet.composition.ships[index]);
+        goes.ships[index] = want;
+        stays.ships[index] -= want;
+    }
+
+    for (uint8_t hull : present) {
+        const Rect row = column.next();
+        const uint32_t have = fleet.composition[sim::Hull(hull)];
+        const uint32_t take = goes[sim::Hull(hull)];
+
+        const float icon = row.h * 0.75f;
+        ui.icon(Rect{row.x, row.y + (row.h - icon) * 0.5f, icon, icon}, hullIcon(hull));
+
+        // Имя класса — слева, в трети строки. Остальное отдано полосе:
+        // именно ею тут работают, а имя только называет строку.
+        const float nameLeft = row.x + icon + unit * 0.5f;
+        const float nameWidth = row.w * 0.27f;
+        ui.text(nameLeft, row.y + (row.h - line) * 0.5f, hullName(hull),
+                take > 0 ? ui.theme().text : ui.theme().textDim);
+
+        // Числовой столбец ПЕРЕД полосой, а не поверх неё. Поверх число
+        // перечёркивается ползунком ровно в тот момент, когда его читают;
+        // отдельным столбцом оно вдобавок выстраивается по строкам,
+        // и весь набор считывается сверху вниз одним взглядом.
+        const float countWidth = line * 3.4f;
+        const Rect count{nameLeft + nameWidth, row.y, countWidth, row.h};
+        ui.textRight(Rect{count.x, count.y + (row.h - line) * 0.5f,
+                          count.w - unit * 0.5f, line},
+                     number(take) + " / " + number(have),
+                     take > 0 ? ui.theme().textAccent : ui.theme().textDim);
+
+        // «Всё» справа: у полосы край достижим мышью, но попасть в него
+        // точно — задача на координацию, а «забрать весь класс» это самая
+        // частая из всех операций разделения.
+        const float allWidth = line * 2.8f;
+        const ButtonResult allHit = ui.button(
+            uiId("split-all", hull), Rect{row.right() - allWidth, row.y, allWidth, row.h},
+            take >= have ? "снять" : "всё", ButtonStyle::Normal);
+        if (allHit.hovered) {
+            ui.tooltip(take >= have ? "вернуть весь класс в остающуюся половину"
+                                    : "забрать все корабли этого класса");
+        }
+        if (allHit.clicked) {
+            action.kind = ActionKind::SplitAdjust;
+            action.slot = hull;
+            action.value = take >= have ? 0 : have;
+        }
+
+        // ПОЛОСА, А НЕ СЧЁТЧИК. Счётчиком «минус — число — плюс» отряд
+        // из сорока корветов делится пополам за двадцать щелчков, и это
+        // была не гипотеза: ровно так выглядела первая версия этого окна.
+        // Протяжка делает то же одним движением и показывает долю —
+        // «беру примерно половину» видно, не читая чисел.
+        const float barLeft = count.right();
+        const float barWidth = row.right() - allWidth - unit * 0.6f - barLeft;
+        const Rect bar{barLeft, row.y + (row.h - line * 1.05f) * 0.5f, barWidth,
+                       line * 1.05f};
+        const DragResult drag =
+            ui.dragBar(uiId("split-bar", hull), bar, take, have, ui.theme().textAccent);
+        if (drag.hovered || drag.held) {
+            ui.tooltip("потяните: сколько кораблей этого класса уйдёт в новый отряд");
+        }
+        if (drag.changed) {
+            action.kind = ActionKind::SplitAdjust;
+            action.slot = hull;
+            action.value = drag.value;
+        }
+    }
+
+    {
+        const Rect row = column.next();
+        const float third = (row.w - unit * 0.8f) / 3.0f;
+        struct Preset {
+            const char* label;
+            const char* hint;
+            uint32_t id;
+        };
+        const Preset presets[] = {
+            {"половину", "по половине каждого класса, вниз с округлением", 1},
+            {"колонистов", "все колонизаторы и ничего больше — самая частая "
+                           "операция в игре", 2},
+            {"сброс", "снять весь набор", 0},
+        };
+        for (int i = 0; i < 3; ++i) {
+            const Rect cell{row.x + float(i) * (third + unit * 0.4f), row.y, third, row.h};
+            const ButtonResult hit =
+                ui.button(uiId("split-preset", presets[i].id), cell, presets[i].label,
+                          ButtonStyle::Normal);
+            if (hit.hovered) ui.tooltip(presets[i].hint);
+            if (hit.clicked) {
+                action.kind = ActionKind::SplitPreset;
+                action.value = presets[i].id;
+            }
+        }
+    }
+
+    // СВОДКА ОБЕИХ ПОЛОВИН, И В НЕЙ ГЛАВНОЕ — СКОРОСТЬ.
+    //
+    // Скорость флота задаёт самый медленный корабль, и это то, в чём
+    // игроки ошибаются чаще всего: один титан в рейдовой группе режет
+    // её скорость вдвое. Пока цифры скорости нет на экране, разделение —
+    // это бухгалтерия; как только она появилась, это решение.
+    //
+    // Показывается не «единиц в секунду», а ВРЕМЯ ЛИНИИ: средняя
+    // гиперлиния на карте — около девяноста единиц (замер в pw/sim/fleet.h),
+    // и «линия за 19 минут» человек понимает, а «0.08 ед/с» — нет.
+    auto describe = [&](const Rect& row, const char* label, const sim::Fleet& part,
+                        const TextColor& colour) {
+        const uint32_t ships = sim::fleetShipCount(part);
+        std::string text = std::string(label) + ": ";
+        if (ships == 0) {
+            text += "пусто";
+        } else {
+            text += number(sim::fleetTonnage(part)) + " т, " + number(ships) + " кор.";
+            const fx speed = sim::fleetSpeed(part);
+            if (speed > fx::zero()) {
+                constexpr int64_t kAverageLane = 90;
+                const int64_t seconds =
+                    (fx::fromInt(kAverageLane) / speed).floorToInt();
+                text += ", линия " + duration(seconds);
+            }
+        }
+        ui.text(row.x, row.y, text, colour);
+    };
+    describe(column.next(), "остаётся", stays, ui.theme().text);
+    describe(column.next(), "уходит", goes, ui.theme().textAccent);
+
+    {
+        const Rect row = column.next();
+        const sim::FleetLocation where = sim::standingAt(fleet.system, fleet.orbit);
+        const sim::SplitRefusal refusal =
+            sim::splitCheck(fleet.composition, where, goes);
+        const bool can = refusal == sim::SplitRefusal::Ok;
+        const ButtonResult hit =
+            ui.iconButton(uiId("split-confirm"), row, "icon_fleet", "Выделить отряд",
+                          can ? ButtonStyle::Accent : ButtonStyle::Quiet, can);
+        if (hit.hovered) {
+            ui.tooltip(can ? "набранный состав уйдёт в новый отряд с собственным "
+                             "номером · он не сольётся обратно"
+                           : sim::splitRefusalText(refusal));
+        }
+        if (hit.clicked) {
+            action.kind = ActionKind::SplitConfirm;
+            action.value = state.fleet;
+        }
+    }
+
+    // --- стойка ---
+    section("ЧТО ДЕЛАЕТ САМ");
+    {
+        const Rect row = column.next();
+        const float quarter = (row.w - unit * 0.9f) / 4.0f;
+        for (uint8_t raw = 0; raw < uint8_t(sim::Stance::Count); ++raw) {
+            const sim::Stance candidate = sim::Stance(raw);
+            const Rect cell{row.x + float(raw) * (quarter + unit * 0.3f), row.y, quarter,
+                            row.h};
+            const bool active = raw == uint8_t(stance);
+            // ВЫБРАННАЯ СТОЙКА ОСТАЁТСЯ НАЖИМАЕМОЙ. Раньше она передавалась
+            // как enabled=false, чтобы не слать серверу то, что и так стоит, —
+            // и получала подложку «недоступно»: единственная выделенная
+            // кнопка в ряду выглядела погашенной, то есть ровно наоборот.
+            // Повторный щелчок по своей стойке ничего не портит, а ряд
+            // из четырёх одинаково нажимаемых кнопок наконец читается
+            // как переключатель.
+            const ButtonResult hit = ui.button(
+                uiId("stance", raw), cell, sim::stanceName(candidate),
+                active ? ButtonStyle::Accent : ButtonStyle::Normal);
+            if (hit.hovered) ui.tooltip(sim::stanceHint(candidate));
+            if (hit.clicked) {
+                action.kind = ActionKind::SetStance;
+                action.value = state.fleet;
+                action.slot = raw;
+            }
+        }
+    }
+    {
+        const Rect row = column.next();
+        const bool evading = fleet.evade != 0;
+        const ButtonResult hit = ui.iconButton(
+            uiId("stance-evade"), row, "icon_defense",
+            evading ? "Уклоняется от сильного" : "Принимает любой бой",
+            evading ? ButtonStyle::Accent : ButtonStyle::Normal);
+        if (hit.hovered) {
+            ui.tooltip("уклонение уводит отряд к приписке, если противник "
+                       "в системе превосходит в полтора раза · дома не уклоняются: "
+                       "уходить некуда, и гарнизон принимает бой");
+        }
+        if (hit.clicked) {
+            action.kind = ActionKind::SetEvade;
+            action.value = state.fleet;
+            action.slot = evading ? 0 : 1;
+        }
+    }
+
+    // --- приписка ---
+    section("ПРИПИСКА");
+    {
+        const Rect row = column.next();
+        const float half = (row.w - unit * 0.4f) * 0.5f;
+
+        const ButtonResult systemHit =
+            ui.button(uiId("anchor-system"), Rect{row.x, row.y, half, row.h},
+                      "К этой системе", ButtonStyle::Normal,
+                      fleet.system < client.galaxy().systemCount());
+        if (systemHit.hovered) {
+            ui.tooltip("дом отряда — эта система целиком · со стойкой «охранять» "
+                       "он будет возвращаться сюда сам");
+        }
+        if (systemHit.clicked) {
+            action.kind = ActionKind::AnchorSystem;
+            action.value = state.fleet;
+        }
+
+        const auto planets = client.planetsAt(fleet.system);
+        const bool hasPlanet = state.planetIndex < planets.size();
+        const std::string label =
+            hasPlanet ? "К планете " + number(int64_t(state.planetIndex) + 1)
+                      : std::string("К планете");
+        const ButtonResult planetHit =
+            ui.button(uiId("anchor-planet"), Rect{row.x + half + unit * 0.4f, row.y, half,
+                                                  row.h},
+                      label, ButtonStyle::Normal, hasPlanet);
+        if (planetHit.hovered) {
+            ui.tooltip(hasPlanet ? "дом отряда — выбранная планета · стоя здесь, "
+                                   "он встанет именно на её орбиту и будет читаться "
+                                   "как её гарнизон"
+                                 : "выберите планету в списке системы");
+        }
+        if (planetHit.clicked && hasPlanet) {
+            action.kind = ActionKind::AnchorPlanet;
+            action.value = state.fleet;
+            action.planet = planets[state.planetIndex].id;
+        }
+    }
+
+    // --- слияние ---
+    if (!neighbours.empty()) {
+        section("СЛИЯНИЕ");
+        const Rect row = column.next();
+        const float cell = (row.w - unit * 0.4f * float(neighbours.size() - 1)) /
+                           float(neighbours.size());
+        for (size_t i = 0; i < neighbours.size(); ++i) {
+            const game::FleetView& other = client.view().fleets.at(neighbours[i]);
+            const Rect place{row.x + float(i) * (cell + unit * 0.4f), row.y, cell, row.h};
+            const std::string label =
+                other.tag > 0 ? "+ отряд " + number(other.tag)
+                              : "+ " + number(sim::fleetTonnage(other.composition)) + " т";
+            const ButtonResult hit =
+                ui.button(uiId("merge", neighbours[i]), place, label, ButtonStyle::Quiet);
+            if (hit.hovered) {
+                ui.tooltip("влить этот отряд в выбранный · вооружение и номер "
+                           "останутся от выбранного, и смешение доктрин — "
+                           "это реальная потеря выбора");
+            }
+            if (hit.clicked) {
+                action.kind = ActionKind::MergeFleet;
+                action.value = neighbours[i];
+            }
+        }
+    }
+
     return action;
 }
 
@@ -2145,12 +2641,24 @@ const char* actionName(ActionKind kind) {
         case ActionKind::CancelBuild: return "отменить-стройку";
         case ActionKind::OrderShip: return "заказать";
         case ActionKind::SelectFleet: return "выбрать-флот";
+        case ActionKind::ToggleSelect: return "к-выделению";
         case ActionKind::BeginMove: return "отправить-флот";
         case ActionKind::CancelMove: return "отменить-приказ";
         case ActionKind::FocusSystem: return "навести";
         case ActionKind::ResetView: return "обзор";
         case ActionKind::Colonize: return "колонизировать";
         case ActionKind::SplitFleet: return "выделить";
+        case ActionKind::SetStance: return "стойка";
+        case ActionKind::SetEvade: return "уклонение";
+        case ActionKind::AnchorPlanet: return "приписать-планету";
+        case ActionKind::AnchorSystem: return "приписать-систему";
+        case ActionKind::GoHome: return "домой";
+        case ActionKind::ClearRoute: return "стоп";
+        case ActionKind::ToggleSquad: return "окно-отряда";
+        case ActionKind::SplitAdjust: return "набор";
+        case ActionKind::SplitPreset: return "заготовка";
+        case ActionKind::SplitConfirm: return "выделить-состав";
+        case ActionKind::MergeFleet: return "слить";
         case ActionKind::Quit: return "выход";
         case ActionKind::Count: break;
     }
@@ -2196,6 +2704,25 @@ ScreenAction Screen::build(Ui& ui, const game::Client& client, const ScreenState
     const float leftWidth = std::min(float(ui.screenWidth()) * 0.26f, line * 21.0f);
     const float rightWidth = std::min(float(ui.screenWidth()) * 0.20f, line * 17.0f);
 
+    // РАМКА ВЫДЕЛЕНИЯ — ПЕРВОЙ, под всеми панелями. Она принадлежит карте,
+    // а не интерфейсу: рамка, нарисованная поверх панели, выглядит так,
+    // будто выделяет её содержимое.
+    if (state.bandActive) {
+        const Rect band{std::min(state.bandX0, state.bandX1),
+                        std::min(state.bandY0, state.bandY1),
+                        std::fabs(state.bandX1 - state.bandX0),
+                        std::fabs(state.bandY1 - state.bandY0)};
+        TextColor inside = ui.theme().rowActive;
+        inside.a = 0.28f;
+        ui.fill(band, inside);
+        // Кромка в один пиксель по всем четырём сторонам. Одна заливка
+        // без кромки на звёздном фоне читается как пятно, а не как рамка.
+        ui.fill(Rect{band.x, band.y, band.w, 1.0f}, ui.theme().edge);
+        ui.fill(Rect{band.x, band.bottom() - 1.0f, band.w, 1.0f}, ui.theme().edge);
+        ui.fill(Rect{band.x, band.y, 1.0f, band.h}, ui.theme().edge);
+        ui.fill(Rect{band.right() - 1.0f, band.y, 1.0f, band.h}, ui.theme().edge);
+    }
+
     take(topBar(ui, client));
 
     float leftBottom = top;
@@ -2203,6 +2730,11 @@ ScreenAction Screen::build(Ui& ui, const game::Client& client, const ScreenState
     float planetBottom = leftBottom;
     take(planetPanel(ui, client, state, leftBottom + unit * 1.2f, leftWidth, planetBottom));
     take(fleetPanel(ui, client, state, planetBottom + unit * 1.2f, leftWidth));
+    // Окно отряда встаёт справа от левого столбца — там же, где палитра
+    // застройки. Оба окна открываются по щелчку и оба про «выбранное»,
+    // и появляться им в разных местах экрана было бы незачем.
+    take(squadWindow(ui, client, state, unit * 1.5f + leftWidth + unit,
+                     planetBottom + unit * 1.2f, leftWidth * 1.25f));
 
     // Мини-карта занимает правый нижний угол — список обязан кончиться
     // выше неё. Оба размера считаются здесь, из одних и тех же чисел,
