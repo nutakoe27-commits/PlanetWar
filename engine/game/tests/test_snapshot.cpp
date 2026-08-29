@@ -236,6 +236,82 @@ TEST_CASE("снапшот: движение флота доезжает цели
     }
 }
 
+TEST_CASE("снапшот: приказы отряда доезжают целиком") {
+    // МАРШРУТ ОБЯЗАН ДОЕХАТЬ. Игрок задал план из четырёх точек и ушёл;
+    // если снапшот везёт только текущую цель, вернувшись он увидит отряд,
+    // идущий непонятно куда, и переотдаст приказ — то есть план, ради
+    // которого всё и делалось, не переживёт даже одного захода.
+    Link link(20);
+    WorldView world = makeWorld(20, 4);
+
+    FleetView& fleet = world.fleets[1];
+    fleet.tag = 3;
+    fleet.stance = uint8_t(sim::Stance::Patrol);
+    fleet.evade = 1;
+    fleet.anchor = 7;
+    fleet.anchorOrbit = 2;
+    fleet.routeStep = 1;
+    fleet.routeCount = 4;
+    fleet.route[0] = 5;
+    fleet.route[1] = 9;
+    fleet.route[2] = 12;
+    fleet.route[3] = 7;
+    link.settle(world);
+
+    const FleetView& seen = link.client.view().fleets.at(1);
+    CHECK(seen.tag == 3);
+    CHECK(seen.stance == uint8_t(sim::Stance::Patrol));
+    CHECK(seen.evade == 1);
+    CHECK(seen.anchor == 7u);
+    CHECK(seen.anchorOrbit == 2u);
+    CHECK(seen.routeStep == 1);
+    CHECK(seen.routeCount == 4);
+    CHECK(seen.route[1] == 9u);
+    CHECK(seen.routeTarget() == 9u);
+}
+
+TEST_CASE("снапшот: смена маршрута считается изменением") {
+    // Без сравнения приказов снапшот считал бы отряд неизменившимся
+    // после смены плана, и игрок видел бы старый маршрут до первого боя.
+    // Тот же класс ошибки, из-за которого четыре корпуса из восьми
+    // однажды не ездили по сети вовсе.
+    Link link(20);
+    WorldView world = makeWorld(20, 4);
+    world.fleets[1].routeCount = 1;
+    world.fleets[1].route[0] = 5;
+    link.settle(world);
+    REQUIRE(link.client.view().fleets.at(1).routeTarget() == 5u);
+
+    world.fleets[1].route[0] = 11;
+    link.settle(world);
+    CHECK(link.client.view().fleets.at(1).routeTarget() == 11u);
+
+    // И стойка тоже: она решает, что отряд делает ночью.
+    world.fleets[1].stance = uint8_t(sim::Stance::Guard);
+    link.settle(world);
+    CHECK(link.client.view().fleets.at(1).stance == uint8_t(sim::Stance::Guard));
+}
+
+TEST_CASE("снапшот: чужой маршрут в пакет не попадает") {
+    // Видеть, куда идёт сосед, и встречать его заранее означало бы
+    // выиграть войну, ни разу не выйдя в космос. Сервер таких полей
+    // не заполняет вовсе — проверка сторожит сам формат: пустые приказы
+    // обязаны и читаться пустыми.
+    Link link(20);
+    WorldView world = makeWorld(20, 4);
+    FleetView& stranger = world.fleets[1];
+    stranger.empire = 3;
+    stranger.tag = 0;
+    stranger.anchor = sim::kNoSystem;
+    stranger.routeCount = 0;
+    link.settle(world);
+
+    const FleetView& seen = link.client.view().fleets.at(1);
+    CHECK(seen.routeCount == 0);
+    CHECK(seen.routeTarget() == sim::kNoSystem);
+    CHECK(seen.anchor == sim::kNoSystem);
+}
+
 // ---------------------------------------------------------------------------
 // Битые пакеты
 // ---------------------------------------------------------------------------

@@ -82,6 +82,29 @@ struct FleetView {
     fx progress = fx::zero();
     sim::Fleet composition{};
 
+    // --- приказы: ТОЛЬКО У СВОИХ ОТРЯДОВ ---
+    //
+    // Маршрут чужого флота — это разведданные, которых игрок не заслужил.
+    // Видеть, куда идёт сосед, и встречать его заранее означало бы
+    // выиграть войну, ни разу не выйдя в космос. Поэтому у чужих отрядов
+    // всё, что ниже, остаётся пустым: сервер их просто не отправляет.
+    //
+    // Своё же нужно целиком: игрок обязан видеть маршрут, который сам
+    // задал, — иначе он не знает, дошёл приказ или потерялся по дороге.
+    uint16_t tag = 0;
+    uint8_t stance = uint8_t(sim::Stance::Reserve);
+    uint8_t evade = 0;
+    uint32_t anchor = sim::kNoSystem;
+    uint32_t anchorOrbit = sim::kNoOrbit;
+    uint8_t routeStep = 0;
+    uint8_t routeCount = 0;
+    uint32_t route[sim::FleetOrders::kMaxRoute] = {};
+
+    /// Куда отряд идёт прямо сейчас. kNoSystem — никуда.
+    uint32_t routeTarget() const {
+        return routeStep < routeCount ? route[routeStep] : sim::kNoSystem;
+    }
+
     /// Сравнение идёт ПО ВСЕМУ СОСТАВУ, циклом.
     ///
     /// Раньше здесь были выписаны четыре класса корпусов — те, что
@@ -101,6 +124,16 @@ struct FleetView {
         }
         for (size_t index = 0; index < sim::kHullClasses; ++index) {
             if (composition.ships[index] != o.composition.ships[index]) return false;
+        }
+        // Приказы тоже сравниваются, и это не мелочь: без них снапшот
+        // считал бы отряд неизменившимся после смены маршрута, и игрок
+        // видел бы старый план до первого боя. Тот же класс ошибки,
+        // из-за которого четыре корпуса из восьми не ездили по сети.
+        if (tag != o.tag || stance != o.stance || evade != o.evade) return false;
+        if (anchor != o.anchor || anchorOrbit != o.anchorOrbit) return false;
+        if (routeStep != o.routeStep || routeCount != o.routeCount) return false;
+        for (uint8_t index = 0; index < routeCount; ++index) {
+            if (route[index] != o.route[index]) return false;
         }
         return true;
     }

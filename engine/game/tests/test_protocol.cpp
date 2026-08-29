@@ -264,7 +264,7 @@ TEST_CASE("протокол: неизвестный тип сообщения о
     const MessageType known[] = {
         MessageType::Join,     MessageType::Welcome,       MessageType::MoveFleet,
         MessageType::BuildShip, MessageType::BuildBuilding, MessageType::Colonize,
-        MessageType::SplitFleet, MessageType::Notice,
+        MessageType::SplitFleet, MessageType::FleetCommand, MessageType::Notice,
     };
 
     for (int raw = 0; raw < 256; ++raw) {

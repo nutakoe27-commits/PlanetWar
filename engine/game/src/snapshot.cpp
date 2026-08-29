@@ -54,6 +54,27 @@ void writeFleet(ByteWriter& writer, const FleetView& fleet) {
     for (size_t index = 0; index < sim::kHullClasses; ++index) {
         writer.varint(fleet.composition.ships[index]);
     }
+
+    // Приказы едут ОДНИМ БЛОКОМ И ТОЛЬКО У СВОИХ. Признак впереди, чтобы
+    // читатель знал, ждать ли блок: у чужого отряда всё это остаётся
+    // нулями, и гнать по сети восемь нулей на каждый чужой флот в каждом
+    // пакете было бы платой за информацию, которой игрок всё равно
+    // не получит.
+    const bool own = fleet.routeCount > 0 || fleet.tag != 0 ||
+                     fleet.anchor != sim::kNoSystem;
+    writer.u8(own ? 1u : 0u);
+    if (!own) return;
+
+    writer.varint(fleet.tag);
+    writer.u8(fleet.stance);
+    writer.u8(fleet.evade);
+    writer.varint(fleet.anchor == sim::kNoSystem ? 0u : fleet.anchor + 1u);
+    writer.varint(fleet.anchorOrbit == sim::kNoOrbit ? 0u : fleet.anchorOrbit + 1u);
+    writer.u8(fleet.routeStep);
+    writer.u8(fleet.routeCount);
+    for (uint8_t index = 0; index < fleet.routeCount; ++index) {
+        writer.varint(fleet.route[index]);
+    }
 }
 
 bool readFleet(ByteReader& reader, FleetView& fleet) {
@@ -69,6 +90,28 @@ bool readFleet(ByteReader& reader, FleetView& fleet) {
     fleet.progress = reader.fixed();
     for (size_t index = 0; index < sim::kHullClasses; ++index) {
         fleet.composition.ships[index] = uint32_t(reader.varint());
+    }
+
+    if (reader.u8() == 0) return !reader.failed();
+
+    fleet.tag = uint16_t(reader.varint());
+    fleet.stance = reader.u8();
+    fleet.evade = reader.u8();
+    // Система и орбита приписки едут со сдвигом на единицу по той же
+    // причине, что и орбита стоянки: kNoSystem — это все единицы,
+    // и в varint он занимает пять байт вместо одного.
+    const uint64_t anchor = reader.varint();
+    fleet.anchor = anchor == 0 ? sim::kNoSystem : uint32_t(anchor - 1);
+    const uint64_t anchorOrbit = reader.varint();
+    fleet.anchorOrbit = anchorOrbit == 0 ? sim::kNoOrbit : uint32_t(anchorOrbit - 1);
+    fleet.routeStep = reader.u8();
+    fleet.routeCount = reader.u8();
+    // Длина из сети — это то, что прислал чужой код. Больше маршрута
+    // в неё не влезет, и проверка стоит ЗДЕСЬ, а не у вызывающего:
+    // тот, кто её забудет, получит запись за границу массива.
+    if (fleet.routeCount > sim::FleetOrders::kMaxRoute) return false;
+    for (uint8_t index = 0; index < fleet.routeCount; ++index) {
+        fleet.route[index] = uint32_t(reader.varint());
     }
     return !reader.failed();
 }
@@ -289,6 +332,25 @@ void collectView(sim::World& world, const sim::Galaxy& galaxy, uint32_t empire,
             view.orbit = location.orbit;
             view.progress = location.progress;
             view.composition = fleet;
+
+            // Приказы — ТОЛЬКО У СВОИХ. Маршрут чужого флота это
+            // разведданные, которых игрок не заслужил: видеть, куда идёт
+            // сосед, и встречать его заранее означало бы выиграть войну,
+            // ни разу не выйдя в космос.
+            if (owner.empire == empire) {
+                if (const sim::FleetOrders* orders = world.get<sim::FleetOrders>(entity)) {
+                    view.tag = orders->tag;
+                    view.stance = orders->stance;
+                    view.evade = orders->evade;
+                    view.anchor = orders->anchor;
+                    view.anchorOrbit = orders->anchorOrbit;
+                    view.routeStep = orders->step;
+                    view.routeCount = orders->count;
+                    for (uint8_t i = 0; i < orders->count; ++i) {
+                        view.route[i] = orders->route[i];
+                    }
+                }
+            }
             out.fleets[view.id] = view;
         });
 

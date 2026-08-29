@@ -344,6 +344,174 @@ bool colonizeFirstNeutral(Session& session, Client& client, uint32_t fleet,
 }
 
 // ---------------------------------------------------------------------------
+// Управление отрядом
+//
+// Проверяется ПОЛНЫЙ ПУТЬ, а не сервер отдельно: клиент собирает приказ,
+// тот едет по проводу, сервер его применяет, изменение возвращается
+// снапшотом. Проверка, срезающая дорогу через мир сервера, не доказала бы
+// ничего про игру — а именно на этом пути и ломается управление.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("отряд: разделение составом даёт ровно один новый отряд") {
+    // И он НЕ СЛИВАЕТСЯ ОБРАТНО. Пока слияние было безусловным, выделенная
+    // группа возвращалась в общую кучу на следующем тике, и разделение
+    // выглядело как кнопка, которая ничего не делает.
+    Session session(80);
+    session.addClient("Михаил");
+    session.run(2000);
+
+    Client& client = *session.clients[0];
+    REQUIRE(client.ready());
+    const uint32_t home = client.capital();
+    const auto before = client.fleetsAt(home);
+    REQUIRE(before.size() == 1);
+    const uint32_t whole = before.front();
+
+    // Смешанный состав: три корвета и эсминец. Одним приказом.
+    sim::Fleet take = sim::makeFleet({{sim::Hull::Corvette, 3},
+                                      {sim::Hull::Destroyer, 1}});
+    REQUIRE(client.orderSplitFleet(whole, take));
+    session.runGame(60);
+
+    const auto after = client.fleetsAt(home);
+    REQUIRE(after.size() == 2);
+
+    // Состав разошёлся именно так, как просили.
+    uint32_t corvettes = 0, destroyers = 0, parts = 0;
+    for (uint32_t id : after) {
+        const FleetView& view = client.view().fleets.at(id);
+        corvettes += view.composition[sim::Hull::Corvette];
+        destroyers += view.composition[sim::Hull::Destroyer];
+        if (view.composition[sim::Hull::Corvette] == 3 &&
+            view.composition[sim::Hull::Destroyer] == 1) {
+            ++parts;
+        }
+    }
+    CHECK(corvettes == 8);    // стартовые восемь никуда не делись
+    CHECK(destroyers == 2);
+    CHECK(parts == 1);        // и ровно один отряд собран как заказано
+
+    // Час игры спустя отряды всё ещё раздельны.
+    session.runGame(3600);
+    CHECK(client.fleetsAt(home).size() == 2);
+}
+
+TEST_CASE("отряд: маршрут из нескольких точек доезжает до клиента") {
+    Session session(80);
+    session.addClient("Михаил");
+    session.run(2000);
+
+    Client& client = *session.clients[0];
+    const uint32_t home = client.capital();
+    const uint32_t fleet = client.fleetsAt(home).front();
+    REQUIRE(client.galaxy().neighborCount(home) >= 2);
+    const uint32_t first = client.galaxy().neighbors(home)[0];
+    const uint32_t second = client.galaxy().neighbors(home)[1];
+
+    REQUIRE(client.orderRoute(fleet, first));
+    REQUIRE(client.orderRouteAppend(fleet, second));
+    // Ждём СНАПШОТА, а не полёта. Четыреста миллисекунд провода — это
+    // восемь снапшотов и всего шесть минут игры: отряд ещё и до первой
+    // точки не долетел, а значит текущей целью обязана быть именно она.
+    // Первая версия ждала полторы секунды, то есть двадцать пять минут
+    // игры, — и проверяла уже вторую точку, потому что первую отряд
+    // успевал пройти.
+    session.run(400);
+
+    const FleetView& seen = client.view().fleets.at(fleet);
+    CHECK(seen.routeCount == 2);
+    CHECK(seen.route[0] == first);
+    CHECK(seen.route[1] == second);
+    CHECK(seen.routeTarget() == first);
+
+    // «Стоп» снимает весь план, а не одну точку.
+    REQUIRE(client.orderRouteClear(fleet));
+    session.run(1500);
+    CHECK(client.view().fleets.at(fleet).routeCount == 0);
+}
+
+TEST_CASE("отряд: стойка и приписка держатся на сервере") {
+    Session session(80);
+    session.addClient("Михаил");
+    session.run(2000);
+
+    Client& client = *session.clients[0];
+    const uint32_t home = client.capital();
+    const uint32_t fleet = client.fleetsAt(home).front();
+    const auto planets = client.planetsAt(home);
+    REQUIRE(planets.size() >= 2);
+
+    REQUIRE(client.orderStance(fleet, sim::Stance::Guard));
+    REQUIRE(client.orderEvade(fleet, true));
+    REQUIRE(client.orderAnchorPlanet(fleet, planets[1].id));
+    session.run(1500);
+
+    const FleetView& seen = client.view().fleets.at(fleet);
+    CHECK(seen.stance == uint8_t(sim::Stance::Guard));
+    CHECK(seen.evade == 1);
+    CHECK(seen.anchor == home);
+    CHECK(seen.anchorOrbit == planets[1].orbit);
+
+    // И отряд действительно встаёт на свою орбиту, а не на первую попавшуюся.
+    session.runGame(60);
+    CHECK(client.view().fleets.at(fleet).orbit == planets[1].orbit);
+}
+
+TEST_CASE("отряд: слияние собирает разделённое обратно") {
+    Session session(80);
+    session.addClient("Михаил");
+    session.run(2000);
+
+    Client& client = *session.clients[0];
+    const uint32_t home = client.capital();
+    const uint32_t whole = client.fleetsAt(home).front();
+    const uint32_t before = sim::fleetTonnage(client.view().fleets.at(whole).composition);
+
+    REQUIRE(client.orderSplitFleet(whole, sim::Hull::Corvette, 3));
+    session.runGame(60);
+    const auto split = client.fleetsAt(home);
+    REQUIRE(split.size() == 2);
+
+    REQUIRE(client.orderMergeFleet(split[0], split[1]));
+    session.runGame(60);
+
+    const auto merged = client.fleetsAt(home);
+    REQUIRE(merged.size() == 1);
+    // Ни один корабль не потерялся и не удвоился.
+    CHECK(sim::fleetTonnage(client.view().fleets.at(merged.front()).composition) == before);
+}
+
+TEST_CASE("отряд: чужим отрядом покомандовать нельзя") {
+    // Самый дешёвый чит из возможных: прислать номер чужой сущности.
+    // Проверяется КАЖДАЯ команда, а не одна: проверка владельца стоит
+    // в общем поиске отряда, и достаточно одного пути в обход неё.
+    Session session(200);
+    session.addClient("свой");
+    session.addClient("чужой");
+    session.run(2000);
+
+    Client& mine = *session.clients[0];
+    Client& theirs = *session.clients[1];
+    REQUIRE(mine.ready());
+    REQUIRE(theirs.ready());
+
+    const uint32_t victim = theirs.fleetsAt(theirs.capital()).front();
+    const uint64_t before = session.server.rejectedOrders();
+
+    REQUIRE(mine.orderRoute(victim, mine.capital()));
+    REQUIRE(mine.orderStance(victim, sim::Stance::Patrol));
+    REQUIRE(mine.orderAnchorSystem(victim, mine.capital()));
+    REQUIRE(mine.orderSplitFleet(victim, sim::Hull::Corvette, 1));
+    session.run(2000);
+
+    CHECK(session.server.rejectedOrders() >= before + 4);
+    const FleetView& seen = theirs.view().fleets.at(victim);
+    CHECK(seen.routeCount == 0);
+    CHECK(seen.stance != uint8_t(sim::Stance::Patrol));
+    CHECK(theirs.fleetsAt(theirs.capital()).size() == 1);
+}
+
+// ---------------------------------------------------------------------------
 // Расширение — то, ради чего всё это
 // ---------------------------------------------------------------------------
 

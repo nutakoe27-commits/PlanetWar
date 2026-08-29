@@ -65,20 +65,35 @@ void writeMessageType(ByteWriter& writer, MessageType type) { writer.u8(uint8_t(
 bool readMessageType(ByteReader& reader, MessageType& type) {
     const uint8_t raw = reader.u8();
     if (reader.failed()) return false;
-    switch (raw) {
-        case uint8_t(MessageType::Join):
-        case uint8_t(MessageType::Welcome):
-        case uint8_t(MessageType::MoveFleet):
-        case uint8_t(MessageType::BuildShip):
-        case uint8_t(MessageType::Colonize):
-        case uint8_t(MessageType::SplitFleet):
-        case uint8_t(MessageType::BuildBuilding):
-        case uint8_t(MessageType::Notice):
-            type = MessageType(raw);
+
+    // ПЕРЕЧИСЛЕНИЕ БЕЗ default. Разница не косметическая.
+    //
+    // Раньше здесь стоял switch по СЫРОМУ БАЙТУ с веткой default, и он
+    // молча отставал от списка сообщений: добавленный FleetCommand не
+    // проходил разбор вовсе. Снаружи это выглядело как «сервер не
+    // отвечает на приказ» — ни ошибки, ни отказа, просто тишина, и искать
+    // причину пришлось от конца провода к началу.
+    //
+    // Switch по значению ПЕРЕЧИСЛЕНИЯ и без default превращает ту же
+    // забывчивость в предупреждение компилятора, а предупреждения в этом
+    // проекте считаются наравне с ошибками. У MessageType задан базовый
+    // тип uint8_t, поэтому приведение любого байта к нему определено,
+    // а неизвестное значение просто выпадает из switch и даёт отказ.
+    const MessageType candidate = MessageType(raw);
+    switch (candidate) {
+        case MessageType::Join:
+        case MessageType::Welcome:
+        case MessageType::MoveFleet:
+        case MessageType::BuildShip:
+        case MessageType::BuildBuilding:
+        case MessageType::Colonize:
+        case MessageType::SplitFleet:
+        case MessageType::FleetCommand:
+        case MessageType::Notice:
+            type = candidate;
             return true;
-        default:
-            return false;
     }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
