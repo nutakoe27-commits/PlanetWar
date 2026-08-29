@@ -76,6 +76,7 @@ void Client::handleMessage(const uint8_t* data, size_t size) {
         case MessageType::BuildBuilding:
         case MessageType::Colonize:
         case MessageType::SplitFleet:
+        case MessageType::FleetCommand:
             return;
     }
 }
@@ -120,10 +121,56 @@ bool Client::orderColonize(uint32_t fleet, uint32_t planet) {
     return !writer.overflowed() && send(buffer, writer.size());
 }
 
-bool Client::orderSplitFleet(uint32_t fleet, sim::Hull hull, uint16_t count) {
+bool Client::orderSplitFleet(uint32_t fleet, const sim::Fleet& take) {
     uint8_t buffer[64];
     net::ByteWriter writer(buffer, sizeof(buffer));
-    writeSplitFleet(writer, SplitFleetMessage{fleet, uint8_t(hull), count});
+    writeSplitFleet(writer, SplitFleetMessage{fleet, take});
+    return !writer.overflowed() && send(buffer, writer.size());
+}
+
+bool Client::orderSplitFleet(uint32_t fleet, sim::Hull hull, uint16_t count) {
+    if (hull == sim::Hull::None || hull >= sim::Hull::Count) return false;
+    sim::Fleet take{};
+    take[hull] = count;
+    return orderSplitFleet(fleet, take);
+}
+
+bool Client::orderRoute(uint32_t fleet, uint32_t system) {
+    return command(fleet, FleetCommand::RouteSet, system);
+}
+
+bool Client::orderRouteAppend(uint32_t fleet, uint32_t system) {
+    return command(fleet, FleetCommand::RouteAppend, system);
+}
+
+bool Client::orderRouteClear(uint32_t fleet) {
+    return command(fleet, FleetCommand::RouteClear, 0);
+}
+
+bool Client::orderStance(uint32_t fleet, sim::Stance stance) {
+    return command(fleet, FleetCommand::SetStance, uint32_t(stance));
+}
+
+bool Client::orderEvade(uint32_t fleet, bool evade) {
+    return command(fleet, FleetCommand::SetEvade, evade ? 1u : 0u);
+}
+
+bool Client::orderAnchorSystem(uint32_t fleet, uint32_t system) {
+    return command(fleet, FleetCommand::AnchorSystem, system);
+}
+
+bool Client::orderAnchorPlanet(uint32_t fleet, uint32_t planet) {
+    return command(fleet, FleetCommand::AnchorPlanet, planet);
+}
+
+bool Client::orderMergeFleet(uint32_t into, uint32_t from) {
+    return command(into, FleetCommand::Merge, from);
+}
+
+bool Client::command(uint32_t fleet, FleetCommand kind, uint32_t value) {
+    uint8_t buffer[64];
+    net::ByteWriter writer(buffer, sizeof(buffer));
+    writeFleetCommand(writer, FleetCommandMessage{fleet, value, kind});
     return !writer.overflowed() && send(buffer, writer.size());
 }
 

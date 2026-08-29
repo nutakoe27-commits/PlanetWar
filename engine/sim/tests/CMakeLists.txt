@@ -7,6 +7,7 @@ add_executable(pw_sim_tests
     test_fleet.cpp
     test_control.cpp
     test_colony.cpp
+    test_command.cpp
     test_economy.cpp
     test_production.cpp
     test_combat.cpp

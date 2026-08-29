@@ -29,12 +29,29 @@ namespace pw::sim {
 
 class World;
 
+/// Каким отряд появится на свет.
+///
+/// Отдельной структурой, а не пятью аргументами: у появления флота уже
+/// шесть параметров, и позиционный вызов давно стал ловушкой.
+struct FleetBirth {
+    /// Стойка. По умолчанию РЕЗЕРВ: построенный корабль обязан влиться
+    /// в общий пул, иначе каждый сходящий со стапеля корвет останется
+    /// отдельным значком.
+    Stance stance = Stance::Reserve;
+    /// Приписка. kNoSystem означает «приписать туда, где появился».
+    uint32_t anchor = kNoSystem;
+    uint32_t anchorOrbit = kNoOrbit;
+    /// Уклоняться ли. Выделенный отряд наследует признак родителя.
+    bool evade = false;
+};
+
 class Commands {
 public:
     /// Создать флот в системе. Сущность появится при применении буфера.
     /// armament — вооружение новых кораблей; nullptr даёт сбалансированное.
     void spawnFleet(uint32_t empire, uint32_t system, const Fleet& composition,
-                    const struct FleetArmament* armament = nullptr);
+                    const struct FleetArmament* armament = nullptr,
+                    const FleetBirth& birth = FleetBirth{});
 
     /// Удалить сущность. Повторное удаление одной и той же безопасно.
     void destroy(Entity entity);
@@ -53,6 +70,7 @@ private:
         Fleet composition;
         uint8_t armament[8];   // FleetArmament, скопированный побайтово
         bool hasArmament;
+        FleetBirth birth;
     };
 
     std::vector<SpawnFleet> spawns_;

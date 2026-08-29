@@ -43,8 +43,10 @@ enum class MessageType : uint8_t {
     BuildBuilding = 12,
     /// Высадка колонии на ничью планету.
     Colonize = 13,
-    /// Выделить корабли одного класса в отдельный флот.
+    /// Выделить корабли в отдельный флот. Составом, а не по одному классу.
     SplitFleet = 14,
+    /// Всё остальное управление отрядом: маршрут, стойка, приписка, слияние.
+    FleetCommand = 15,
     /// Сервер сообщает о событии, которое игрок обязан заметить.
     Notice = 20,
 };
@@ -133,10 +135,49 @@ struct ColonizeMessage {
 
 struct SplitFleetMessage {
     uint32_t fleet = 0;
-    uint8_t hull = 0;
-    /// Сколько кораблей выделить. Два байта, а не один: выделить сотню
-    /// корветов из тысячи — обычное дело в поздней партии.
-    uint16_t count = 1;
+    /// ПОЛНЫЙ СОСТАВ, а не пара «класс — сколько».
+    ///
+    /// Собрать «шесть корветов, два эсминца и тендер» тремя приказами
+    /// нельзя: три приказа дают три отряда, и собрать их обратно в один —
+    /// ещё три действия. Один приказ — один отряд.
+    sim::Fleet take{};
+};
+
+/// Что сделать с отрядом.
+///
+/// Одно сообщение на всё управление, а не восемь сообщений по одному
+/// полю. У всех этих команд общая форма — «отряду такому-то сделать
+/// то-то с числом таким-то», — и восемь почти одинаковых пар write/read
+/// были бы восемью местами, где можно забыть проверку.
+enum class FleetCommand : uint8_t {
+    /// Заменить маршрут одной точкой. `value` — система.
+    RouteSet = 0,
+    /// Добавить точку в конец маршрута. `value` — система.
+    RouteAppend,
+    /// Снять маршрут. `value` не используется.
+    RouteClear,
+    /// Сменить стойку. `value` — sim::Stance.
+    SetStance,
+    /// Включить или выключить уклонение. `value` — 0 или 1.
+    SetEvade,
+    /// Приписать к системе целиком. `value` — номер системы.
+    AnchorSystem,
+    /// Приписать к планете. `value` — номер СУЩНОСТИ планеты.
+    ///
+    /// Сущности, а не пары «система, орбита»: игрок тычет в планету,
+    /// и заставлять сервер повторять поиск, который клиент уже сделал,
+    /// незачем. Так же адресуется планета и в приказе на колонизацию.
+    AnchorPlanet,
+    /// Влить в этот отряд другой. `value` — номер сущности источника.
+    Merge,
+    Count
+};
+
+struct FleetCommandMessage {
+    uint32_t fleet = 0;
+    /// Система, орбита, стойка, номер другого отряда — по смыслу команды.
+    uint32_t value = 0;
+    FleetCommand command = FleetCommand::RouteClear;
 };
 
 struct NoticeMessage {
@@ -172,6 +213,9 @@ bool readColonize(ByteReader& reader, ColonizeMessage& message);
 
 void writeSplitFleet(ByteWriter& writer, const SplitFleetMessage& message);
 bool readSplitFleet(ByteReader& reader, SplitFleetMessage& message);
+
+void writeFleetCommand(ByteWriter& writer, const FleetCommandMessage& message);
+bool readFleetCommand(ByteReader& reader, FleetCommandMessage& message);
 
 void writeNotice(ByteWriter& writer, const NoticeMessage& message);
 bool readNotice(ByteReader& reader, NoticeMessage& message);

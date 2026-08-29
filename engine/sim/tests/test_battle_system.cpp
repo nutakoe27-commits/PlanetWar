@@ -37,7 +37,7 @@ struct War {
         const Entity e = world.create();
         world.add<Fleet>(e, composition);
         world.add<FleetLocation>(e, standingAt(system));
-        world.add<MoveOrder>(e, MoveOrder{kNoSystem, 0});
+        world.add<FleetOrders>(e, idleOrders(system));
         world.add<Owner>(e, Owner{empire, 0});
         world.add<FleetArmament>(e, armament);
         return e;
@@ -160,15 +160,15 @@ TEST_CASE("сведение: разбитый отходит в соседнюю
     const Entity doomed = war.station(5, 2, makeFleet({{Hull::Destroyer, 25}}), armed(100, 0, 0, 0, 100, 0));
 
     war.run(1 * kSecond);
-    const MoveOrder* order = war.world.get<MoveOrder>(doomed);
+    const FleetOrders* order = war.world.get<FleetOrders>(doomed);
     REQUIRE(order != nullptr);
 
     if (!fleetEmpty(war.fleetOf(doomed))) {
         // Уцелевшие получают приказ уходить, а не стоять под добивание.
-        CHECK(order->target != kNoSystem);
+        CHECK(order->routed());
         bool adjacent = false;
         for (uint32_t k = 0; k < war.galaxy.neighborCount(5); ++k) {
-            if (war.galaxy.neighbors(5)[k] == order->target) adjacent = true;
+            if (war.galaxy.neighbors(5)[k] == order->target()) adjacent = true;
         }
         CHECK(adjacent);
     }
@@ -182,7 +182,7 @@ TEST_CASE("сведение: победитель остаётся в систе
 
     war.run(1 * kSecond);
     // Система за победителем: приказа уходить он не получает.
-    CHECK(war.world.get<MoveOrder>(winner)->target == kNoSystem);
+    CHECK_FALSE(war.world.get<FleetOrders>(winner)->routed());
 }
 
 TEST_CASE("сведение: владелец системы сражается всегда") {

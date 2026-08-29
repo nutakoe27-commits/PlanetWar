@@ -187,6 +187,18 @@ private:
     void applyBuildBuilding(Player& player, const BuildBuildingMessage& message);
     void applyColonize(Player& player, const ColonizeMessage& message);
     void applySplitFleet(Player& player, const SplitFleetMessage& message);
+    void applyFleetCommand(Player& player, const FleetCommandMessage& message);
+
+    /// Найти СВОЙ живой отряд по номеру сущности.
+    ///
+    /// Номер приходит от клиента, поэтому проверяется всё: жива ли
+    /// сущность, флот ли это вообще и ВАШ ли он. Без последней проверки
+    /// любой игрок водил бы чужие флоты — самый дешёвый чит из возможных.
+    ///
+    /// Обходом, а не сборкой Entity{index, 0}: у живой сущности поколение
+    /// не ноль, и собранный вручную номер не находит ничего. Эта ошибка
+    /// уже была однажды — приказ на колонизацию отвергался всегда.
+    sim::Entity findOwnFleet(const Player& player, uint32_t index);
     void sendWelcome(Player& player);
     /// Разослать уведомления о том, что изменилось за тик.
     void notifyChanges();

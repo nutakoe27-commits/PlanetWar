@@ -299,8 +299,12 @@ void systemBattles(World& world, const TickContext& context) {
                 for (size_t i = loser.first; i <= loser.last; ++i) {
                     Fleet* fleet = world.get<Fleet>(present[i].entity);
                     if (fleet == nullptr || fleetEmpty(*fleet)) continue;
-                    MoveOrder* order = world.get<MoveOrder>(present[i].entity);
-                    if (order != nullptr) order->target = target;
+                    // ОТСТУПЛЕНИЕ ОТМЕНЯЕТ ПЛАН. Отряд проиграл бой; идти
+                    // дальше по маршруту означало бы вернуться в ту же
+                    // систему и погибнуть окончательно. Маршрут снимается
+                    // целиком, и на его место встаёт одна точка — куда уйти.
+                    FleetOrders* order = world.get<FleetOrders>(present[i].entity);
+                    if (order != nullptr) setRoute(*order, target);
                 }
             }
         }

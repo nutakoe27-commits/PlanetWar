@@ -6,14 +6,68 @@
 
 #include "pw/sim/combat.h"
 #include "pw/sim/commands.h"
+#include "pw/sim/control.h"
 #include "pw/sim/galaxy.h"
 
 namespace pw::sim {
 
+// ---------------------------------------------------------------------------
+// Стойка: что отряд делает, когда делать нечего
+// ---------------------------------------------------------------------------
+
+void systemFleetStance(World& world, const TickContext&) {
+    // Идёт ПОСЛЕ присутствия: уклонение смотрит, кто ещё стоит в системе,
+    // а присутствие пересобирается каждый тик по итогам движения. Решение,
+    // принятое здесь, вступает в силу движением следующего тика — то есть
+    // через одну десятую игровой секунды. Ждать этого никто не заметит.
+    const Presence* presence = world.resource<Presence>();
+
+    world.each<Fleet, FleetLocation, FleetOrders, Owner>(
+        [&](Entity, Fleet& fleet, FleetLocation& location, FleetOrders& orders,
+            Owner& owner) {
+            // В пути ничего не решаем: отряд между узлами не может ни
+            // уклониться, ни вернуться — он уже в движении.
+            if (location.system != location.nextSystem) return;
+            if (fleetEmpty(fleet)) return;
+
+            // --- уклонение ---
+            //
+            // Единственная механика во всей игре, которая работает, пока
+            // игрок спит. Разведчик, конвой, эскорт колониста живут ровно
+            // до первой встречи с линейным флотом; уклонение превращает
+            // потерю в отход.
+            if (orders.evade != 0 && presence != nullptr &&
+                location.system < presence->size() &&
+                location.system != orders.anchor) {
+                const Presence::Entry& here = presence->at(location.system);
+                uint32_t enemy = 0;
+                const uint32_t attacker = here.strongestOther(owner.empire, enemy);
+                const uint32_t mine = here.tonnageOf(owner.empire);
+                // Свои считаются ВСЕ, кто в системе: союзный флот рядом —
+                // это ровно та причина, по которой отходить не надо.
+                if (attacker != kNoEmpire &&
+                    uint64_t(enemy) * kEvadeDenominator >
+                        uint64_t(mine) * kEvadeNumerator) {
+                    // Уклонение НЕ меняет стойку и не трогает приписку:
+                    // это исполнение решения, принятого игроком заранее,
+                    // а не новое решение.
+                    setRoute(orders, orders.anchor);
+                    return;
+                }
+            }
+
+            // --- возврат домой ---
+            if (orders.routed()) return;
+            if (orders.stance != uint8_t(Stance::Guard)) return;
+            if (orders.anchor == kNoSystem || orders.anchor == location.system) return;
+            setRoute(orders, orders.anchor);
+        });
+}
+
 void registerFleetComponents(World& world) {
     world.registerComponent<Fleet>("Fleet");
     world.registerComponent<FleetLocation>("FleetLocation");
-    world.registerComponent<MoveOrder>("MoveOrder");
+    world.registerComponent<FleetOrders>("FleetOrders");
 }
 
 namespace {
@@ -115,26 +169,113 @@ uint32_t fleetCost(const Fleet& fleet) {
     return total;
 }
 
+// ---------------------------------------------------------------------------
+// Маршрут
+// ---------------------------------------------------------------------------
+
+const char* stanceName(Stance stance) {
+    switch (stance) {
+        case Stance::Reserve: return "резерв";
+        case Stance::Hold:    return "стоять";
+        case Stance::Guard:   return "охранять";
+        case Stance::Patrol:  return "патруль";
+        case Stance::Count:   break;
+    }
+    return "?";
+}
+
+const char* stanceHint(Stance stance) {
+    switch (stance) {
+        case Stance::Reserve:
+            return "общий пул: сливается с другими нетронутыми отрядами "
+                   "в той же системе · любой приказ выводит из резерва";
+        case Stance::Hold:
+            return "стоит там, где встал · сам никуда не уходит "
+                   "и ни с кем не сливается";
+        case Stance::Guard:
+            return "когда маршрут кончился — возвращается к приписке "
+                   "и стоит у неё · так гарнизон не уходит вслед за рейдером";
+        case Stance::Patrol:
+            return "идёт по маршруту по кругу без конца · маршрут "
+                   "из одной точки патрулем не станет";
+        case Stance::Count:
+            break;
+    }
+    return "";
+}
+
+void clearRoute(FleetOrders& orders) {
+    for (uint8_t i = 0; i < FleetOrders::kMaxRoute; ++i) orders.route[i] = kNoSystem;
+    orders.count = 0;
+    orders.step = 0;
+}
+
+void setRoute(FleetOrders& orders, uint32_t system) {
+    clearRoute(orders);
+    if (system == kNoSystem) return;
+    orders.route[0] = system;
+    orders.count = 1;
+}
+
+bool appendRoute(FleetOrders& orders, uint32_t system) {
+    if (system == kNoSystem) return false;
+    if (orders.count >= FleetOrders::kMaxRoute) return false;
+
+    // Точки, стоящие подряд одинаково, не добавляются: два щелчка по одной
+    // системе — это один и тот же приказ, и превращать их в две точки
+    // маршрута значит наказывать за дрожащую руку.
+    if (orders.count > 0 && orders.route[orders.count - 1] == system) return true;
+
+    orders.route[orders.count] = system;
+    ++orders.count;
+    return true;
+}
+
+void commandGiven(FleetOrders& orders) {
+    if (orders.stance == uint8_t(Stance::Reserve)) orders.stance = uint8_t(Stance::Hold);
+}
+
 void systemFleetMovement(World& world, const TickContext& context) {
     const Galaxy* galaxy = world.resource<Galaxy>();
     if (galaxy == nullptr) return;
 
-    world.each<Fleet, FleetLocation, MoveOrder>(
-        [&](Entity, Fleet& fleet, FleetLocation& location, MoveOrder& order) {
+    // Дойдя до конца маршрута, отряд либо встаёт, либо начинает его заново.
+    //
+    // Патруль — это ровно «маршрут не кончается», а не отдельная механика:
+    // одна ветка вместо второго вида приказа. Из одной точки патруля
+    // не выходит намеренно — ходить по кругу из одной системы в неё же
+    // означало бы стоять, но с видом занятого.
+    auto advance = [](FleetOrders& orders) {
+        ++orders.step;
+        if (orders.step < orders.count) return;
+        if (orders.stance == uint8_t(Stance::Patrol) && orders.count > 1) {
+            orders.step = 0;
+            return;
+        }
+        clearRoute(orders);
+    };
+
+    world.each<Fleet, FleetLocation, FleetOrders>(
+        [&](Entity, Fleet& fleet, FleetLocation& location, FleetOrders& order) {
             const bool moving = location.system != location.nextSystem;
 
             if (!moving) {
                 // Стоим. Есть ли куда идти?
-                if (order.target == kNoSystem || order.target == location.system) {
-                    order.target = kNoSystem;
+                if (!order.routed()) {
+                    clearRoute(order);
                     return;
                 }
-                const int32_t hop = galaxy->nextHop(location.system, order.target);
+                if (order.target() == location.system) {
+                    // Уже здесь: точка маршрута пройдена, не сходя с места.
+                    advance(order);
+                    return;
+                }
+                const int32_t hop = galaxy->nextHop(location.system, order.target());
                 if (hop < 0) {
-                    // Пути нет — цель недостижима. Приказ снимаем, а не
+                    // Пути нет — цель недостижима. Маршрут снимаем, а не
                     // оставляем висеть: иначе флот будет молча стоять,
                     // и игрок не поймёт, почему.
-                    order.target = kNoSystem;
+                    clearRoute(order);
                     return;
                 }
                 location.nextSystem = uint32_t(hop);
@@ -165,15 +306,15 @@ void systemFleetMovement(World& world, const TickContext& context) {
             location.system = location.nextSystem;
             location.progress = fx::zero();
 
-            if (location.system == order.target) {
-                order.target = kNoSystem;  // дошли
+            if (location.system == order.target()) {
+                advance(order);           // точка взята
+                if (!order.routed()) return;
+            }
+            const int32_t hop = galaxy->nextHop(location.system, order.target());
+            if (hop < 0) {
+                clearRoute(order);
             } else {
-                const int32_t hop = galaxy->nextHop(location.system, order.target);
-                if (hop < 0) {
-                    order.target = kNoSystem;
-                } else {
-                    location.nextSystem = uint32_t(hop);
-                }
+                location.nextSystem = uint32_t(hop);
             }
         });
 }
@@ -191,28 +332,99 @@ const char* splitRefusalText(SplitRefusal refusal) {
 }
 
 SplitRefusal splitCheck(const Fleet& composition, const FleetLocation& location,
-                        Hull hull, uint32_t count) {
-    if (hull == Hull::None || hull >= Hull::Count) return SplitRefusal::NotEnough;
-    if (count == 0) return SplitRefusal::NotEnough;
+                        const Fleet& take) {
     if (location.nextSystem != location.system) return SplitRefusal::InTransit;
-    if (composition[hull] < count) return SplitRefusal::NotEnough;
+
+    uint32_t taking = 0;
+    uint32_t total = 0;
+    for (size_t index = 0; index < kHullClasses; ++index) {
+        if (take.ships[index] > composition.ships[index]) return SplitRefusal::NotEnough;
+        taking += take.ships[index];
+        total += composition.ships[index];
+    }
+    if (taking == 0) return SplitRefusal::NotEnough;
 
     // Выделить всё до последнего корабля — это не выделение: исходный флот
     // опустеет и будет распущен, а новый займёт его место. Игрок получит
     // тот же флот с новым номером и решит, что игра его обманула.
-    uint32_t total = 0;
-    for (size_t index = 0; index < kHullClasses; ++index) total += composition.ships[index];
-    if (total <= count) return SplitRefusal::WholeFleet;
+    if (taking >= total) return SplitRefusal::WholeFleet;
     return SplitRefusal::Ok;
 }
 
-Fleet applySplit(Fleet& composition, Hull hull, uint32_t count) {
+Fleet applySplit(Fleet& composition, const Fleet& take) {
     Fleet taken{};
-    if (hull == Hull::None || hull >= Hull::Count) return taken;
-    const uint32_t moved = std::min(count, composition[hull]);
-    composition[hull] -= moved;
-    taken[hull] = moved;
+    for (size_t index = 0; index < kHullClasses; ++index) {
+        const uint32_t moved = std::min(take.ships[index], composition.ships[index]);
+        composition.ships[index] -= moved;
+        taken.ships[index] = moved;
+    }
     return taken;
+}
+
+SplitRefusal splitCheck(const Fleet& composition, const FleetLocation& location,
+                        Hull hull, uint32_t count) {
+    if (hull == Hull::None || hull >= Hull::Count) return SplitRefusal::NotEnough;
+    Fleet take{};
+    take[hull] = count;
+    return splitCheck(composition, location, take);
+}
+
+Fleet applySplit(Fleet& composition, Hull hull, uint32_t count) {
+    if (hull == Hull::None || hull >= Hull::Count) return Fleet{};
+    Fleet take{};
+    take[hull] = count;
+    return applySplit(composition, take);
+}
+
+Fleet fleetHalf(const Fleet& fleet) {
+    Fleet half{};
+    for (size_t index = 0; index < kHullClasses; ++index) {
+        // Вниз, а не вверх: «половина» не должна уносить последний корабль
+        // редкого класса — один титан из одного обязан остаться на месте.
+        half.ships[index] = fleet.ships[index] / 2;
+    }
+    return half;
+}
+
+Fleet fleetOnly(const Fleet& fleet, Hull hull) {
+    Fleet only{};
+    if (hull == Hull::None || hull >= Hull::Count) return only;
+    only[hull] = fleet[hull];
+    return only;
+}
+
+// ---------------------------------------------------------------------------
+// Слияние
+// ---------------------------------------------------------------------------
+
+const char* mergeRefusalText(MergeRefusal refusal) {
+    switch (refusal) {
+        case MergeRefusal::Ok:        return "можно слить";
+        case MergeRefusal::NotYours:  return "это не ваш флот";
+        case MergeRefusal::Apart:     return "отряды в разных системах";
+        case MergeRefusal::InTransit: return "отряд в пути — слиться нельзя";
+        case MergeRefusal::SameFleet: return "это один и тот же отряд";
+        case MergeRefusal::Count:     break;
+    }
+    return "нельзя";
+}
+
+MergeRefusal mergeCheck(uint32_t intoEmpire, const FleetLocation& into,
+                        uint32_t fromEmpire, const FleetLocation& from, bool sameEntity) {
+    if (sameEntity) return MergeRefusal::SameFleet;
+    if (intoEmpire != fromEmpire) return MergeRefusal::NotYours;
+    if (into.system != into.nextSystem || from.system != from.nextSystem) {
+        return MergeRefusal::InTransit;
+    }
+    if (into.system != from.system) return MergeRefusal::Apart;
+    return MergeRefusal::Ok;
+}
+
+void applyMerge(Fleet& into, Fleet& from) {
+    for (size_t index = 0; index < kHullClasses; ++index) {
+        into.ships[index] += from.ships[index];
+        from.ships[index] = 0;
+    }
 }
 
 void systemFleetStation(World& world, const TickContext&) {
@@ -229,7 +441,8 @@ void systemFleetStation(World& world, const TickContext&) {
     const Galaxy* galaxy = world.resource<Galaxy>();
     if (galaxy == nullptr) return;
 
-    world.each<FleetLocation, Owner>([&](Entity, FleetLocation& location, Owner& owner) {
+    world.each<FleetLocation, Owner>([&](Entity entity, FleetLocation& location,
+                                         Owner& owner) {
         if (location.system != location.nextSystem) {
             // В пути орбиты нет. Флот между звёздами не стоит ни у чего,
             // и показывать его у планеты значило бы врать.
@@ -243,6 +456,18 @@ void systemFleetStation(World& world, const TickContext&) {
             location.orbit = kNoOrbit;
             return;
         }
+        // ПРИПИСКА СИЛЬНЕЕ ПРИВЫЧКИ. Отряд, приписанный к планете, стоя
+        // в её системе занимает именно её орбиту — даже если уже стоял
+        // у соседней. Иначе «привязать флот к планете» означало бы
+        // «привязать, если он не встал раньше», а игрок читает приписку
+        // как обещание.
+        const FleetOrders* orders = world.get<FleetOrders>(entity);
+        if (orders != nullptr && orders->anchor == location.system &&
+            orders->anchorOrbit < planets) {
+            location.orbit = orders->anchorOrbit;
+            return;
+        }
+
         // Уже стоит на существующей орбите — не трогаем.
         if (location.orbit < planets) return;
 
@@ -293,14 +518,18 @@ void systemMergeFleets(World& world, const TickContext&) {
     if (commands == nullptr) return;
 
     std::vector<MergeCandidate> candidates;
-    world.each<Fleet, FleetLocation, MoveOrder, Owner>(
-        [&](Entity entity, Fleet& fleet, FleetLocation& location, MoveOrder& order,
+    world.each<Fleet, FleetLocation, FleetOrders, Owner>(
+        [&](Entity entity, Fleet& fleet, FleetLocation& location, FleetOrders& order,
             Owner& owner) {
-            // Сливаем только стоящие и без приказа: флот в пути или идущий
-            // к цели — это отдельное намерение игрока, и склеивать его
-            // с чужим нельзя.
+            // Сливаем только стоящие, без маршрута И В РЕЗЕРВЕ.
+            //
+            // Резерв — это в точности «корабли, которых игрок не трогал».
+            // Пока сливался любой стоящий отряд без приказа, два своих
+            // отряда нельзя было держать раздельно дома: выделил рейдовую
+            // группу — на следующем тике она снова в общей куче.
             if (location.system != location.nextSystem) return;
-            if (order.target != kNoSystem) return;
+            if (order.routed()) return;
+            if (order.stance != uint8_t(Stance::Reserve)) return;
             if (fleetEmpty(fleet)) return;
 
             const FleetArmament* armament = world.get<FleetArmament>(entity);

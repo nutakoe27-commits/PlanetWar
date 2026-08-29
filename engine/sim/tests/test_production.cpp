@@ -154,12 +154,13 @@ TEST_CASE("команды: созданный флот сразу пригоде
     TickContext context;
     systemApplyCommands(yard.world, context);
 
-    yard.world.each<Fleet, FleetLocation, MoveOrder, Owner>(
-        [&](Entity, Fleet& fleet, FleetLocation& location, MoveOrder& order, Owner& owner) {
+    yard.world.each<Fleet, FleetLocation, FleetOrders, Owner>(
+        [&](Entity, Fleet& fleet, FleetLocation& location, FleetOrders& order,
+            Owner& owner) {
             CHECK(fleet[Hull::Corvette] == 2u);
             CHECK(location.system == 5u);
             CHECK(location.nextSystem == 5u);   // стоит, а не летит в никуда
-            CHECK(order.target == kNoSystem);    // без приказа
+            CHECK_FALSE(order.routed());         // без приказа
             CHECK(owner.empire == 0u);
         });
 }
@@ -396,7 +397,7 @@ Entity stationed(Yard& yard, uint32_t system, uint32_t empire, const Fleet& comp
     const Entity e = yard.world.create();
     yard.world.add<Fleet>(e, composition);
     yard.world.add<FleetLocation>(e, standingAt(system));
-    yard.world.add<MoveOrder>(e, MoveOrder{kNoSystem, 0});
+    yard.world.add<FleetOrders>(e, idleOrders(system));
     yard.world.add<Owner>(e, Owner{empire, 0});
     yard.world.add<FleetArmament>(e, armament);
     return e;
@@ -460,7 +461,7 @@ TEST_CASE("слияние: флот с приказом не трогают") {
 
     stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 5}}), same);
     const Entity ordered = stationed(yard, 1, 0, makeFleet({{Hull::Corvette, 5}}), same);
-    yard.world.get<MoveOrder>(ordered)->target = 9;
+    setRoute(*yard.world.get<FleetOrders>(ordered), 9);
 
     mergeTick(yard);
     // Идущий к цели флот — отдельное намерение игрока, склеивать его нельзя.

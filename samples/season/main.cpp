@@ -338,7 +338,7 @@ int main(int argc, char** argv) {
         world.add<Fleet>(fleet, makeFleet({{Hull::Corvette, 8}, {Hull::Destroyer, 2},
                                            {Hull::Colonizer, 1}}));
         world.add<FleetLocation>(fleet, standingAt(bots[i].home));
-        world.add<MoveOrder>(fleet, MoveOrder{kNoSystem, 0});
+        world.add<FleetOrders>(fleet, idleOrders(bots[i].home));
         world.add<Owner>(fleet, Owner{bots[i].empire, 0});
         world.add<FleetArmament>(fleet, bots[i].doctrine);
     }
@@ -625,11 +625,11 @@ int main(int argc, char** argv) {
                 // Без второй половины правила галактика делилась за час, флоты
                 // вставали на месте и слияние копило их в один отряд из 839
                 // крейсеров. Прогон переставал проверять бой вообще.
-                world.each<Fleet, FleetLocation, MoveOrder, Owner>(
-                    [&](Entity, Fleet&, FleetLocation& location, MoveOrder& order,
+                world.each<Fleet, FleetLocation, FleetOrders, Owner>(
+                    [&](Entity, Fleet&, FleetLocation& location, FleetOrders& order,
                         Owner& owner) {
                         if (owner.empire != bot.empire) return;
-                        if (order.target != kNoSystem) return;
+                        if (order.routed()) return;
                         if (location.system != location.nextSystem) return;
                         // Пока в системе осталась хоть одна не своя планета,
                         // флот стоит и доделывает работу. Раньше признаком
@@ -653,8 +653,8 @@ int main(int argc, char** argv) {
                                 enemy = int32_t(target);
                             }
                         }
-                        if (best >= 0)       order.target = uint32_t(best);
-                        else if (enemy >= 0) order.target = uint32_t(enemy);
+                        if (best >= 0)       setRoute(order, uint32_t(best));
+                        else if (enemy >= 0) setRoute(order, uint32_t(enemy));
                     });
             }
         }

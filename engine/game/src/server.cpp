@@ -257,7 +257,12 @@ void Server::receive(const net::Address& from, const uint8_t* data, size_t size,
         world_.add<sim::Fleet>(fleet, config_.startingFleet);
         world_.add<sim::FleetLocation>(
             fleet, sim::standingAt(player.home));
-        world_.add<sim::MoveOrder>(fleet, sim::MoveOrder{sim::kNoSystem, 0});
+        // Стартовый флот попадает в РЕЗЕРВ своей столицы: пока игрок
+        // его не тронул, он честно принимает в себя всё, что сходит
+        // со стапеля. Первый же приказ выведет его из резерва и сделает
+        // отрядом с номером.
+        world_.add<sim::FleetOrders>(fleet, sim::idleOrders(player.home, sim::kNoOrbit,
+                                                            /*tag=*/1));
         world_.add<sim::Owner>(fleet, sim::Owner{empire, 0});
         world_.add<sim::FleetArmament>(fleet, sim::balancedArmament());
         world_.add<sim::FleetArmament>(player.empireEntity, sim::balancedArmament());
@@ -345,12 +350,30 @@ void Server::handleMessage(Player& player, const uint8_t* data, size_t size,
             applySplitFleet(player, message);
             return;
         }
+        case MessageType::FleetCommand: {
+            FleetCommandMessage message;
+            if (!readFleetCommand(reader, message)) return;
+            applyFleetCommand(player, message);
+            return;
+        }
         // Уведомления идут только от сервера. Пришедшее от клиента —
         // либо ошибка версии, либо попытка что-то подделать.
         case MessageType::Welcome:
         case MessageType::Notice:
             return;
     }
+}
+
+sim::Entity Server::findOwnFleet(const Player& player, uint32_t index) {
+    sim::Entity found = sim::kNoEntity;
+    world_.each<sim::Fleet, sim::FleetLocation, sim::FleetOrders, sim::Owner>(
+        [&](sim::Entity entity, sim::Fleet&, sim::FleetLocation&, sim::FleetOrders&,
+            sim::Owner& owner) {
+            if (entity.index != index) return;
+            if (owner.empire != player.empire) return;
+            found = entity;
+        });
+    return found;
 }
 
 void Server::applyMove(Player& player, const MoveFleetMessage& message) {
@@ -371,9 +394,9 @@ void Server::applyMove(Player& player, const MoveFleetMessage& message) {
     // она, флот ли это вообще и ВАШ ли он. Без последней проверки любой
     // игрок водил бы чужие флоты — самый дешёвый чит из возможных.
     bool applied = false;
-    world_.each<sim::Fleet, sim::FleetLocation, sim::MoveOrder, sim::Owner>(
+    world_.each<sim::Fleet, sim::FleetLocation, sim::FleetOrders, sim::Owner>(
         [&](sim::Entity entity, sim::Fleet&, sim::FleetLocation& location,
-            sim::MoveOrder& order, sim::Owner& owner) {
+            sim::FleetOrders& order, sim::Owner& owner) {
             if (entity.index != message.fleet) return;
             if (owner.empire != player.empire) return;
 
@@ -384,7 +407,8 @@ void Server::applyMove(Player& player, const MoveFleetMessage& message) {
                 galaxy_.nextHop(location.nextSystem, message.target) < 0) {
                 return;
             }
-            order.target = message.target;
+            sim::setRoute(order, message.target);
+            sim::commandGiven(order);
             applied = true;
         });
 
@@ -469,19 +493,32 @@ void Server::applySplitFleet(Player& player, const SplitFleetMessage& message) {
     uint32_t system = sim::kNoSystem;
     bool applied = false;
     const sim::FleetArmament* armament = nullptr;
+    sim::FleetBirth birth;
 
-    world_.each<sim::Fleet, sim::FleetLocation, sim::Owner>(
+    world_.each<sim::Fleet, sim::FleetLocation, sim::FleetOrders, sim::Owner>(
         [&](sim::Entity entity, sim::Fleet& fleet, sim::FleetLocation& location,
-            sim::Owner& owner) {
+            sim::FleetOrders& orders, sim::Owner& owner) {
             if (entity.index != message.fleet) return;
             if (owner.empire != player.empire) return;
-            if (sim::splitCheck(fleet, location, sim::Hull(message.hull), message.count) !=
-                sim::SplitRefusal::Ok) {
+            if (sim::splitCheck(fleet, location, message.take) != sim::SplitRefusal::Ok) {
                 return;
             }
-            taken = sim::applySplit(fleet, sim::Hull(message.hull), message.count);
+            taken = sim::applySplit(fleet, message.take);
             system = location.system;
             armament = world_.get<sim::FleetArmament>(entity);
+
+            // ВЫДЕЛЕННЫЙ ОТРЯД — НЕ РЕЗЕРВ. Игрок только что собрал его
+            // руками; попади он в резерв, следующий же тик слил бы его
+            // обратно в тот флот, из которого он вышел, и разделение
+            // выглядело бы как «кнопка ничего не делает».
+            birth.stance = sim::Stance::Hold;
+            birth.anchor = orders.anchor;
+            birth.anchorOrbit = orders.anchorOrbit;
+            birth.evade = orders.evade != 0;
+
+            // И сам родитель перестаёт быть резервом: разделение — это
+            // приказ, а первый приказ выводит отряд из общего пула.
+            sim::commandGiven(orders);
             applied = true;
         });
 
@@ -507,8 +544,124 @@ void Server::applySplitFleet(Player& player, const SplitFleetMessage& message) {
     // завести второе место, где решается, у какой планеты стоит флот, —
     // и однажды эти два места разошлись бы.
     if (sim::Commands* commands = world_.resource<sim::Commands>()) {
-        commands->spawnFleet(player.empire, system, taken, armament);
+        commands->spawnFleet(player.empire, system, taken, armament, birth);
     }
+}
+
+void Server::applyFleetCommand(Player& player, const FleetCommandMessage& message) {
+    const auto reject = [&](uint32_t system) {
+        ++rejectedOrders_;
+        uint8_t buffer[32];
+        net::ByteWriter writer(buffer, sizeof(buffer));
+        writeNotice(writer, NoticeMessage{NoticeKind::OrderRejected, system});
+        if (!writer.overflowed()) player.connection.sendReliable(buffer, writer.size());
+    };
+
+    const sim::Entity entity = findOwnFleet(player, message.fleet);
+    if (!entity.valid()) {
+        reject(sim::kNoSystem);
+        return;
+    }
+    sim::FleetOrders* orders = world_.get<sim::FleetOrders>(entity);
+    const sim::FleetLocation* location = world_.get<sim::FleetLocation>(entity);
+    if (orders == nullptr || location == nullptr) {
+        reject(sim::kNoSystem);
+        return;
+    }
+
+    // Правится КОПИЯ, и только удавшаяся команда переносится в мир.
+    //
+    // Иначе половина команды успевала бы примениться до отказа: маршрут
+    // уже снят, стойка ещё не сменилась, и игрок получает отряд в третьем
+    // состоянии, которого он не просил.
+    sim::FleetOrders next = *orders;
+    bool ok = false;
+
+    switch (message.command) {
+        case FleetCommand::RouteSet:
+        case FleetCommand::RouteAppend: {
+            if (message.value >= galaxy_.systemCount()) break;
+            // Путь считается от СЛЕДУЮЩЕГО узла: флот в пути между узлами
+            // уже не может развернуться на полдороге. Для точки, которая
+            // добавляется в конец, отправной считается предыдущая точка
+            // маршрута — иначе достижимость проверялась бы не оттуда,
+            // откуда флот на самом деле пойдёт.
+            const bool append = message.command == FleetCommand::RouteAppend;
+            const uint32_t from = (append && next.count > 0)
+                                      ? next.route[next.count - 1]
+                                      : location->nextSystem;
+            if (from != message.value && galaxy_.nextHop(from, message.value) < 0) break;
+            ok = append ? sim::appendRoute(next, message.value)
+                        : (sim::setRoute(next, message.value), true);
+            break;
+        }
+        case FleetCommand::RouteClear:
+            sim::clearRoute(next);
+            ok = true;
+            break;
+        case FleetCommand::SetStance: {
+            if (message.value >= uint32_t(sim::Stance::Count)) break;
+            next.stance = uint8_t(message.value);
+            // «В резерв» снимает и маршрут: резерв — это отряд, который
+            // ничего не делает и готов слиться с такими же. Резерв,
+            // куда-то идущий, был бы противоречием.
+            if (next.stance == uint8_t(sim::Stance::Reserve)) sim::clearRoute(next);
+            ok = true;
+            break;
+        }
+        case FleetCommand::SetEvade:
+            next.evade = message.value != 0 ? 1u : 0u;
+            ok = true;
+            break;
+        case FleetCommand::AnchorSystem:
+            if (message.value >= galaxy_.systemCount()) break;
+            next.anchor = message.value;
+            next.anchorOrbit = sim::kNoOrbit;
+            ok = true;
+            break;
+        case FleetCommand::AnchorPlanet: {
+            // Планета адресуется сущностью, как и в приказе на колонизацию.
+            // Систему и орбиту сервер достаёт сам: у клиента они тоже есть,
+            // но верить ему в том, что можно проверить, незачем.
+            world_.each<sim::Planet>([&](sim::Entity planet, sim::Planet& body) {
+                if (planet.index != message.value) return;
+                if (body.system >= galaxy_.systemCount()) return;
+                next.anchor = body.system;
+                next.anchorOrbit = body.orbit;
+                ok = true;
+            });
+            break;
+        }
+        case FleetCommand::Merge: {
+            const sim::Entity source = findOwnFleet(player, message.value);
+            if (!source.valid()) break;
+            sim::Fleet* into = world_.get<sim::Fleet>(entity);
+            sim::Fleet* from = world_.get<sim::Fleet>(source);
+            const sim::FleetLocation* there = world_.get<sim::FleetLocation>(source);
+            if (into == nullptr || from == nullptr || there == nullptr) break;
+            if (sim::mergeCheck(player.empire, *location, player.empire, *there,
+                                source.index == entity.index) != sim::MergeRefusal::Ok) {
+                break;
+            }
+            sim::applyMerge(*into, *from);
+            // Опустевший отряд распускается буфером команд: удалять
+            // сущность здесь нельзя — это правило самого World.
+            if (sim::Commands* commands = world_.resource<sim::Commands>()) {
+                commands->destroy(source);
+            }
+            ok = true;
+            break;
+        }
+        case FleetCommand::Count:
+            break;
+    }
+
+    if (!ok) {
+        reject(location->system);
+        return;
+    }
+    sim::commandGiven(next);
+    *orders = next;
 }
 
 void Server::applyBuildShip(Player& player, const BuildShipMessage& message) {
@@ -654,6 +807,9 @@ void Server::step() {
     sim::systemFleetStation(world_, context);
     sim::systemBattles(world_, context);
     sim::systemPresence(world_, context);
+    // Стойка — СРАЗУ ЗА присутствием: уклонение смотрит, кто ещё стоит
+    // в системе, и это знание живёт ровно один тик.
+    sim::systemFleetStance(world_, context);
     sim::systemSiege(world_, context);
     sim::systemEconomy(world_, context);
     sim::planetDefenceCap(world_, context);

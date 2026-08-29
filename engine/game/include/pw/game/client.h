@@ -52,8 +52,41 @@ public:
     bool orderBuildBuilding(uint32_t planet, uint8_t slot, sim::Building building);
     /// Высадить колонию: флот с колонизатором занимает ничью планету.
     bool orderColonize(uint32_t fleet, uint32_t planet);
-    /// Выделить корабли одного класса в отдельный флот.
+    /// Выделить состав в отдельный флот. Один приказ — один отряд.
+    bool orderSplitFleet(uint32_t fleet, const sim::Fleet& take);
+    /// То же для одного класса: «выделить всех колонизаторов» остаётся
+    /// частым и понятным действием, и ради него не нужен состав.
     bool orderSplitFleet(uint32_t fleet, sim::Hull hull, uint16_t count);
+
+    // --- управление отрядом ---
+    //
+    // Все они кладут одно и то же сообщение с разной командой. Отдельные
+    // методы, а не один с перечислением: у вызывающего тогда не остаётся
+    // способа перепутать смысл `value`, а перепутать его — значит вместо
+    // смены стойки приписать отряд к системе номер два.
+
+    /// Задать маршрут одной точкой, заменив прежний.
+    bool orderRoute(uint32_t fleet, uint32_t system);
+    /// Добавить точку в конец маршрута.
+    bool orderRouteAppend(uint32_t fleet, uint32_t system);
+    /// Снять маршрут.
+    bool orderRouteClear(uint32_t fleet);
+    /// Сменить стойку: что отряд делает сам по себе.
+    bool orderStance(uint32_t fleet, sim::Stance stance);
+    /// Уклоняться ли от превосходящего противника.
+    bool orderEvade(uint32_t fleet, bool evade);
+    /// Приписать к системе целиком.
+    bool orderAnchorSystem(uint32_t fleet, uint32_t system);
+    /// Приписать к планете: стоя дома, отряд встанет именно на её орбиту.
+    bool orderAnchorPlanet(uint32_t fleet, uint32_t planet);
+    /// Влить другой отряд в этот.
+    bool orderMergeFleet(uint32_t into, uint32_t from);
+
+private:
+    /// Общая часть всех команд отряду: одно сообщение, разный номер.
+    bool command(uint32_t fleet, FleetCommand kind, uint32_t value);
+
+public:
 
     // --- состояние ---
 

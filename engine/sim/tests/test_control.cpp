@@ -80,7 +80,7 @@ struct Realm {
         const Entity e = world.create();
         world.add<Fleet>(e, composition);
         world.add<FleetLocation>(e, standingAt(system));
-        world.add<MoveOrder>(e, MoveOrder{kNoSystem, 0});
+        world.add<FleetOrders>(e, idleOrders(system));
         world.add<Owner>(e, Owner{empire, 0});
         return e;
     }

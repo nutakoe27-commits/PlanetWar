@@ -131,7 +131,7 @@ Outcome play(int64_t tempo, int64_t seconds) {
     const Entity siegeFleet = world.create();
     world.add<Fleet>(siegeFleet, makeFleet({{Hull::Corvette, 20}}));
     world.add<FleetLocation>(siegeFleet, standingAt(besieged));
-    world.add<MoveOrder>(siegeFleet, MoveOrder{kNoSystem, 0});
+    world.add<FleetOrders>(siegeFleet, idleOrders(besieged));
     world.add<Owner>(siegeFleet, Owner{0, 0});
 
     // Сезон короткий, чтобы за прогон успела смениться стадия: переход

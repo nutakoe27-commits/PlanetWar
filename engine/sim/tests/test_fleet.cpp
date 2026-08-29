@@ -36,7 +36,7 @@ struct Space {
         const Entity e = world.create();
         world.add<Fleet>(e, composition);
         world.add<FleetLocation>(e, standingAt(system));
-        world.add<MoveOrder>(e, MoveOrder{kNoSystem, 0});
+        world.add<FleetOrders>(e, idleOrders(system));
         return e;
     }
 
@@ -195,7 +195,7 @@ TEST_CASE("движение: флот доходит до цели") {
     Space space;
     const uint32_t target = 90;
     const Entity fleet = space.spawnFleet(0, makeFleet({{Hull::Corvette, 4}}));
-    space.world.get<MoveOrder>(fleet)->target = target;
+    setRoute(*space.world.get<FleetOrders>(fleet), target);
 
     // С запасом: 200 систем, диаметр десятки прыжков. Корвет пересекает
     // галактику за три с половиной часа, сутки хватит с избытком.
@@ -205,8 +205,8 @@ TEST_CASE("движение: флот доходит до цели") {
     REQUIRE(location != nullptr);
     CHECK(location->system == target);
     CHECK(location->nextSystem == target);
-    // Приказ снят — значит флот действительно понял, что дошёл.
-    CHECK(space.world.get<MoveOrder>(fleet)->target == kNoSystem);
+    // Маршрут снят — значит флот действительно понял, что дошёл.
+    CHECK_FALSE(space.world.get<FleetOrders>(fleet)->routed());
 }
 
 TEST_CASE("движение: медленный флот идёт дольше быстрого") {
@@ -215,7 +215,7 @@ TEST_CASE("движение: медленный флот идёт дольше �
 
     auto secondsToArrive = [&](const Fleet& composition) {
         const Entity fleet = space.spawnFleet(0, composition);
-        space.world.get<MoveOrder>(fleet)->target = target;
+        setRoute(*space.world.get<FleetOrders>(fleet), target);
         int64_t step = 0;
         const int64_t limit = testTicks(48 * kHour);
         while (step < limit) {
@@ -243,7 +243,7 @@ TEST_CASE("движение: флот проходит через промежу
     REQUIRE(space.galaxy.findPath(0, target, path) > 1);
 
     const Entity fleet = space.spawnFleet(0, makeFleet({{Hull::Corvette, 3}}));
-    space.world.get<MoveOrder>(fleet)->target = target;
+    setRoute(*space.world.get<FleetOrders>(fleet), target);
 
     std::vector<uint32_t> visited;
     const int64_t limit = testTicks(24 * kHour);
@@ -269,18 +269,18 @@ TEST_CASE("движение: флот проходит через промежу
 TEST_CASE("движение: недостижимая цель снимает приказ") {
     Space space;
     const Entity fleet = space.spawnFleet(0, makeFleet({{Hull::Corvette, 2}}));
-    space.world.get<MoveOrder>(fleet)->target = 99999;  // такой системы нет
+    setRoute(*space.world.get<FleetOrders>(fleet), 99999);  // такой системы нет
 
     space.run(5 * kSecond);
     // Приказ снят, а не висит молча: иначе игрок не поймёт, почему флот стоит.
-    CHECK(space.world.get<MoveOrder>(fleet)->target == kNoSystem);
+    CHECK_FALSE(space.world.get<FleetOrders>(fleet)->routed());
     CHECK(space.world.get<FleetLocation>(fleet)->system == 0u);
 }
 
 TEST_CASE("движение: пустой флот никуда не идёт") {
     Space space;
     const Entity fleet = space.spawnFleet(0, Fleet{});
-    space.world.get<MoveOrder>(fleet)->target = 50;
+    setRoute(*space.world.get<FleetOrders>(fleet), 50);
 
     space.run(1 * kHour);
     CHECK(space.world.get<FleetLocation>(fleet)->system == 0u);
@@ -295,7 +295,9 @@ TEST_CASE("движение: без графа в ресурсах ничего 
     const Entity fleet = world.create();
     world.add<Fleet>(fleet, makeFleet({{Hull::Corvette, 1}}));
     world.add<FleetLocation>(fleet, standingAt(0));
-    world.add<MoveOrder>(fleet, MoveOrder{5, 0});
+    FleetOrders orders = idleOrders(0);
+    setRoute(orders, 5);
+    world.add<FleetOrders>(fleet, orders);
 
     TickContext context;
     systemFleetMovement(world, context);  // не должно упасть
@@ -310,7 +312,7 @@ TEST_CASE("движение: воспроизводится тик в тик") {
         for (uint32_t i = 0; i < 40; ++i) {
             const Entity fleet = space->spawnFleet(i * 3,
                 makeFleet({{Hull::Corvette, i % 5}, {Hull::Destroyer, (i + 1) % 3}, {Hull::Cruiser, i % 2}, {Hull::Battleship, (i % 7 == 0) ? 1u : 0u}}));
-            space->world.get<MoveOrder>(fleet)->target = (i * 7 + 11) % 140;
+            setRoute(*space->world.get<FleetOrders>(fleet), (i * 7 + 11) % 140);
         }
     }
     REQUIRE(first.world.hash() == second.world.hash());

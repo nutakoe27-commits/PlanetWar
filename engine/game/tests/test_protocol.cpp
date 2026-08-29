@@ -302,6 +302,7 @@ TEST_CASE("протокол: мусор вместо сообщения не р�
                 BuildBuildingMessage m; readBuildBuilding(reader, m); break;
             }
             case MessageType::Colonize: { ColonizeMessage m; readColonize(reader, m); break; }
+            case MessageType::FleetCommand: { FleetCommandMessage m; readFleetCommand(reader, m); break; }
             case MessageType::SplitFleet: {
                 SplitFleetMessage m; readSplitFleet(reader, m); break;
             }

@@ -174,20 +174,51 @@ bool readColonize(ByteReader& reader, ColonizeMessage& message) {
 void writeSplitFleet(ByteWriter& writer, const SplitFleetMessage& message) {
     writeMessageType(writer, MessageType::SplitFleet);
     writer.varint(message.fleet);
-    writer.u8(message.hull);
-    writer.varint(message.count);
+    // ЦИКЛОМ ПО ВСЕМ КЛАССАМ, а не перечислением полей. Перечисление
+    // однажды уже отстало от таблицы корпусов: четыре класса из восьми
+    // не ездили по сети, и флот из титанов выглядел пустым.
+    for (size_t index = 0; index < sim::kHullClasses; ++index) {
+        writer.varint(message.take.ships[index]);
+    }
 }
 
 bool readSplitFleet(ByteReader& reader, SplitFleetMessage& message) {
     message.fleet = uint32_t(reader.varint());
-    message.hull = reader.u8();
-    const uint64_t count = reader.varint();
+    uint64_t total = 0;
+    for (size_t index = 0; index < sim::kHullClasses; ++index) {
+        const uint64_t count = reader.varint();
+        // Потолок на класс: число из сети — это то, что прислал чужой код
+        // на чужой машине, и «миллиард корветов» обязан отвалиться здесь,
+        // а не переполнить счётчик где-то в симуляции.
+        if (count > 0xFFFFu) return false;
+        message.take.ships[index] = uint32_t(count);
+        total += count;
+    }
     if (reader.failed()) return false;
-    // Проверка здесь, а не у вызывающего: тот, кто забудет её сделать,
-    // получит выход за границу таблицы корпусов.
-    if (message.hull == 0 || message.hull >= uint8_t(sim::Hull::Count)) return false;
-    if (count == 0 || count > 0xFFFFu) return false;
-    message.count = uint16_t(count);
+    // Пустое выделение — не приказ, а шум. Отказ здесь избавляет сервер
+    // от разбора заведомо бессмысленного намерения.
+    return total > 0;
+}
+
+void writeFleetCommand(ByteWriter& writer, const FleetCommandMessage& message) {
+    writeMessageType(writer, MessageType::FleetCommand);
+    writer.varint(message.fleet);
+    writer.u8(uint8_t(message.command));
+    writer.varint(message.value);
+}
+
+bool readFleetCommand(ByteReader& reader, FleetCommandMessage& message) {
+    message.fleet = uint32_t(reader.varint());
+    const uint8_t command = reader.u8();
+    const uint64_t value = reader.varint();
+    if (reader.failed()) return false;
+    // Неизвестная команда — либо другая версия клиента, либо подделка.
+    // И то и другое разбирать нельзя: дальше по коду стоит switch,
+    // и значение вне перечисления провалилось бы мимо всех веток.
+    if (command >= uint8_t(FleetCommand::Count)) return false;
+    if (value > 0xFFFFFFFFull) return false;
+    message.command = FleetCommand(command);
+    message.value = uint32_t(value);
     return true;
 }
 
